@@ -1,0 +1,88 @@
+{
+  "app": "shorts-studio",
+  "schema": 1,
+  "type": "results",
+  "exported_at": "2026-10-06T18:32:47.755Z",
+  "items": [
+    {
+      "id": "res_201",
+      "logged_at": "2026-10-06T18:32:47.753Z",
+      "title": "Free AI PDF editor",
+      "posted_on": "2026-10-04",
+      "platforms": [
+        "youtube",
+        "instagram"
+      ],
+      "format": "tool demo",
+      "hook": "shock",
+      "len": "30s",
+      "cta": "save",
+      "views": 48200,
+      "likes": 2410,
+      "comments": 193,
+      "shares": 289,
+      "saves": 1900,
+      "follows": 96
+    },
+    {
+      "id": "res_202",
+      "logged_at": "2026-10-06T18:32:47.754Z",
+      "title": "ChatGPT exam prompts",
+      "posted_on": "2026-10-05",
+      "platforms": [
+        "youtube",
+        "instagram"
+      ],
+      "format": "listicle",
+      "hook": "question",
+      "len": "45s",
+      "cta": "follow",
+      "views": 21300,
+      "likes": 1065,
+      "comments": 85,
+      "shares": 128,
+      "saves": 1250,
+      "follows": 43
+    },
+    {
+      "id": "res_203",
+      "logged_at": "2026-10-06T18:32:47.754Z",
+      "title": "VS Code multi-cursor",
+      "posted_on": "2026-10-06",
+      "platforms": [
+        "youtube",
+        "instagram"
+      ],
+      "format": "tip",
+      "hook": "you-statement",
+      "len": "20s",
+      "cta": "comment",
+      "views": 9800,
+      "likes": 490,
+      "comments": 39,
+      "shares": 59,
+      "saves": 610,
+      "follows": 20
+    },
+    {
+      "id": "res_204",
+      "logged_at": "2026-10-06T18:32:47.754Z",
+      "title": "Remove background free",
+      "posted_on": "2026-10-02",
+      "platforms": [
+        "youtube",
+        "instagram"
+      ],
+      "format": "tool demo",
+      "hook": "shock",
+      "len": "30s",
+      "cta": "save",
+      "views": 75500,
+      "likes": 3775,
+      "comments": 302,
+      "shares": 453,
+      "saves": 2600,
+      "follows": 151
+    }
+  ]
+}

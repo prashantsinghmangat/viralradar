@@ -1,0 +1,38 @@
+{
+  "app": "shorts-studio",
+  "schema": 1,
+  "type": "ideas",
+  "exported_at": "2026-10-06T18:32:47.755Z",
+  "items": [
+    {
+      "id": "idea_101",
+      "date": "2026-10-06",
+      "title": "Website that turns any photo into a coloring page",
+      "hook": "Your kids will love this free site",
+      "tool": "colorify.ai",
+      "show": "Upload photo → coloring page",
+      "why": "Parents share these a lot",
+      "format": "tool demo"
+    },
+    {
+      "id": "idea_102",
+      "date": "2026-10-06",
+      "title": "3 ChatGPT prompts for exam prep",
+      "hook": "Stop reading the whole chapter",
+      "tool": "ChatGPT",
+      "show": "Prompt + result on screen",
+      "why": "Exam season in India",
+      "format": "listicle"
+    },
+    {
+      "id": "idea_103",
+      "date": "2026-10-05",
+      "title": "VS Code shortcut nobody uses",
+      "hook": "You are coding 2x slower than you need to",
+      "tool": "VS Code",
+      "show": "Multi-cursor demo",
+      "why": "Coders save these",
+      "format": "tip"
+    }
+  ]
+}

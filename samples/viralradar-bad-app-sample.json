@@ -1,0 +1,54 @@
+{
+  "app": "other-tool",
+  "schema": 1,
+  "type": "script",
+  "exported_at": "2026-10-06T18:32:47.756Z",
+  "items": [
+    {
+      "id": "scr_001",
+      "created_at": "2026-10-06T09:15:00Z",
+      "topic": "free AI PDF editor",
+      "title": "This FREE AI edits any PDF in 10 seconds",
+      "beats": [
+        {
+          "t": "0-3s",
+          "say": "Stop paying for PDF editors. This website is 100% free.",
+          "screen": "Face cam + site logo pop-in"
+        },
+        {
+          "t": "3-12s",
+          "say": "Upload any PDF, type what you want changed, and the AI rewrites it for you.",
+          "screen": "Screen recording: upload + prompt"
+        },
+        {
+          "t": "12-22s",
+          "say": "It can also sign, merge and translate. No login needed.",
+          "screen": "Quick cuts of each feature"
+        },
+        {
+          "t": "22-30s",
+          "say": "Save this so you have it when you need it. Follow for one free tool every day.",
+          "screen": "Face cam, point to save button"
+        }
+      ],
+      "thumbnail_text": "FREE PDF AI 🤯",
+      "yt_title": "This FREE AI edits any PDF (no login) #shorts",
+      "ig_caption": "Stop paying for PDF tools 👇\nSave this for later!",
+      "fb_caption": "Free AI that edits any PDF. No sign-up.",
+      "hashtags": [
+        "#aitools",
+        "#freeai",
+        "#pdf",
+        "#productivity"
+      ],
+      "pinned_comment": "Website name is in the video at 0:05 — comment PDF and I'll reply with the link",
+      "broll": [
+        "Screen recording of upload",
+        "Close-up of phone scrolling PDF",
+        "Typing prompt"
+      ],
+      "audio": "Upbeat lofi, low volume",
+      "studio_version": "2.4"
+    }
+  ]
+}

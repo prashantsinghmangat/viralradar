@@ -1,0 +1,97 @@
+{
+  "app": "shorts-studio",
+  "schema": 1,
+  "type": "bundle",
+  "exported_at": "2026-10-06T18:32:47.755Z",
+  "items": [
+    {
+      "id": "scr_002",
+      "created_at": "2026-10-06T09:15:00Z",
+      "topic": "free AI PDF editor",
+      "title": "Website that makes coloring pages from photos",
+      "beats": [
+        {
+          "t": "0-3s",
+          "say": "Stop paying for PDF editors. This website is 100% free.",
+          "screen": "Face cam + site logo pop-in"
+        },
+        {
+          "t": "3-12s",
+          "say": "Upload any PDF, type what you want changed, and the AI rewrites it for you.",
+          "screen": "Screen recording: upload + prompt"
+        },
+        {
+          "t": "12-22s",
+          "say": "It can also sign, merge and translate. No login needed.",
+          "screen": "Quick cuts of each feature"
+        },
+        {
+          "t": "22-30s",
+          "say": "Save this so you have it when you need it. Follow for one free tool every day.",
+          "screen": "Face cam, point to save button"
+        }
+      ],
+      "thumbnail_text": "FREE PDF AI 🤯",
+      "yt_title": "Turn ANY photo into a coloring page (free)",
+      "ig_caption": "Stop paying for PDF tools 👇\nSave this for later!",
+      "fb_caption": "Free AI that edits any PDF. No sign-up.",
+      "hashtags": [
+        "#aitools",
+        "#freeai",
+        "#pdf",
+        "#productivity"
+      ],
+      "pinned_comment": "Website name is in the video at 0:05 — comment PDF and I'll reply with the link",
+      "broll": [
+        "Screen recording of upload",
+        "Close-up of phone scrolling PDF",
+        "Typing prompt"
+      ],
+      "audio": "Upbeat lofi, low volume",
+      "studio_version": "2.4",
+      "kind": "script"
+    },
+    {
+      "id": "res_201",
+      "logged_at": "2026-10-06T18:32:47.753Z",
+      "title": "Free AI PDF editor",
+      "posted_on": "2026-10-04",
+      "platforms": [
+        "youtube",
+        "instagram"
+      ],
+      "format": "tool demo",
+      "hook": "shock",
+      "len": "30s",
+      "cta": "save",
+      "views": 51000,
+      "likes": 2410,
+      "comments": 193,
+      "shares": 289,
+      "saves": 2050,
+      "follows": 96,
+      "kind": "result"
+    },
+    {
+      "id": "res_205",
+      "logged_at": "2026-10-06T18:32:47.755Z",
+      "title": "Coloring page site",
+      "posted_on": "2026-10-06",
+      "platforms": [
+        "youtube",
+        "instagram"
+      ],
+      "format": "tool demo",
+      "hook": "question",
+      "len": "25s",
+      "cta": "save",
+      "views": 15400,
+      "likes": 770,
+      "comments": 62,
+      "shares": 92,
+      "saves": 980,
+      "follows": 31,
+      "kind": "result"
+    }
+  ]
+}
