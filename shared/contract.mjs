@@ -1,0 +1,141 @@
+// The Shorts Studio export contract: parsing, validation and row shaping.
+// Runtime-agnostic on purpose — the local SQLite importer, the Supabase
+// "import" Edge Function and the tests all share this one file, so error
+// messages and import summaries are identical everywhere.
+//
+// Contract: { app: "shorts-studio", schema: 1, type: "script"|"ideas"|"results"|"bundle", exported_at, items: [...] }
+
+export const TYPES = ['script', 'ideas', 'results', 'bundle'];
+export const KINDS = ['script', 'idea', 'result'];
+// Where an item came from. Imports are "shorts-studio"; the generate function
+// writes "gemini"/"openrouter"/"claude"; "manual" is for rows typed by hand.
+export const SOURCES = ['claude', 'gemini', 'openrouter', 'shorts-studio', 'manual'];
+export const TABLE = { idea: 'ideas', script: 'scripts', result: 'results' };
+
+export class ImportError extends Error {}
+
+const str = (v) => (v === undefined || v === null ? null : String(v));
+const int = (v) => {
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(String(v).replace(/,/g, ''));
+  return Number.isFinite(n) ? Math.round(n) : null;
+};
+// Native array: adapters decide whether to JSON-stringify (SQLite) or pass through (Postgres).
+const list = (v) => (Array.isArray(v) ? v : v == null ? [] : [v]);
+
+// An ISO timestamp, or null if the value is missing or unparseable.
+// Accepts "2026-10-06" (becomes UTC midnight) as well as full timestamps.
+export function ts(v) {
+  if (v === undefined || v === null || v === '') return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+// origin_at: when the item came into being according to the export, so the UI
+// can sort by it. Falls back to import time when the export carries no date.
+const origin = (...candidates) => {
+  for (const c of candidates) {
+    const t = ts(c);
+    if (t) return t;
+  }
+  return new Date().toISOString();
+};
+
+const source = (it) => (SOURCES.includes(it.source) ? it.source : 'shorts-studio');
+
+export function parse(input) {
+  if (typeof input !== 'string') return input;
+  const text = input.replace(/^﻿/, '').trim();
+  if (!text) throw new ImportError('Nothing to import: the text is empty.');
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    throw new ImportError(`This is not valid JSON (${e.message}). Copy the whole export from Shorts Studio and try again.`);
+  }
+}
+
+export function validate(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new ImportError('Expected one JSON object exported from Shorts Studio.');
+  }
+  if (data.app !== 'shorts-studio') {
+    throw new ImportError(`Wrong app: expected "app": "shorts-studio" but got ${JSON.stringify(data.app ?? null)}. Only Shorts Studio exports can be imported.`);
+  }
+  if (data.schema !== 1) {
+    throw new ImportError(`Schema mismatch: this app understands schema 1 but the file has schema ${JSON.stringify(data.schema ?? null)}. Update ViralRadar or re-export from Shorts Studio.`);
+  }
+  if (!TYPES.includes(data.type)) {
+    throw new ImportError(`Unknown export type ${JSON.stringify(data.type ?? null)}. Expected one of: ${TYPES.join(', ')}.`);
+  }
+  if (!Array.isArray(data.items)) throw new ImportError('The export has no "items" array.');
+  if (data.items.length === 0) throw new ImportError('The export has no items in it.');
+
+  // Resolve each item to a concrete kind; validate everything before writing anything.
+  const kindFor = { script: 'script', ideas: 'idea', results: 'result' };
+  return data.items.map((item, i) => {
+    if (!item || typeof item !== 'object') throw new ImportError(`Item #${i + 1} is not an object.`);
+    if (item.id === undefined || item.id === null || item.id === '') throw new ImportError(`Item #${i + 1} has no "id".`);
+    let kind = kindFor[data.type];
+    if (data.type === 'bundle') {
+      kind = item.kind;
+      if (!KINDS.includes(kind)) {
+        throw new ImportError(`Bundle item #${i + 1} (id ${item.id}) has kind ${JSON.stringify(kind ?? null)}; expected "script" or "result".`);
+      }
+    }
+    return { kind, item };
+  });
+}
+
+// Neutral rows: contract field names, native arrays, ISO timestamps.
+// Each storage adapter picks the columns its own table has.
+export const ROW = {
+  idea: (it) => ({
+    id: str(it.id), date: str(it.date), title: str(it.title), hook: str(it.hook), tool: str(it.tool),
+    show: str(it.show), why: str(it.why), format: str(it.format),
+    source: source(it), origin_at: origin(it.date, it.created_at),
+  }),
+  script: (it) => ({
+    id: str(it.id), created_at: str(it.created_at), topic: str(it.topic), title: str(it.title),
+    beats: list(it.beats), thumbnail_text: str(it.thumbnail_text), yt_title: str(it.yt_title),
+    ig_caption: str(it.ig_caption), fb_caption: str(it.fb_caption), hashtags: list(it.hashtags),
+    pinned_comment: str(it.pinned_comment), broll: list(it.broll), audio: str(it.audio),
+    source: source(it), origin_at: origin(it.created_at, it.date),
+  }),
+  result: (it) => ({
+    id: str(it.id), logged_at: str(it.logged_at), title: str(it.title), posted_on: str(it.posted_on),
+    platforms: list(it.platforms), format: str(it.format), hook: str(it.hook), len: str(it.len), cta: str(it.cta),
+    views: int(it.views), likes: int(it.likes), comments: int(it.comments), shares: int(it.shares),
+    saves: int(it.saves), follows: int(it.follows), script_id: str(it.script_id),
+    source: source(it), origin_at: origin(it.logged_at, it.posted_on),
+  }),
+};
+
+// The title shown in the import summary ("Imported 1 script: <title>").
+export const titleOf = (row) => row.title || row.yt_title || row.topic || row.id;
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+export function summarize(counts, titles) {
+  const parts = [];
+  for (const k of ['script', 'idea', 'result']) {
+    if (!counts[k]) continue;
+    const c = counts[k];
+    const label = plural(c.added + c.updated, k);
+    const extra = c.updated ? ` (${c.updated} updated)` : '';
+    parts.push(label + extra);
+  }
+  let msg = `Imported ${parts.join(', ')}`;
+  if (titles.length === 1 && titles[0]) msg += `: ${titles[0]}`;
+  return msg;
+}
+
+/**
+ * Validate an export and shape every item, without touching any database.
+ * Returns { type, entries: [{ kind, item, row }] }.
+ * Throws ImportError with a human-readable message for bad input.
+ */
+export function prepare(input) {
+  const data = parse(input);
+  const entries = validate(data).map(({ kind, item }) => ({ kind, item, row: ROW[kind](item) }));
+  return { type: data.type, entries };
+}

@@ -1,4 +1,5 @@
-const { getJson, getText, hoursSince } = require('./http');
+import { getJson, getText } from '../http.mjs';
+import { hoursSince } from '../time.mjs';
 
 const decode = (s) => String(s || '')
   .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
@@ -21,6 +22,7 @@ async function fromJson(sub) {
         summary: `r/${sub} · ${p.ups} upvotes · ${p.num_comments} comments`,
         thumbnail: preview ? preview.url : /^https?:/.test(p.thumbnail || '') ? p.thumbnail : null,
         views: p.ups,
+        views_per_hour: null,
         score: Math.round((p.ups / hoursSince(created)) * 10) / 10,
         published_at: created,
         keyword: `r/${sub}`,
@@ -48,6 +50,7 @@ async function fromRss(sub) {
       summary: `r/${sub} · #${i + 1} top today`,
       thumbnail: thumb ? decode(thumb) : null,
       views: null,
+      views_per_hour: null,
       score: Math.round((rankScore / hoursSince(published)) * 10) / 10,
       published_at: published ? new Date(published).toISOString() : null,
       keyword: `r/${sub}`,
@@ -76,7 +79,7 @@ async function fetchSubreddit(sub) {
 }
 
 // Subreddits are fetched one at a time (Reddit rate-limits bursts); one failing sub doesn't drop the others.
-async function fetchReddit(subs) {
+export async function fetchReddit(subs) {
   const items = [];
   const notes = [];
   for (const [i, sub] of subs.entries()) {
@@ -90,5 +93,3 @@ async function fetchReddit(subs) {
   if (!items.length && notes.length) throw new Error(notes.join('; '));
   return { items, notes };
 }
-
-module.exports = { fetchReddit };

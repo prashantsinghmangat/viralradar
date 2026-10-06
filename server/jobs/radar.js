@@ -1,57 +1,27 @@
-// Runs every trend source independently, dedupes by URL, stores today's trends.
+// Local radar job: runs the shared sources, then stores today's trends in SQLite.
 const cron = require('node-cron');
 const config = require('../config');
 const { getSetting, setSetting } = require('../db');
 const { broadcast } = require('../events');
-const { fetchYouTube, istDay } = require('../sources/youtube');
-const { fetchHackerNews } = require('../sources/hackernews');
-const { fetchReddit } = require('../sources/reddit');
-const { fetchGitHub } = require('../sources/github');
+const { collect, normalizeUrl, failedSources } = require('../../shared/radar.mjs');
+const { istDay } = require('../../shared/time.mjs');
+const { fetchYouTube } = require('../sources/youtube');
+const { fetchHackerNews } = require('../../shared/sources/hackernews.mjs');
+const { fetchReddit } = require('../../shared/sources/reddit.mjs');
+const { fetchGitHub } = require('../../shared/sources/github.mjs');
 
 let running = null;
-
-function normalizeUrl(u) {
-  try {
-    const url = new URL(u);
-    url.hash = '';
-    for (const p of [...url.searchParams.keys()]) if (/^utm_|^ref$|^si$/.test(p)) url.searchParams.delete(p);
-    url.pathname = url.pathname.replace(/\/+$/, '') || '/'; // also catches "page/\" which the parser turns into "page//"
-    return url.toString().replace('://www.', '://').replace(/^http:/, 'https:');
-  } catch {
-    return u;
-  }
-}
 
 async function runRadar(db, { reason = 'manual' } = {}) {
   if (running) return running; // a second click joins the run already in progress
   running = (async () => {
     const started = new Date();
     const keywords = getSetting(db, 'keywords', config.DEFAULT_KEYWORDS);
-    const sources = {
+    const { items, status, names, total } = await collect({
       youtube: () => fetchYouTube(db, keywords),
       hackernews: () => fetchHackerNews(),
       reddit: () => fetchReddit(config.SUBREDDITS),
-      github: () => fetchGitHub(),
-    };
-    const names = Object.keys(sources);
-    const settled = await Promise.allSettled(names.map((n) => sources[n]()));
-
-    const status = {};
-    const byUrl = new Map();
-    settled.forEach((r, i) => {
-      const name = names[i];
-      if (r.status === 'rejected') {
-        status[name] = { ok: false, count: 0, error: r.reason && r.reason.message };
-        return;
-      }
-      const { items, notes, skipped } = Array.isArray(r.value) ? { items: r.value, notes: [] } : r.value;
-      status[name] = { ok: true, count: items.length, notes, ...(skipped && { skipped: true }) };
-      for (const it of items) {
-        if (!it.url || !it.title) continue;
-        const key = normalizeUrl(it.url);
-        const prev = byUrl.get(key);
-        if (!prev || (it.score || 0) > (prev.score || 0)) byUrl.set(key, { ...it, url: key });
-      }
+      github: () => fetchGitHub({ token: config.GITHUB_TOKEN }),
     });
 
     const day = istDay(started);
@@ -66,7 +36,7 @@ async function runRadar(db, { reason = 'manual' } = {}) {
       // A source that succeeded replaces its own rows for today; a failed source keeps what it had.
       const clear = db.prepare('DELETE FROM trends WHERE run_date = ? AND source = ?');
       for (const n of names) if (status[n].ok) clear.run(day, n);
-      for (const it of byUrl.values()) {
+      for (const it of items) {
         upsert.run({
           url: it.url, source: it.source, title: it.title, summary: it.summary || null, thumbnail: it.thumbnail || null,
           views: it.views ?? null, score: it.score ?? 0, published_at: it.published_at || null,
@@ -77,11 +47,11 @@ async function runRadar(db, { reason = 'manual' } = {}) {
       db.prepare("DELETE FROM trends WHERE run_date < date(?, '-14 days')").run(day);
     })();
 
-    const summary = { at: now, reason, day, total: byUrl.size, sources: status };
+    const summary = { at: now, reason, day, total, sources: status };
     setSetting(db, 'radar_last_run', summary);
-    const failed = names.filter((n) => !status[n].ok);
-    console.log(`[radar] ${byUrl.size} trends (${reason})${failed.length ? `; failed: ${failed.join(', ')}` : ''}`);
-    broadcast('radar', { message: `Radar refreshed: ${byUrl.size} trends${failed.length ? ` (${failed.join(', ')} failed)` : ''}`, ok: true });
+    const failed = failedSources(status);
+    console.log(`[radar] ${total} trends (${reason})${failed.length ? `; failed: ${failed.join(', ')}` : ''}`);
+    broadcast('radar', { message: `Radar refreshed: ${total} trends${failed.length ? ` (${failed.join(', ')} failed)` : ''}`, ok: true });
     return summary;
   })();
   try {
