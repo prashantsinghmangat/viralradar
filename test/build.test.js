@@ -1,0 +1,141 @@
+// Tests for scripts/build.mjs — the thing that produces what Netlify serves.
+//
+// The important property is negative: whatever is in the environment, a secret
+// must never end up in dist/. A mistake here is public the moment it deploys,
+// so the guard is tested by actually making it trigger.
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const ROOT = path.join(__dirname, '..');
+const DIST = path.join(ROOT, 'dist');
+
+const GOOD = {
+  SUPABASE_URL: 'https://ichmkfjymrzwzhxfdbqk.supabase.co',
+  SUPABASE_ANON_KEY: 'sb_publishable_' + 'x'.repeat(40),
+};
+
+test('a good configuration is accepted', async () => {
+  const { readConfig } = await import('../scripts/build.mjs');
+  const c = readConfig(GOOD);
+  assert.deepEqual(c.problems, []);
+  assert.equal(c.url, GOOD.SUPABASE_URL);
+});
+
+test('a trailing slash on the URL is tidied away', async () => {
+  const { readConfig } = await import('../scripts/build.mjs');
+  assert.equal(readConfig({ ...GOOD, SUPABASE_URL: GOOD.SUPABASE_URL + '/' }).url, GOOD.SUPABASE_URL);
+});
+
+test('a missing or wrong-looking configuration is refused with a readable reason', async () => {
+  const { readConfig } = await import('../scripts/build.mjs');
+  const cases = [
+    [{ ...GOOD, SUPABASE_URL: '' }, /SUPABASE_URL is not set/],
+    [{ ...GOOD, SUPABASE_URL: 'ichmkfjymrzwzhxfdbqk.supabase.co' }, /does not look right/],
+    [{ ...GOOD, SUPABASE_URL: 'http://ichmkfjymrzwzhxfdbqk.supabase.co' }, /does not look right/],
+    [{ ...GOOD, SUPABASE_URL: 'https://ytshortradar.netlify.app' }, /does not look right/],
+    [{ ...GOOD, SUPABASE_ANON_KEY: '' }, /SUPABASE_ANON_KEY is not set/],
+    [{ ...GOOD, SUPABASE_ANON_KEY: 'short' }, /too short/],
+  ];
+  for (const [env, expected] of cases) {
+    const { problems } = readConfig(env);
+    assert.ok(problems.length, `should have been refused: ${JSON.stringify(env).slice(0, 60)}`);
+    assert.match(problems.join(' '), expected);
+  }
+});
+
+test('the SECRET key pasted in by mistake is refused, not shipped', async () => {
+  const { readConfig, keyRole } = await import('../scripts/build.mjs');
+  const b64url = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  // A real service_role key hides the role inside the base64 middle section of
+  // the JWT, so the raw text contains nothing suspicious. Checking the text
+  // alone would miss the exact key this is meant to catch.
+  const serviceJwt = 'eyJhbGciOiJIUzI1NiJ9.' + b64url({ iss: 'supabase', role: 'service_role' }) + '.sig';
+  assert.ok(!serviceJwt.includes('service_role'), 'the point of this test: the raw key does not say so');
+  assert.equal(keyRole(serviceJwt), 'service_role');
+
+  for (const key of [serviceJwt, 'sb_secret_' + 'y'.repeat(40)]) {
+    const { problems } = readConfig({ ...GOOD, SUPABASE_ANON_KEY: key });
+    assert.ok(problems.length, 'the secret key must never be accepted');
+    assert.match(problems.join(' '), /must never be in a browser/);
+  }
+
+  // The keys that ARE meant to be in a browser must still be accepted.
+  const anonJwt = 'eyJhbGciOiJIUzI1NiJ9.' + b64url({ iss: 'supabase', role: 'anon' }) + '.sig';
+  assert.equal(keyRole(anonJwt), 'anon');
+  assert.deepEqual(readConfig({ ...GOOD, SUPABASE_ANON_KEY: anonJwt }).problems, []);
+  assert.deepEqual(readConfig(GOOD).problems, [], 'a publishable key is not a JWT at all');
+  assert.equal(keyRole('not-a-jwt'), null);
+  assert.equal(keyRole('a.b.c'), null, 'rubbish in the middle section must not throw');
+});
+
+test('env.js carries the two public values and nothing else', async () => {
+  const { envScript } = await import('../scripts/build.mjs');
+  const js = envScript({ url: GOOD.SUPABASE_URL, anonKey: GOOD.SUPABASE_ANON_KEY }, '2026-10-07T00:00:00.000Z');
+  const parsed = JSON.parse(js.slice(js.indexOf('{'), js.lastIndexOf('}') + 1));
+  assert.deepEqual(Object.keys(parsed).sort(), ['BUILT_AT', 'SUPABASE_ANON_KEY', 'SUPABASE_URL']);
+  assert.equal(parsed.SUPABASE_URL, GOOD.SUPABASE_URL);
+  assert.match(js, /window\.__VR_ENV/);
+  assert.match(js, /Object\.freeze/, 'the page should not be able to change its own configuration');
+});
+
+test('a real build produces the app, the configuration and the vendored library', async () => {
+  const { build } = await import('../scripts/build.mjs');
+  const { files } = build({ env: GOOD, builtAt: '2026-10-07T00:00:00.000Z' });
+
+  for (const expected of ['index.html', 'app.js', 'styles.css', 'env.js', 'vendor/supabase.js']) {
+    assert.ok(files.includes(expected), `dist/${expected} is missing`);
+  }
+  const env = fs.readFileSync(path.join(DIST, 'env.js'), 'utf8');
+  assert.ok(env.includes(GOOD.SUPABASE_URL));
+  assert.ok(env.includes(GOOD.SUPABASE_ANON_KEY));
+
+  // The library is vendored, not fetched: nothing in the output may point at a CDN.
+  for (const f of files.filter((x) => x.endsWith('.html'))) {
+    const html = fs.readFileSync(path.join(DIST, f), 'utf8');
+    assert.ok(!/src=["']https?:\/\//.test(html), `${f} loads a script from another host`);
+  }
+  const lib = fs.readFileSync(path.join(DIST, 'vendor', 'supabase.js'), 'utf8');
+  assert.ok(lib.length > 100000, 'the supabase bundle looks truncated');
+  assert.match(lib.slice(0, 200), /supabase/);
+});
+
+test('a secret that somehow reaches the output stops the build and deletes it', async () => {
+  const { build } = await import('../scripts/build.mjs');
+  // "ViralRadar" really is in index.html, so this stands in for a secret whose
+  // value happens to appear in a built file. The guard must notice and refuse.
+  assert.throws(
+    () => build({ env: { ...GOOD, GEMINI_API_KEY: 'ViralRadar' }, builtAt: '2026-10-07T00:00:00.000Z' }),
+    /Refusing to publish.*GEMINI_API_KEY appears in dist/s,
+  );
+  assert.equal(fs.existsSync(DIST), false, 'a build that leaked must not be left on disk');
+});
+
+test('an incomplete configuration fails the build rather than deploying a broken site', async () => {
+  const { build } = await import('../scripts/build.mjs');
+  assert.throws(() => build({ env: { SUPABASE_URL: '', SUPABASE_ANON_KEY: '' } }), /Cannot build the site/);
+  // On Netlify the message should point at the Netlify UI, not at a local file.
+  assert.throws(() => build({ env: { NETLIFY: 'true' } }), /Netlify: Site configuration/);
+  assert.throws(() => build({ env: {} }), /your \.env file/);
+});
+
+test('netlify.toml matches how the build actually works', () => {
+  const toml = fs.readFileSync(path.join(ROOT, 'netlify.toml'), 'utf8');
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+
+  assert.match(toml, /command = "npm run build"/);
+  assert.ok(pkg.scripts.build, 'netlify.toml calls npm run build, so it has to exist');
+  assert.match(toml, /publish = "dist"/, 'the build writes to dist/');
+  // Pinned to the version this was developed with, as agreed.
+  assert.match(toml, /NODE_VERSION = "24\.\d+\.\d+"/);
+  // Direct links must land on the app, not a 404.
+  assert.match(toml, /from = "\/\*"[\s\S]*?to = "\/index\.html"[\s\S]*?status = 200/);
+  // Configuration must not be cached, or a key change would not take effect.
+  assert.match(toml, /for = "\/env\.js"[\s\S]*?Cache-Control = "no-store"/);
+});
+
+test('the build output is never committed', () => {
+  const ignore = fs.readFileSync(path.join(ROOT, '.gitignore'), 'utf8');
+  assert.match(ignore, /^dist\/$/m, 'dist/ holds a generated env.js and must stay out of git');
+});

@@ -8,3 +8,6 @@ supabase/.env.secrets
 
 # Other tools' scratch worktrees
 .kilo/
+
+# Build output
+dist/
