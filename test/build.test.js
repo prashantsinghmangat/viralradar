@@ -140,6 +140,31 @@ test('the build output is never committed', () => {
   assert.match(ignore, /^dist\/$/m, 'dist/ holds a generated env.js and must stay out of git');
 });
 
+test('the shared modules the browser gets are self-contained', async () => {
+  // There is no bundler: the browser fetches these files exactly as they are.
+  // If one of them imports something that was not copied, the page 404s at
+  // runtime with nothing useful in the console, so check it here instead.
+  const { BROWSER_SHARED } = await import('../scripts/build.mjs');
+  assert.ok(BROWSER_SHARED.length >= 3);
+  for (const name of BROWSER_SHARED) {
+    const source = fs.readFileSync(path.join(ROOT, 'shared', name), 'utf8');
+    const relative = [...source.matchAll(/from\s+['"](\.[^'"]+)['"]/g)].map((m) => m[1]);
+    assert.deepEqual(relative, [], `shared/${name} imports ${relative.join(', ')}, which the browser would not have`);
+  }
+});
+
+test('the page loads the configuration and the library before the app', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8');
+  const order = [...html.matchAll(/<script[^>]*src="([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(order.includes('/env.js'), 'the page needs its Supabase configuration');
+  assert.ok(order.includes('/vendor/supabase.js'), 'the library is vendored, not loaded from a CDN');
+  // app.js is a module, so it is deferred and runs after the two plain scripts
+  // above it whatever the order in the file; being explicit anyway.
+  assert.ok(order.indexOf('/env.js') < order.indexOf('/app.js'));
+  assert.ok(order.indexOf('/vendor/supabase.js') < order.indexOf('/app.js'));
+  assert.match(html, /<script type="module" src="\/app\.js">/, 'app.js imports data.js, so it has to be a module');
+});
+
 test('secret scanning is narrowed, not switched off', () => {
   // Netlify treats every environment variable as a secret and fails the build
   // if it appears in the output. The two public ones have to appear there, so

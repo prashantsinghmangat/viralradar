@@ -1,0 +1,4 @@
+{
+  "//": "Not a package. This tells Node that public/*.js files are ES modules, which is what the browser already assumes for <script type=module>. Without it the tests cannot import data.js, because the root package is commonjs. scripts/build.mjs leaves this file out of dist/.",
+  "type": "module"
+}

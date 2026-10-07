@@ -15,13 +15,18 @@
 // than one that does not build.
 
 import { readFileSync, writeFileSync, mkdirSync, rmSync, cpSync, existsSync, readdirSync, statSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC_DIR = join(ROOT, 'public');
 const OUT_DIR = join(ROOT, 'dist');
 const SUPABASE_UMD = join(ROOT, 'node_modules', '@supabase', 'supabase-js', 'dist', 'umd', 'supabase.js');
+
+// The browser also needs a few modules from shared/. They are kept in
+// public/shared/ by scripts/sync-shared.mjs, so copying public/ brings them
+// along and there is nothing extra to do here.
+export { BROWSER_SHARED } from './sync-shared.mjs';
 
 // Values that must never reach the browser, whatever happens.
 const FORBIDDEN_ENV = ['SUPABASE_SERVICE_ROLE_KEY', 'DATABASE_URL', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'YOUTUBE_API_KEY'];
@@ -102,10 +107,13 @@ export function build({ env = process.env, builtAt = new Date().toISOString() } 
 
   rmSync(OUT_DIR, { recursive: true, force: true });
   mkdirSync(OUT_DIR, { recursive: true });
-  cpSync(PUBLIC_DIR, OUT_DIR, { recursive: true });
+  // public/package.json only exists to tell Node that these files are ES
+  // modules, so the tests can import them. The browser has no use for it.
+  cpSync(PUBLIC_DIR, OUT_DIR, { recursive: true, filter: (src) => !src.endsWith(`${sep}package.json`) });
 
   mkdirSync(join(OUT_DIR, 'vendor'), { recursive: true });
   cpSync(SUPABASE_UMD, join(OUT_DIR, 'vendor', 'supabase.js'));
+
 
   writeFileSync(join(OUT_DIR, 'env.js'), envScript(config, builtAt));
 

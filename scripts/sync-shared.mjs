@@ -1,14 +1,21 @@
-// Copies shared/*.mjs into supabase/functions/_shared/core/.
+// Copies shared/*.mjs to the two places that cannot reach the repository root.
 //
-// Why a copy exists at all: a deployed Edge Function only gets the files under
-// supabase/functions/, so it cannot import shared/ at the repository root.
-// Rather than hope the bundler reaches outside that folder, the modules are
-// copied in, and test/functions-sync.test.js fails if the copy ever drifts from
-// the original. So there is still one source of truth — shared/ — and the copy
-// is generated, never edited.
+//   supabase/functions/_shared/core/   a deployed Edge Function only receives
+//                                      files under supabase/functions/
+//   public/shared/                     the browser fetches files by URL, and
+//                                      there is no bundler to resolve anything
+//                                      outside the site root
 //
-//   npm run sync:shared          update the copy
-//   npm run sync:shared -- --check   report drift without writing (used by the tests)
+// Rather than hope a bundler reaches outside those folders, the modules are
+// copied in, and test/functions-sync.test.js fails if a copy drifts. So there
+// is still one source of truth — shared/ — and the copies are generated, never
+// edited.
+//
+//   npm run sync:shared              update the copies
+//   npm run sync:shared -- --check   report drift without writing
+//
+// Only self-contained modules can go to the browser: it fetches them exactly as
+// they are, so a relative import inside one would 404 at runtime.
 
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -17,6 +24,15 @@ import { fileURLToPath } from 'node:url';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 export const SOURCE_DIR = join(ROOT, 'shared');
 export const TARGET_DIR = join(ROOT, 'supabase', 'functions', '_shared', 'core');
+export const BROWSER_DIR = join(ROOT, 'public', 'shared');
+
+// What the browser needs:
+//   stats     the Results screen's numbers, worked out in the browser
+//   defaults  the same lists the database and the functions use
+//   time      "today" in IST, so a day means the same thing everywhere
+//   tokens    an import token is made and hashed in the browser, so the token
+//             itself never travels anywhere it does not have to
+export const BROWSER_SHARED = ['stats.mjs', 'defaults.mjs', 'time.mjs', 'tokens.mjs'];
 
 const BANNER = [
   '// GENERATED FILE - DO NOT EDIT.',
@@ -25,9 +41,15 @@ const BANNER = [
   '',
 ].join('\n');
 
-/** Every .mjs under shared/, as repo-relative paths like "sources/youtube.mjs". */
+// Git rewrites line endings on checkout on Windows, so a copy that is perfectly
+// in sync can still differ byte for byte from what was written. Compare the
+// text, not the line endings.
+const sameText = (a, b) => a.split(String.fromCharCode(13)).join('') === b.split(String.fromCharCode(13)).join('');
+
+/** Every .mjs under a directory, as relative paths like "sources/youtube.mjs". */
 export function sharedFiles(dir = SOURCE_DIR, prefix = '') {
   const out = [];
+  if (!existsSync(dir)) return out;
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.isDirectory()) out.push(...sharedFiles(join(dir, entry.name), `${prefix}${entry.name}/`));
     else if (entry.name.endsWith('.mjs')) out.push(prefix + entry.name);
@@ -38,23 +60,25 @@ export function sharedFiles(dir = SOURCE_DIR, prefix = '') {
 export const expectedContent = (relative) =>
   BANNER.replace('SOURCE', relative) + readFileSync(join(SOURCE_DIR, relative), 'utf8');
 
-// Git rewrites line endings on checkout on Windows, so a copy that is perfectly
-// in sync can still differ byte for byte from what was written. Compare the
-// text, not the line endings.
-const sameText = (a, b) => a.split(String.fromCharCode(13)).join('') === b.split(String.fromCharCode(13)).join('');
+/** The two copies, and which files belong in each. */
+export const targets = () => [
+  { dir: TARGET_DIR, files: sharedFiles(), label: 'supabase/functions/_shared/core' },
+  { dir: BROWSER_DIR, files: BROWSER_SHARED, label: 'public/shared' },
+];
 
-/** Returns the list of files that are missing or out of date. */
+/** Files that are missing, out of date, or no longer belong. */
 export function drift() {
   const stale = [];
-  for (const relative of sharedFiles()) {
-    const target = join(TARGET_DIR, relative);
-    if (!existsSync(target) || !sameText(readFileSync(target, 'utf8'), expectedContent(relative))) stale.push(relative);
-  }
-  // Anything in the copy that no longer exists in shared/ is also drift.
-  if (existsSync(TARGET_DIR)) {
-    const wanted = new Set(sharedFiles());
-    for (const relative of sharedFiles(TARGET_DIR)) {
-      if (!wanted.has(relative)) stale.push(`${relative} (no longer in shared/)`);
+  for (const { dir, files, label } of targets()) {
+    for (const relative of files) {
+      const target = join(dir, relative);
+      if (!existsSync(target) || !sameText(readFileSync(target, 'utf8'), expectedContent(relative))) {
+        stale.push(`${label}/${relative}`);
+      }
+    }
+    const wanted = new Set(files);
+    for (const relative of sharedFiles(dir)) {
+      if (!wanted.has(relative)) stale.push(`${label}/${relative} (should not be there)`);
     }
   }
   return stale;
@@ -62,17 +86,16 @@ export function drift() {
 
 export function sync() {
   const written = [];
-  for (const relative of sharedFiles()) {
-    const target = join(TARGET_DIR, relative);
-    mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, expectedContent(relative));
-    written.push(relative);
-  }
-  // Remove copies of files that have been deleted from shared/.
-  if (existsSync(TARGET_DIR)) {
-    const wanted = new Set(sharedFiles());
-    for (const relative of sharedFiles(TARGET_DIR)) {
-      if (!wanted.has(relative)) rmSync(join(TARGET_DIR, relative));
+  for (const { dir, files, label } of targets()) {
+    for (const relative of files) {
+      const target = join(dir, relative);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, expectedContent(relative));
+      written.push(`${label}/${relative}`);
+    }
+    const wanted = new Set(files);
+    for (const relative of sharedFiles(dir)) {
+      if (!wanted.has(relative)) rmSync(join(dir, relative));
     }
   }
   return written;
@@ -82,13 +105,13 @@ if (process.argv[1] && process.argv[1].endsWith('sync-shared.mjs')) {
   if (process.argv.includes('--check')) {
     const stale = drift();
     if (stale.length) {
-      console.error(`supabase/functions/_shared/core is out of date:\n  ${stale.join('\n  ')}\n\nRun: npm run sync:shared`);
+      console.error(`The copies are out of date:\n  ${stale.join('\n  ')}\n\nRun: npm run sync:shared`);
       process.exit(1);
     }
-    console.log(`In sync: ${sharedFiles().length} file(s).`);
+    console.log('In sync.');
   } else {
     const written = sync();
-    console.log(`Copied ${written.length} file(s) into supabase/functions/_shared/core/:`);
+    console.log(`Copied ${written.length} file(s):`);
     for (const f of written) console.log(`  ${f}`);
   }
 }

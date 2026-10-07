@@ -28,6 +28,12 @@
   <main id="view" class="view" tabindex="-1"></main>
 
   <div id="toasts" class="toasts" aria-live="polite"></div>
-  <script src="/app.js"></script>
+
+  <!-- Configuration written at build time, then the vendored Supabase library.
+       Both are plain scripts so they have run before app.js, which is a module
+       and therefore deferred. -->
+  <script src="/env.js"></script>
+  <script src="/vendor/supabase.js"></script>
+  <script type="module" src="/app.js"></script>
 </body>
 </html>
