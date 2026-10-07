@@ -315,7 +315,10 @@ instead: a pre-flight from the real site gets CORS headers and one from any
 other site gets none; a GET is refused; a request with no credentials, an
 unknown import token and an expired session each come back with their own
 message. That is six of the function's paths checked against the live thing.
-The success path is covered in Node against a fake store.
+The success path was then confirmed against the real thing: an export sent
+from the app arrived as one row with the right owner, `source` of
+`shorts-studio`, `raw` holding the original item, and `stage` left at its
+default — which is the import correctly not sending the pipeline columns.
 
 Where a check could pass vacuously, it has been **tamper-tested**: the mistake is
 introduced on purpose, the suite is confirmed to fail, and the file is restored.
@@ -372,10 +375,10 @@ introduced on purpose, the suite is confirmed to fail, and the file is restored.
   type-checked or executed locally. TypeScript parses them, the untestable layer
   is kept deliberately thin — all behaviour lives in `shared/*.mjs` — and the
   deployed function is probed over HTTP instead (see §10).
-- **`vr-import` has not yet been used to import a real file.** Its six refusal
-  paths are verified against the deployed function; the success path has only
-  been tested against a fake store in Node. Importing anything from the app
-  settles it.
+- **The import token path has not been exercised end to end.** The browser
+  path has: a real export went through the deployed function and landed
+  correctly. The token path is verified only as far as a refusal, because no
+  token has been created yet and the watcher does not exist.
 - **OpenRouter key is not set locally**, so provider *fallback* cannot be tested
   against two real providers. Gemini is in both `.env` and Supabase secrets;
   OpenRouter and YouTube are in Supabase secrets only.
