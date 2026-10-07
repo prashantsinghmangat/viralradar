@@ -175,6 +175,16 @@ export function buildPlan({ A, B, C }) {
         params: [uid[them], t.fresh],
         expect: { errorCode: '42501' },
       });
+      // The same thing again without RETURNING. RETURNING needs the SELECT
+      // policy as well as the INSERT one, so the check above cannot tell which
+      // of the two refused it. This one isolates the INSERT policy.
+      add({
+        name: `${table}: ${me} cannot insert a row owned by ${them}, even without reading it back`,
+        as: me, table, sim: 'insert-other-silent', owner: them,
+        sql: `insert into viralradar.${table} (user_id, ${fresh.cols}) values ($1, ${fresh.vals})`,
+        params: [uid[them], t.fresh],
+        expect: { errorCode: '42501' },
+      });
       add({
         name: `${table}: ${me} can insert their own row`,
         as: me, table, sim: 'insert-own', owner: me,
@@ -240,6 +250,14 @@ export function buildPlan({ A, B, C }) {
       name: `${table}: C cannot create anything, not even a row of its own`,
       as: 'C', table, sim: 'not-allowed-insert', owner: 'C',
       sql: `insert into viralradar.${table} (user_id, ${own.cols}) values ($1, ${own.vals}) returning ${key}`,
+      params: [uid.C, t.fresh],
+      expect: { errorCode: '42501' },
+    });
+    // Again without RETURNING, so this rests on the INSERT policy alone.
+    add({
+      name: `${table}: C cannot create anything, even without reading it back`,
+      as: 'C', table, sim: 'not-allowed-insert-silent', owner: 'C',
+      sql: `insert into viralradar.${table} (user_id, ${own.cols}) values ($1, ${own.vals})`,
       params: [uid.C, t.fresh],
       expect: { errorCode: '42501' },
     });
@@ -373,9 +391,12 @@ export function buildProofs({ A, B, C }) {
       name: 'widening ideas_insert_own to with check(true) must break "B cannot insert a row owned by A"',
       breakSql: 'alter policy ideas_insert_own on viralradar.ideas with check (true)',
       check: {
-        name: 'ideas: B cannot insert a row owned by A',
-        as: 'B', table: 'ideas', sim: 'insert-other', owner: 'A',
-        sql: "insert into viralradar.ideas (user_id, id, title, source) values ($1, 'proof-row', 'planted', 'manual') returning id",
+        // Deliberately no RETURNING. RETURNING also needs the SELECT policy, so
+        // with it this statement would still be refused even once the INSERT
+        // policy was wide open, and the proof would prove nothing.
+        name: 'ideas: B cannot insert a row owned by A, even without reading it back',
+        as: 'B', table: 'ideas', sim: 'insert-other-silent', owner: 'A',
+        sql: "insert into viralradar.ideas (user_id, id, title, source) values ($1, 'proof-row', 'planted', 'manual')",
         params: [A],
         expect: { errorCode: '42501' },
       },
@@ -386,9 +407,10 @@ export function buildProofs({ A, B, C }) {
       name: 'removing the allowlist gate must break "C cannot create anything"',
       breakSql: 'alter policy ideas_insert_own on viralradar.ideas with check (user_id = auth.uid())',
       check: {
-        name: 'ideas: C cannot create anything, not even a row of its own',
-        as: 'C', table: 'ideas', sim: 'not-allowed-insert', owner: 'C',
-        sql: "insert into viralradar.ideas (user_id, id, title, source) values ($1, 'proof-row-c', 'planted by C', 'manual') returning id",
+        // No RETURNING, for the same reason as the proof above.
+        name: 'ideas: C cannot create anything, even without reading it back',
+        as: 'C', table: 'ideas', sim: 'not-allowed-insert-silent', owner: 'C',
+        sql: "insert into viralradar.ideas (user_id, id, title, source) values ($1, 'proof-row-c', 'planted by C', 'manual')",
         params: [C],
         expect: { errorCode: '42501' },
       },

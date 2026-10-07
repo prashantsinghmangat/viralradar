@@ -20,6 +20,8 @@ const uid = { A, B, C };
 
 const rows = (r) => ({ rows: r, rowCount: r.length, errorCode: null, errorMessage: null });
 const err = (code) => ({ rows: [], rowCount: 0, errorCode: code, errorMessage: 'simulated' });
+// A statement with no RETURNING: rows affected, but nothing handed back.
+const affected = (n) => ({ rows: [], rowCount: n, errorCode: null, errorMessage: null });
 
 /**
  * A model of what Postgres does with these policies.
@@ -41,9 +43,13 @@ function simulate(check, leak = 'none') {
   // policy fails its second gate: reads return nothing, writes are refused.
   if (as === 'C') {
     if (leak === 'no-allowlist-gate') {
-      // What it would look like if the second gate were missing from the
-      // policies: C becomes an ordinary user of its own rows.
-      return sim === 'not-allowed-select' ? rows([{ id: 'leaked' }]) : rows([{ id: 'fresh' }]);
+      // What it would look like if the gate were missing from the INSERT
+      // policy: C can write. Reading back still needs the SELECT policy, which
+      // keeps its own gate, so the RETURNING form stays refused. That is
+      // exactly the trap the first run of this test fell into.
+      if (sim === 'not-allowed-insert-silent') return affected(1);
+      if (sim === 'not-allowed-insert') return err('42501');
+      return rows([{ id: 'leaked' }]);
     }
     return sim === 'not-allowed-select' ? rows([]) : err('42501');
   }
@@ -71,7 +77,11 @@ function simulate(check, leak = 'none') {
     case 'insert-own':
       return rows([{ id: 'fresh' }]);
     case 'insert-other':
-      return leak === 'insert-check' ? rows([{ id: 'fresh' }]) : err('42501');
+      // With RETURNING, the SELECT policy gates it too, so widening only the
+      // INSERT policy is not enough to let this through.
+      return err('42501');
+    case 'insert-other-silent':
+      return leak === 'insert-check' ? affected(1) : err('42501');
     case 'insert-default-owner':
       return rows([{ user_id: uid[me] }]);
     case 'insert-null-owner':
@@ -110,7 +120,8 @@ test('the plan covers select, insert, update and delete in both directions for e
     for (const [me, them] of [['A', 'B'], ['B', 'A']]) {
       const forTable = plan.filter((c) => c.table === table && c.as === me);
       for (const sim of ['select-own', 'select-other', 'select-unfiltered', 'update-own', 'update-other',
-        'update-give-away', 'delete-own', 'delete-other', 'insert-own', 'insert-other', 'insert-default-owner']) {
+        'update-give-away', 'delete-own', 'delete-other', 'insert-own', 'insert-other',
+        'insert-other-silent', 'insert-default-owner']) {
         assert.ok(forTable.some((c) => c.sim === sim), `${table}: missing "${sim}" as user ${me}`);
       }
       // The cross-user assertions must actually point at the other user's id.
@@ -132,6 +143,7 @@ test('the plan covers select, insert, update and delete in both directions for e
     const forC = plan.filter((c) => c.table === table && c.as === 'C');
     assert.ok(forC.some((c) => c.sim === 'not-allowed-select'), `${table}: missing the "signed in but not allowed" read check`);
     assert.ok(forC.some((c) => c.sim === 'not-allowed-insert'), `${table}: missing the "signed in but not allowed" write check`);
+    assert.ok(forC.some((c) => c.sim === 'not-allowed-insert-silent'), `${table}: missing the write check that isolates the INSERT policy`);
   }
   assert.ok(plan.some((c) => c.table === 'settings' && c.as === 'C'));
 
@@ -153,7 +165,12 @@ test('if the allowlist gate were missing, the "not allowed" assertions fail', as
   const failedNames = results.filter((r) => !r.ok).map((r) => r.name);
   for (const { table } of TABLES) {
     assert.ok(failedNames.includes(`${table}: C is signed in but not on the allowlist, and sees nothing`), `${table}: the read check did not notice`);
-    assert.ok(failedNames.includes(`${table}: C cannot create anything, not even a row of its own`), `${table}: the write check did not notice`);
+    assert.ok(failedNames.includes(`${table}: C cannot create anything, even without reading it back`), `${table}: the write check did not notice`);
+    // The RETURNING form is NOT expected to notice: reading the row back
+    // still needs the SELECT policy, which keeps its own gate. Writing the
+    // assertion that way is what made the first real run prove nothing.
+    assert.ok(!failedNames.includes(`${table}: C cannot create anything, not even a row of its own`),
+      `${table}: the RETURNING form cannot detect an insert-only leak, so it must not be the one relied on`);
   }
   // The A and B assertions still pass: this mistake does not leak between users,
   // it lets the wrong people in. The test has to tell those two apart.
@@ -193,8 +210,11 @@ test('a missing select policy makes the own-rows assertions fail', async () => {
 test('a WITH CHECK that accepts anything makes the insert and update assertions fail', async () => {
   const insertLeak = await runPlan(buildPlan({ A, B, C }), execWith('insert-check'));
   const insertFailures = insertLeak.results.filter((r) => !r.ok).map((r) => r.name);
-  assert.ok(insertFailures.includes('ideas: B cannot insert a row owned by A'));
-  assert.ok(insertFailures.includes('import_tokens: A cannot insert a row owned by B'));
+  // Only the no-RETURNING assertions can see an insert-only leak.
+  assert.ok(insertFailures.includes('ideas: B cannot insert a row owned by A, even without reading it back'));
+  assert.ok(insertFailures.includes('import_tokens: A cannot insert a row owned by B, even without reading it back'));
+  assert.ok(!insertFailures.includes('ideas: B cannot insert a row owned by A'),
+    'the RETURNING form is blocked by the SELECT policy, so it cannot prove anything about the INSERT policy');
 
   const updateLeak = await runPlan(buildPlan({ A, B, C }), execWith('update-check'));
   const updateFailures = updateLeak.results.filter((r) => !r.ok).map((r) => r.name);

@@ -101,7 +101,11 @@ async function becomeUser(tx, as) {
 async function attempt(tx, check) {
   try {
     const rows = await tx.unsafe(check.sql, check.params);
-    return { rows: [...rows], rowCount: rows.length, errorCode: null, errorMessage: null };
+    // A statement with no RETURNING hands back no rows, so the number of rows
+    // it affected comes from .count. Without this, "did the insert work?" would
+    // always look like "no".
+    const rowCount = typeof rows.count === 'number' ? rows.count : rows.length;
+    return { rows: [...rows], rowCount, errorCode: null, errorMessage: null };
   } catch (e) {
     return { rows: [], rowCount: 0, errorCode: e.code || 'unknown', errorMessage: (e.message || '').split('\n')[0] };
   }

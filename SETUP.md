@@ -138,7 +138,7 @@ This is additive. tracebug keeps working exactly as before.
 npm run test:rls
 ```
 
-This creates three throwaway users and tries 175 ways to get at data that is not
+This creates three throwaway users and tries 193 ways to get at data that is not
 theirs, then deletes them. Two of the three are ViralRadar users; the third is
 signed in but not on the allowlist, standing in for a tracebug account. It also
 breaks four security rules on purpose inside a transaction, checks the test
@@ -147,7 +147,7 @@ notices, and rolls back so the rules come straight back.
 What you want to see at the end:
 
 ```
-assertions: 175 passed, 0 failed
+assertions: 193 passed, 0 failed
 proofs:     4 passed, 0 failed
 
 PASS - a user can only reach their own rows, and the test can detect it when that breaks.
