@@ -15,7 +15,8 @@ const { buildPlan, buildProofs, runPlan, runProofs, matches, TABLES } = require(
 
 const A = '11111111-1111-4111-8111-111111111111';
 const B = '22222222-2222-4222-8222-222222222222';
-const uid = { A, B };
+const C = '33333333-3333-4333-8333-333333333333';
+const uid = { A, B, C };
 
 const rows = (r) => ({ rows: r, rowCount: r.length, errorCode: null, errorMessage: null });
 const err = (code) => ({ rows: [], rowCount: 0, errorCode: code, errorMessage: 'simulated' });
@@ -32,6 +33,20 @@ function simulate(check, leak = 'none') {
   const { sim, as, owner } = check;
   if (as === 'anon') return err('42501'); // privileges revoked from anon
   if (as === 'noclaims') return err('23502'); // auth.uid() is null, so the owner default is null
+
+  // The allowlist is not readable or writable from any session.
+  if (sim === 'allowlist-denied') return err('42501');
+
+  // C is signed in but not on the allowlist, so is_allowed() is false and every
+  // policy fails its second gate: reads return nothing, writes are refused.
+  if (as === 'C') {
+    if (leak === 'no-allowlist-gate') {
+      // What it would look like if the second gate were missing from the
+      // policies: C becomes an ordinary user of its own rows.
+      return sim === 'not-allowed-select' ? rows([{ id: 'leaked' }]) : rows([{ id: 'fresh' }]);
+    }
+    return sim === 'not-allowed-select' ? rows([]) : err('42501');
+  }
 
   const me = as;
   const canSee = (rowOwner) => (leak === 'no-select' ? false : leak === 'select' ? true : rowOwner === me);
@@ -69,14 +84,14 @@ function simulate(check, leak = 'none') {
 const execWith = (leak) => async (check) => simulate(check, leak);
 
 test('every assertion in the plan is well formed and uniquely named', () => {
-  const plan = buildPlan({ A, B });
+  const plan = buildPlan({ A, B, C });
   assert.ok(plan.length > 100, `expected a thorough plan, got ${plan.length} assertions`);
   const names = new Set();
   for (const c of plan) {
     assert.ok(c.name, 'every assertion needs a name');
     assert.ok(!names.has(c.name), `duplicate assertion name: ${c.name}`);
     names.add(c.name);
-    assert.ok(['A', 'B', 'anon', 'noclaims'].includes(c.as), `${c.name}: bad "as" value ${c.as}`);
+    assert.ok(['A', 'B', 'C', 'anon', 'noclaims'].includes(c.as), `${c.name}: bad "as" value ${c.as}`);
     assert.ok(c.sql && /^(select|insert|update|delete)/i.test(c.sql.trim()), `${c.name}: missing or odd sql`);
     assert.ok(Array.isArray(c.params), `${c.name}: params must be an array`);
     assert.ok(c.sim, `${c.name}: missing sim label`);
@@ -90,7 +105,7 @@ test('every assertion in the plan is well formed and uniquely named', () => {
 });
 
 test('the plan covers select, insert, update and delete in both directions for every table', () => {
-  const plan = buildPlan({ A, B });
+  const plan = buildPlan({ A, B, C });
   for (const { table } of TABLES) {
     for (const [me, them] of [['A', 'B'], ['B', 'A']]) {
       const forTable = plan.filter((c) => c.table === table && c.as === me);
@@ -110,10 +125,43 @@ test('the plan covers select, insert, update and delete in both directions for e
     assert.ok(plan.some((c) => c.table === table && c.sim === 'insert-no-session'), `${table}: missing the no-session check`);
   }
   assert.ok(plan.some((c) => c.table === 'settings' && c.sim === 'settings-own-count'));
+
+  // Being signed in is not being a ViralRadar user: this project's auth.users
+  // is shared with another app that already has accounts in it.
+  for (const { table } of TABLES) {
+    const forC = plan.filter((c) => c.table === table && c.as === 'C');
+    assert.ok(forC.some((c) => c.sim === 'not-allowed-select'), `${table}: missing the "signed in but not allowed" read check`);
+    assert.ok(forC.some((c) => c.sim === 'not-allowed-insert'), `${table}: missing the "signed in but not allowed" write check`);
+  }
+  assert.ok(plan.some((c) => c.table === 'settings' && c.as === 'C'));
+
+  // The gate must not be self-service.
+  const allowlist = plan.filter((c) => c.table === 'allowed_users');
+  assert.ok(allowlist.length >= 4, 'the allowlist itself needs read and write checks');
+  for (const c of allowlist) {
+    assert.equal(c.sim, 'allowlist-denied');
+    assert.deepEqual(c.expect, { errorCode: '42501' }, `${c.name}: must be refused outright`);
+  }
+  assert.ok(allowlist.some((c) => c.as === 'A'), 'even an allowed user must not read the allowlist');
+  assert.ok(allowlist.some((c) => c.as === 'C'));
+});
+
+test('if the allowlist gate were missing, the "not allowed" assertions fail', async () => {
+  const plan = buildPlan({ A, B, C });
+  const { failed, results } = await runPlan(plan, execWith('no-allowlist-gate'));
+  assert.ok(failed > 0, 'a missing allowlist gate must be reported as a failure');
+  const failedNames = results.filter((r) => !r.ok).map((r) => r.name);
+  for (const { table } of TABLES) {
+    assert.ok(failedNames.includes(`${table}: C is signed in but not on the allowlist, and sees nothing`), `${table}: the read check did not notice`);
+    assert.ok(failedNames.includes(`${table}: C cannot create anything, not even a row of its own`), `${table}: the write check did not notice`);
+  }
+  // The A and B assertions still pass: this mistake does not leak between users,
+  // it lets the wrong people in. The test has to tell those two apart.
+  assert.ok(!failedNames.some((n) => n.startsWith('ideas: A cannot see')), 'this leak should not be confused with a cross-user leak');
 });
 
 test('against a correctly locked-down database, every assertion passes', async () => {
-  const plan = buildPlan({ A, B });
+  const plan = buildPlan({ A, B, C });
   const { passed, failed, results } = await runPlan(plan, execWith('none'));
   const firstFailure = results.find((r) => !r.ok);
   assert.equal(failed, 0, firstFailure ? `${firstFailure.name}: ${firstFailure.detail}` : '');
@@ -121,7 +169,7 @@ test('against a correctly locked-down database, every assertion passes', async (
 });
 
 test('a policy that leaks every row makes the cross-user assertions fail', async () => {
-  const plan = buildPlan({ A, B });
+  const plan = buildPlan({ A, B, C });
   const { failed, results } = await runPlan(plan, execWith('select'));
   assert.ok(failed > 0, 'a leak must be reported as a failure');
   const failedNames = results.filter((r) => !r.ok).map((r) => r.name);
@@ -135,7 +183,7 @@ test('a policy that leaks every row makes the cross-user assertions fail', async
 });
 
 test('a missing select policy makes the own-rows assertions fail', async () => {
-  const { failed, results } = await runPlan(buildPlan({ A, B }), execWith('no-select'));
+  const { failed, results } = await runPlan(buildPlan({ A, B, C }), execWith('no-select'));
   assert.ok(failed > 0);
   const failedNames = results.filter((r) => !r.ok).map((r) => r.name);
   assert.ok(failedNames.includes('ideas: A can see their own rows'));
@@ -143,12 +191,12 @@ test('a missing select policy makes the own-rows assertions fail', async () => {
 });
 
 test('a WITH CHECK that accepts anything makes the insert and update assertions fail', async () => {
-  const insertLeak = await runPlan(buildPlan({ A, B }), execWith('insert-check'));
+  const insertLeak = await runPlan(buildPlan({ A, B, C }), execWith('insert-check'));
   const insertFailures = insertLeak.results.filter((r) => !r.ok).map((r) => r.name);
   assert.ok(insertFailures.includes('ideas: B cannot insert a row owned by A'));
   assert.ok(insertFailures.includes('import_tokens: A cannot insert a row owned by B'));
 
-  const updateLeak = await runPlan(buildPlan({ A, B }), execWith('update-check'));
+  const updateLeak = await runPlan(buildPlan({ A, B, C }), execWith('update-check'));
   const updateFailures = updateLeak.results.filter((r) => !r.ok).map((r) => r.name);
   assert.ok(updateFailures.includes('ideas: A cannot give their own row away to B'));
 });
@@ -174,24 +222,21 @@ test('matches() reads each kind of expectation correctly', () => {
 });
 
 test('a proof passes only when breaking the policy makes the assertion fail', async () => {
-  const proofs = buildProofs({ A, B });
-  assert.equal(proofs.length, 3);
+  const proofs = buildProofs({ A, B, C });
+  assert.equal(proofs.length, 4);
 
   // Each proof names the policy it breaks and the assertion that must then fail.
   for (const p of proofs) {
     assert.match(p.breakSql, /^(drop|alter) policy /);
     assert.ok(p.check && p.check.expect && p.why);
+    assert.ok(p.modelLeak, `${p.name}: must declare what its break does, for the offline model`);
   }
 
   // A database where breaking the policy really does change the answer.
-  const honest = async (proof) => {
-    const leak = proof.breakSql.startsWith('drop policy') ? 'no-select'
-      : /insert_own/.test(proof.breakSql) ? 'insert-check' : 'select';
-    return simulate(proof.check, leak);
-  };
+  const honest = async (proof) => simulate(proof.check, proof.modelLeak);
   const good = await runProofs(proofs, honest);
   assert.equal(good.failed, 0, JSON.stringify(good.results));
-  assert.equal(good.passed, 3);
+  assert.equal(good.passed, 4);
   for (const r of good.results) assert.match(r.detail, /failed as it must/);
 
   // A database where breaking the policy changes nothing: the proofs must fail,
@@ -199,14 +244,14 @@ test('a proof passes only when breaking the policy makes the assertion fail', as
   const useless = async (proof) => simulate(proof.check, 'none');
   const bad = await runProofs(proofs, useless);
   assert.equal(bad.passed, 0);
-  assert.equal(bad.failed, 3);
+  assert.equal(bad.failed, 4);
   for (const r of bad.results) assert.match(r.detail, /still passed/);
 });
 
 test('a proof that cannot run at all is a failure, not a pass', async () => {
   const boom = async () => { throw new Error('permission denied to drop policy'); };
-  const { passed, failed, results } = await runProofs(buildProofs({ A, B }), boom);
+  const { passed, failed, results } = await runProofs(buildProofs({ A, B, C }), boom);
   assert.equal(passed, 0);
-  assert.equal(failed, 3);
+  assert.equal(failed, 4);
   assert.match(results[0].detail, /could not run the proof: permission denied/);
 });

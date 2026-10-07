@@ -13,8 +13,10 @@
 // assertion transaction is rolled back, so the fixtures stay intact and the
 // database is left exactly as it was found.
 //
-// Two throwaway users are created in auth.users (user_id references it) and
-// deleted again at the end, which cascades their rows away.
+// Three throwaway users are created in auth.users (user_id references it) and
+// deleted again at the end, which cascades their rows away. A and B are on the
+// ViralRadar allowlist; C is not, standing in for an account belonging to the
+// other app that shares this Supabase project. C must be able to do nothing.
 import 'dotenv/config';
 import postgres from 'postgres';
 import { randomUUID } from 'node:crypto';
@@ -26,10 +28,10 @@ Run the Row Level Security isolation test against your Supabase database.
 
   npm run test:rls
 
-It needs DATABASE_URL in .env. Use the "Session pooler" connection string from
-the Supabase dashboard (Project Settings -> Database -> Connection string ->
-Session pooler), because the direct connection is IPv6-only and will not work
-on most home networks:
+It needs DATABASE_URL in .env. Use the pooled connection string: click "Connect"
+at the top of the dashboard, pick the "Direct / Connection string" tab, and copy
+the one labelled "Shared pooler" (older wording: "Session pooler"). The direct
+connection is IPv6-only and will not work on most home networks:
 
   DATABASE_URL=postgresql://postgres.<project-ref>:<your-db-password>@aws-0-<region>.pooler.supabase.com:5432/postgres
 
@@ -66,9 +68,12 @@ class Rollback extends Error {
   }
 }
 
+// A and B are ViralRadar users. C is a signed-in account that is NOT on the
+// allowlist — the situation the other app sharing this project creates.
 const A = randomUUID();
 const B = randomUUID();
-const uid = { A, B };
+const C = randomUUID();
+const uid = { A, B, C };
 
 const db = postgres(url, {
   ssl: 'require',
@@ -184,13 +189,17 @@ const FIXTURE_KEYS = {
 };
 
 async function createUsers() {
-  for (const [label, id] of [['a', A], ['b', B]]) {
+  for (const [label, id] of [['a', A], ['b', B], ['c', C]]) {
     await db`
       insert into auth.users (instance_id, id, aud, role, email, encrypted_password,
                               email_confirmed_at, created_at, updated_at)
       values ('00000000-0000-0000-0000-000000000000', ${id}, 'authenticated', 'authenticated',
               ${`rls-test-${label}-${id}@viralradar.invalid`}, '', now(), now(), now())`;
   }
+  // A and B are ViralRadar users. C is deliberately left off the allowlist: it
+  // stands in for an account belonging to the other app in this project.
+  await db`insert into viralradar.allowed_users (user_id, note) values
+             (${A}, 'rls test user A'), (${B}, 'rls test user B')`;
 }
 
 async function createFixtures() {
@@ -200,15 +209,16 @@ async function createFixtures() {
 }
 
 async function deleteUsers() {
-  // Cascades through every table, including the settings row.
-  await db`delete from auth.users where id in (${A}, ${B})`;
+  // Cascades through every table, the settings rows and the allowlist entries.
+  await db`delete from auth.users where id in (${A}, ${B}, ${C})`;
 }
 
 async function main() {
   console.log(`\nRow Level Security isolation test`);
   console.log(`  database: ${host}`);
-  console.log(`  user A:   ${A}`);
-  console.log(`  user B:   ${B}\n`);
+  console.log(`  user A:   ${A}  (on the allowlist)`);
+  console.log(`  user B:   ${B}  (on the allowlist)`);
+  console.log(`  user C:   ${C}  (signed in, NOT on the allowlist)\n`);
 
   let created = false;
   let plan = { passed: 0, failed: 0 };
@@ -220,13 +230,13 @@ async function main() {
     await createFixtures();
 
     console.log('--- isolation assertions ---');
-    plan = await runPlan(buildPlan({ A, B }), exec, (line) => console.log('  ' + line));
+    plan = await runPlan(buildPlan({ A, B, C }), exec, (line) => console.log('  ' + line));
 
     console.log('\n--- proofs that these assertions are real ---');
     console.log('  Each proof breaks one policy inside a transaction, re-runs one');
     console.log('  assertion, and demands that it now fails. The transaction is rolled');
     console.log('  back, so the policy is restored either way.\n');
-    proofs = await runProofs(buildProofs({ A, B }), execBroken, (line) => console.log('  ' + line));
+    proofs = await runProofs(buildProofs({ A, B, C }), execBroken, (line) => console.log('  ' + line));
   } finally {
     if (created) {
       try {

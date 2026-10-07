@@ -12,6 +12,32 @@ const path = require('node:path');
 const ROOT = path.join(__dirname, '..');
 const SQL_DIRS = [path.join(ROOT, 'supabase', 'migrations'), path.join(ROOT, 'supabase', 'tests')];
 
+// allowed_users is not user data. It is the list of who may use the app at all,
+// and it is locked down the opposite way: RLS on with no policies, so it denies
+// every signed-in user. It is checked by its own test below.
+const CONTROL_TABLES = ['allowed_users'];
+
+// Pull the USING and WITH CHECK clauses out of a policy by balancing brackets.
+// auth.uid() and is_allowed() contain brackets of their own, so a regex here
+// silently matches only the clauses that are already correct.
+function policyClauses(sql) {
+  const out = [];
+  const re = /(using|with check)\s*\(/gi;
+  let m;
+  while ((m = re.exec(sql)) !== null) {
+    let depth = 1;
+    let i = re.lastIndex;
+    while (i < sql.length && depth > 0) {
+      if (sql[i] === '(') depth++;
+      else if (sql[i] === ')') depth--;
+      i++;
+    }
+    out.push({ kind: m[1].toLowerCase(), body: sql.slice(re.lastIndex, i - 1) });
+    re.lastIndex = i;
+  }
+  return out;
+}
+
 const sqlFiles = SQL_DIRS.flatMap((dir) => (fs.existsSync(dir)
   ? fs.readdirSync(dir).filter((f) => f.endsWith('.sql')).map((f) => path.join(dir, f))
   : []));
@@ -136,8 +162,9 @@ test('every table created in the schema is locked down in the RLS migration', ()
   const schema = read('init');
   const rls = read('rls');
 
-  const tables = [...schema.matchAll(/create table viralradar\.(\w+)/g)].map((m) => m[1]);
-  assert.ok(tables.length >= 7, `expected at least 7 tables, found ${tables.join(', ')}`);
+  const all = [...schema.matchAll(/create table viralradar\.(\w+)/g)].map((m) => m[1]);
+  const tables = all.filter((t) => !CONTROL_TABLES.includes(t));
+  assert.ok(tables.length >= 7, `expected at least 7 user tables, found ${tables.join(', ')}`);
 
   for (const t of tables) {
     assert.ok(new RegExp(`alter table viralradar\\.${t} enable row level security`).test(rls),
@@ -158,6 +185,19 @@ test('every table created in the schema is locked down in the RLS migration', ()
     assert.match(p, /to authenticated/, `${name}: must be limited to the authenticated role`);
     assert.ok(/user_id = auth\.uid\(\)/.test(p), `${name}: must compare user_id with auth.uid()`);
     assert.ok(!/using \(true\)|with check \(true\)/.test(p), `${name}: must not allow every row`);
+    // The second gate: being signed in is not enough in a shared project.
+    assert.ok(/\(select viralradar\.is_allowed\(\)\)/.test(p),
+      `${name}: must also require viralradar.is_allowed(), or a user of the other app in this project could use ViralRadar`);
+    // EVERY clause needs BOTH gates, not just the first one. An update policy
+    // has two (USING and WITH CHECK) and it is easy to gate one and forget the
+    // other, so the clauses are pulled apart by balancing brackets rather than
+    // by a regex, which would only ever find the clauses that are already right.
+    const clauses = policyClauses(p);
+    assert.ok(clauses.length >= 1, `${name}: no USING or WITH CHECK clause found`);
+    for (const c of clauses) {
+      assert.ok(/user_id = auth\.uid\(\)/.test(c.body), `${name}: the ${c.kind.toUpperCase()} clause does not check the owner -> ${c.body}`);
+      assert.ok(/is_allowed\(\)/.test(c.body), `${name}: the ${c.kind.toUpperCase()} clause is missing the allowlist gate -> ${c.body}`);
+    }
   }
   // Updates need both halves: USING to find the row, WITH CHECK to stop it being given away.
   for (const p of policies.filter((x) => /for update/.test(x))) {
@@ -176,7 +216,8 @@ test('every user-owned table defaults user_id to auth.uid() and refuses a null o
     .map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
 
   // Split the file into one chunk per CREATE TABLE so each is checked on its own.
-  const chunks = schema.split(/create table viralradar\./).slice(1);
+  const chunks = schema.split(/create table viralradar\./).slice(1)
+    .filter((c) => !CONTROL_TABLES.includes(c.match(/^(\w+)/)[1]));
   assert.ok(chunks.length >= 7);
   for (const chunk of chunks) {
     const table = chunk.match(/^(\w+)/)[1];
@@ -188,6 +229,42 @@ test('every user-owned table defaults user_id to auth.uid() and refuses a null o
     assert.match(body, /created_at\s+timestamptz not null default now\(\)/, `${table}: needs a created_at column`);
     assert.ok(new RegExp(`create trigger ${table}_touch_updated_at`).test(schema), `${table}: needs the updated_at trigger`);
   }
+});
+
+// Being signed in to this Supabase project is not the same as being a
+// ViralRadar user: auth.users is shared with another app that already has
+// accounts in it. The allowlist is what closes that gap, so it gets its own
+// test rather than being lumped in with the data tables.
+test('the allowlist is locked down harder than the data tables', () => {
+  const dir = path.join(ROOT, 'supabase', 'migrations');
+  const read = (match) => fs.readdirSync(dir).filter((f) => f.includes(match))
+    .map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
+  const schema = read('init');
+  const rls = read('rls');
+
+  assert.match(schema, /create table viralradar\.allowed_users/, 'the allowlist table must exist');
+  assert.match(rls, /alter table viralradar\.allowed_users enable row level security/);
+
+  // No policies at all: with RLS on, that denies every role except the owner
+  // and roles that bypass RLS (service_role).
+  assert.ok(!/create policy \w+ on viralradar\.allowed_users/.test(rls),
+    'the allowlist must have NO policies: a signed-in user must not be able to read it or add themselves');
+  assert.match(rls, /revoke all on table viralradar\.allowed_users from anon, authenticated;/,
+    'anon and authenticated must have no privileges on the allowlist');
+  assert.match(rls, /grant [\w, ]+ on table viralradar\.allowed_users to service_role;/);
+
+  // The function the policies call has to be able to read a table the caller cannot.
+  const fn = schema.slice(schema.indexOf('function viralradar.is_allowed'));
+  assert.match(fn, /security definer/, 'is_allowed() must be SECURITY DEFINER to read a table the caller cannot');
+  assert.match(fn, /set search_path = ''/, "is_allowed() must pin an empty search_path, or a SECURITY DEFINER function can be tricked");
+  assert.match(fn, /\bstable\b/, 'is_allowed() should be STABLE so it is not re-run per row');
+  assert.match(fn, /from viralradar\.allowed_users where user_id = auth\.uid\(\)/);
+  assert.match(schema, /revoke all on function viralradar\.is_allowed\(\) from public;/);
+  assert.match(schema, /grant execute on function viralradar\.is_allowed\(\) to authenticated, service_role;/);
+
+  // The allowlist must not be reachable through the API either.
+  assert.ok(!/alter publication supabase_realtime add table viralradar\.allowed_users/.test(rls),
+    'the allowlist must never be published over realtime');
 });
 
 test('ideas, scripts and results have the indexed origin_at the UI sorts by', () => {

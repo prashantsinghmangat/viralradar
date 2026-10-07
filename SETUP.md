@@ -87,8 +87,9 @@ Your project ref is the random-looking part of your project URL
 **Project Settings → General → Reference ID**.
 
 `db push` will ask you to confirm the two migrations. It creates a new schema
-called `viralradar` and seven tables inside it. It does not touch `public`,
-where tracebug lives.
+called `viralradar` and eight tables inside it: the seven the app uses, plus
+`allowed_users`, which controls who may use ViralRadar at all. It does not touch
+`public`, where tracebug lives.
 
 Check it worked: **Table Editor** → the schema dropdown (top left, probably says
 "public") → you should now be able to pick **viralradar** and see `ideas`,
@@ -111,16 +112,17 @@ This is additive. tracebug keeps working exactly as before.
 npm run test:rls
 ```
 
-This creates two throwaway users, tries 157 ways to make one user read or change
-the other's rows, and then deletes them. It also breaks three security rules on
-purpose inside a transaction, checks the test notices, and rolls back so the
-rules come straight back.
+This creates three throwaway users and tries 175 ways to get at data that is not
+theirs, then deletes them. Two of the three are ViralRadar users; the third is
+signed in but not on the allowlist, standing in for a tracebug account. It also
+breaks four security rules on purpose inside a transaction, checks the test
+notices, and rolls back so the rules come straight back.
 
 What you want to see at the end:
 
 ```
-assertions: 157 passed, 0 failed
-proofs:     3 passed, 0 failed
+assertions: 175 passed, 0 failed
+proofs:     4 passed, 0 failed
 
 PASS - a user can only reach their own rows, and the test can detect it when that breaks.
 ```
@@ -143,8 +145,31 @@ Your login. Do this now, because the daily schedule needs your user id.
 
 **Save that UID somewhere.** I need it in Part 2 for the daily schedule.
 
-Do **not** turn off signups yet. That comes at the very end, once you have
-logged in successfully on both devices.
+### Step 6b. Add yourself to the ViralRadar allowlist
+
+This Supabase project already has **3 accounts** in it from tracebug. Signing in
+is therefore not enough to be a ViralRadar user — you also have to be on the
+allowlist. Nobody can add themselves: the table is readable and writable only by
+the service role.
+
+**SQL Editor → New query**, with your UID from the step above:
+
+```sql
+insert into viralradar.allowed_users (user_id, note)
+values ('paste-your-user-uid-here', 'me');
+```
+
+Check it took:
+
+```sql
+select user_id, note from viralradar.allowed_users;
+```
+
+Until you do this, you can log in but every screen will be empty — which is
+exactly what the three tracebug accounts will see, permanently.
+
+Do **not** turn off signups yet. That comes at the very end, and it is now
+optional — see Step 15.
 
 ## Step 7. Get the three API keys
 
@@ -305,17 +330,29 @@ person.
 Android, Chrome: open the site → menu (⋮) → **Add to Home screen** → **Install**.
 It then opens like an app, without the browser bars.
 
-## Step 15. Close the door
+## Step 15. Close the door (optional)
 
-Only after you have logged in successfully on **both** laptop and phone.
+**ViralRadar is already closed** without this step. The allowlist from Step 6b
+is the real lock: a new account can be created, can sign in, and still sees
+nothing and can create nothing. The three tracebug accounts are in exactly that
+position today.
+
+Turning signups off is belt and braces, and it is **project-wide** — it would
+stop new tracebug registrations too. tracebug has 3 accounts and a `sessions`
+table linked to `auth.users`, so think about whether anything there still needs
+new people to be able to register.
+
+If you want it anyway, only after logging in successfully on **both** laptop and
+phone:
 
 1. **Authentication → Sign In / Providers**
-2. Turn **off** "Allow new users to sign up".
-3. Save.
+2. Turn **off** "Allow new users to sign up"
+3. Save
 
-Now nobody else can register. Your own login keeps working, because you already
-exist. (tracebug has no users at all, so this costs it nothing — if that ever
-changes, tell me before you flip it.)
+Your own login keeps working, because your account already exists.
+
+If tracebug does need open signups, leave this alone. Nothing about ViralRadar's
+security depends on it.
 
 ## Step 16. Start the folder watcher (optional)
 
@@ -390,6 +427,7 @@ It is safe to run twice: imports match on id, so nothing duplicates.
 | `ENOTFOUND` or a timeout from `npm run test:rls` | You used the Direct connection string. Switch to the pooled one (**Shared pooler**, port 5432). |
 | `password authentication failed` | Wrong database password in `DATABASE_URL`. Reset it under Project Settings → Database. |
 | App loads but every screen is empty, no error | `viralradar` is probably missing from **Exposed schemas** (Step 4). |
+| Logged in fine, but everything is empty and nothing saves | You are not on the allowlist (Step 6b). This is also exactly what a tracebug account sees. |
 | `permission denied for schema viralradar` | Same as above, or the migrations have not been pushed. |
 | Magic link email never arrives | Check spam, then **Authentication → URL Configuration** → Site URL and Redirect URLs must include your Netlify address. |
 | Netlify build fails on a missing variable | `SUPABASE_URL` or `SUPABASE_ANON_KEY` is not set in **Site configuration → Environment variables**. |

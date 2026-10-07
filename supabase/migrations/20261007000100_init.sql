@@ -45,6 +45,44 @@ as $$
   select (now() at time zone 'Asia/Kolkata')::date;
 $$;
 
+-- ---------- who is allowed to use ViralRadar at all ----------
+--
+-- This Supabase project is shared, so its auth.users already holds accounts
+-- that belong to the other app. Signing in is therefore not enough to be a
+-- ViralRadar user: you also have to be listed here. That makes "nobody else
+-- can get in" true on its own, instead of depending on the project-wide
+-- "allow new signups" switch, which is shared with the other app.
+--
+-- Add yourself once, after creating your account:
+--   insert into viralradar.allowed_users (user_id, note)
+--   values ('<your-user-uid>', 'me');
+--
+-- Only the service role and the database owner can read or change this table:
+-- RLS is on and there are deliberately no policies, so it denies everyone else.
+
+create table viralradar.allowed_users (
+  user_id    uuid primary key references auth.users (id) on delete cascade,
+  note       text,
+  created_at timestamptz not null default now()
+);
+
+comment on table viralradar.allowed_users is 'Who may use ViralRadar. Being signed in is not enough: this project shares auth.users with another app.';
+
+-- Used by every policy. SECURITY DEFINER so a signed-in user can be checked
+-- against this table without being able to read it.
+create or replace function viralradar.is_allowed()
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (select 1 from viralradar.allowed_users where user_id = auth.uid());
+$$;
+
+revoke all on function viralradar.is_allowed() from public;
+grant execute on function viralradar.is_allowed() to authenticated, service_role;
+
 -- ---------- ideas ----------
 
 create table viralradar.ideas (

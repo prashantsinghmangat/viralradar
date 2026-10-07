@@ -6,7 +6,11 @@
 // before touching anything.
 //
 // "as" values:
-//   'A' / 'B'  -> SET LOCAL ROLE authenticated, with request.jwt.claims for that user
+//   'A' / 'B'  -> SET LOCAL ROLE authenticated, with request.jwt.claims for that
+//                 user. Both are on the ViralRadar allowlist.
+//   'C'        -> the same, but NOT on the allowlist: a real signed-in account
+//                 that belongs to the other app sharing this Supabase project.
+//                 C must be able to do nothing at all.
 //   'anon'     -> SET LOCAL ROLE anon (a browser with no session)
 //   'noclaims' -> SET LOCAL ROLE authenticated with no claims at all, so auth.uid() is null
 //
@@ -87,8 +91,8 @@ const OTHER = { A: 'B', B: 'A' };
  * Build the full list of assertions.
  * @param {{A: string, B: string}} ids  the two throwaway user uuids
  */
-export function buildPlan({ A, B }) {
-  const uid = { A, B };
+export function buildPlan({ A, B, C }) {
+  const uid = { A, B, C };
   const plan = [];
   const add = (c) => plan.push(c);
 
@@ -219,6 +223,26 @@ export function buildPlan({ A, B }) {
       params: [],
       expect: { errorCode: '42501' },
     });
+
+    // ---- signed in, but not a ViralRadar user ----
+    // This is the case the other app in this project creates: a perfectly
+    // valid account that has nothing to do with ViralRadar. Being signed in
+    // must not be enough.
+    add({
+      name: `${table}: C is signed in but not on the allowlist, and sees nothing`,
+      as: 'C', table, sim: 'not-allowed-select', owner: null,
+      sql: `select ${key} from viralradar.${table}`,
+      params: [],
+      expect: { rowCount: 0 },
+    });
+    const own = t.insert('$2');
+    add({
+      name: `${table}: C cannot create anything, not even a row of its own`,
+      as: 'C', table, sim: 'not-allowed-insert', owner: 'C',
+      sql: `insert into viralradar.${table} (user_id, ${own.cols}) values ($1, ${own.vals}) returning ${key}`,
+      params: [uid.C, t.fresh],
+      expect: { errorCode: '42501' },
+    });
   }
 
   // ---- settings: one row per user, created on first use ----
@@ -270,6 +294,40 @@ export function buildPlan({ A, B }) {
     params: [],
     expect: { errorCode: '42501' },
   });
+  add({
+    name: 'settings: C is signed in but not on the allowlist, and sees nothing',
+    as: 'C', table: 'settings', sim: 'not-allowed-select', owner: null,
+    sql: 'select user_id from viralradar.settings',
+    params: [],
+    expect: { rowCount: 0 },
+  });
+  add({
+    name: 'settings: C cannot create a settings row for itself',
+    as: 'C', table: 'settings', sim: 'not-allowed-insert', owner: 'C',
+    sql: 'insert into viralradar.settings (user_id) values ($1) returning user_id',
+    params: [C],
+    expect: { errorCode: '42501' },
+  });
+
+  // ---- the allowlist itself is not reachable from a session ----
+  // Even an allowed user must not be able to read it or add anyone to it,
+  // or the gate would be self-service.
+  for (const me of ['A', 'C']) {
+    add({
+      name: `allowed_users: ${me} cannot read the allowlist`,
+      as: me, table: 'allowed_users', sim: 'allowlist-denied', owner: null,
+      sql: 'select user_id from viralradar.allowed_users',
+      params: [],
+      expect: { errorCode: '42501' },
+    });
+    add({
+      name: `allowed_users: ${me} cannot add anyone to the allowlist`,
+      as: me, table: 'allowed_users', sim: 'allowlist-denied', owner: null,
+      sql: 'insert into viralradar.allowed_users (user_id, note) values ($1, $2) returning user_id',
+      params: [uid[me], 'let me in'],
+      expect: { errorCode: '42501' },
+    });
+  }
 
   return plan;
 }
@@ -283,7 +341,7 @@ export function buildPlan({ A, B }) {
  * restored. A proof that does not fail means the harness is not testing what
  * it claims to.
  */
-export function buildProofs({ A, B }) {
+export function buildProofs({ A, B, C }) {
   return [
     {
       name: 'dropping ideas_select_own must break "A can see their own rows"',
@@ -296,6 +354,7 @@ export function buildProofs({ A, B }) {
         expect: { minRows: 1 },
       },
       why: 'with no select policy, even the owner is denied, so the assertion must fail',
+      modelLeak: 'no-select',
     },
     {
       name: 'widening ideas_select_own to using(true) must break "B cannot see A\'s rows"',
@@ -308,6 +367,7 @@ export function buildProofs({ A, B }) {
         expect: { rowCount: 0 },
       },
       why: "a policy that allows every row leaks A's data to B, so the assertion must fail",
+      modelLeak: 'select',
     },
     {
       name: 'widening ideas_insert_own to with check(true) must break "B cannot insert a row owned by A"',
@@ -320,6 +380,20 @@ export function buildProofs({ A, B }) {
         expect: { errorCode: '42501' },
       },
       why: "with no insert check, B can plant rows in A's account, so the assertion must fail",
+      modelLeak: 'insert-check',
+    },
+    {
+      name: 'removing the allowlist gate must break "C cannot create anything"',
+      breakSql: 'alter policy ideas_insert_own on viralradar.ideas with check (user_id = auth.uid())',
+      check: {
+        name: 'ideas: C cannot create anything, not even a row of its own',
+        as: 'C', table: 'ideas', sim: 'not-allowed-insert', owner: 'C',
+        sql: "insert into viralradar.ideas (user_id, id, title, source) values ($1, 'proof-row-c', 'planted by C', 'manual') returning id",
+        params: [C],
+        expect: { errorCode: '42501' },
+      },
+      why: 'without the is_allowed() gate, anyone with an account in this shared project becomes a ViralRadar user, so the assertion must fail',
+      modelLeak: 'no-allowlist-gate',
     },
   ];
 }

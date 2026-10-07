@@ -26,6 +26,7 @@ do $rls$
 declare
   a uuid := gen_random_uuid();
   b uuid := gen_random_uuid();
+  c uuid := gen_random_uuid();   -- signed in, but NOT a ViralRadar user
   n int;
   failures int := 0;
 begin
@@ -35,7 +36,14 @@ begin
   values ('00000000-0000-0000-0000-000000000000', a, 'authenticated', 'authenticated',
           'rls-test-a-' || a || '@viralradar.invalid', '', now(), now(), now()),
          ('00000000-0000-0000-0000-000000000000', b, 'authenticated', 'authenticated',
-          'rls-test-b-' || b || '@viralradar.invalid', '', now(), now(), now());
+          'rls-test-b-' || b || '@viralradar.invalid', '', now(), now(), now()),
+         ('00000000-0000-0000-0000-000000000000', c, 'authenticated', 'authenticated',
+          'rls-test-c-' || c || '@viralradar.invalid', '', now(), now(), now());
+
+  -- a and b are ViralRadar users; c deliberately is not. c stands in for an
+  -- account belonging to the other app that shares this Supabase project.
+  insert into viralradar.allowed_users (user_id, note)
+  values (a, 'rls test a'), (b, 'rls test b');
 
   insert into viralradar.ideas (user_id, id, title, source) values (a, 'idea-a', 'A idea', 'manual'), (b, 'idea-b', 'B idea', 'manual');
   insert into viralradar.scripts (user_id, id, title, source) values (a, 'script-a', 'A script', 'manual'), (b, 'script-b', 'B script', 'manual');
@@ -185,10 +193,51 @@ begin
     when insufficient_privilege then raise notice 'PASS  anon (not signed in) has no access to ideas at all';
   end;
 
+  -- ---------- signed in, but not a ViralRadar user ----------
+  -- This is the case the other app in this project creates. A valid account is
+  -- not enough: you also have to be on the allowlist.
+  perform set_config('request.jwt.claims', json_build_object('sub', c, 'role', 'authenticated')::text, true);
+  perform set_config('role', 'authenticated', true);
+
+  select count(*) into n from viralradar.ideas;
+  if n = 0 then raise notice 'PASS  C is signed in but not on the allowlist, and sees no ideas';
+  else failures := failures + 1; raise notice 'FAIL  C can see % ideas without being on the allowlist', n; end if;
+
+  select count(*) into n from viralradar.results;
+  if n = 0 then raise notice 'PASS  C sees no results either';
+  else failures := failures + 1; raise notice 'FAIL  C can see % results', n; end if;
+
+  begin
+    insert into viralradar.ideas (user_id, id, title, source) values (c, 'c-row', 'made by C', 'manual');
+    failures := failures + 1;
+    raise notice 'FAIL  C created a row despite not being on the allowlist';
+  exception
+    when insufficient_privilege then raise notice 'PASS  C cannot create anything, not even a row of its own';
+  end;
+
+  -- The gate must not be self-service, for anyone.
+  begin
+    insert into viralradar.allowed_users (user_id, note) values (c, 'let me in');
+    failures := failures + 1;
+    raise notice 'FAIL  C added itself to the allowlist';
+  exception
+    when insufficient_privilege then raise notice 'PASS  C cannot add itself to the allowlist';
+  end;
+
+  -- Even an allowed user must not be able to read or change the allowlist.
+  perform set_config('request.jwt.claims', json_build_object('sub', a, 'role', 'authenticated')::text, true);
+  begin
+    select count(*) into n from viralradar.allowed_users;
+    failures := failures + 1;
+    raise notice 'FAIL  an allowed user can read the allowlist (% rows)', n;
+  exception
+    when insufficient_privilege then raise notice 'PASS  even an allowed user cannot read the allowlist';
+  end;
+
   -- ---------- clean up ----------
   -- Back to the owner role, which is allowed to remove the test users.
   perform set_config('role', 'none', true);
-  delete from auth.users where id in (a, b);
+  delete from auth.users where id in (a, b, c);
 
   if failures = 0 then
     raise notice '----------------------------------------';

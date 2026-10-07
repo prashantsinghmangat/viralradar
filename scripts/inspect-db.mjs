@@ -17,9 +17,10 @@ Read-only inspection of your Supabase project.
 
   npm run inspect:db
 
-Needs DATABASE_URL in .env. Use the "Session pooler" connection string from
-Project Settings -> Database -> Connection string -> Session pooler, because
-the direct connection is IPv6-only and usually fails on a home network.
+Needs DATABASE_URL in .env. Use the pooled connection string: click "Connect" at
+the top of the dashboard, pick the "Direct / Connection string" tab, and copy the
+one labelled "Shared pooler" (older wording: "Session pooler"). The direct
+connection is IPv6-only and usually fails on a home network.
 
 Nothing is written. Every statement is a SELECT.
 `;
