@@ -11,7 +11,8 @@
     "start": "node server/index.js",
     "test": "node --test test/*.test.js",
     "test:rls": "node scripts/test-rls.mjs",
-    "inspect:db": "node scripts/inspect-db.mjs"
+    "inspect:db": "node scripts/inspect-db.mjs",
+    "sync:shared": "node scripts/sync-shared.mjs"
   },
   "license": "MIT",
   "dependencies": {
@@ -24,6 +25,7 @@
   },
   "devDependencies": {
     "libpg-query": "^18.1.5",
-    "postgres": "^3.4.9"
+    "postgres": "^3.4.9",
+    "typescript": "^5.9.3"
   }
 }
