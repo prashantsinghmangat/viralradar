@@ -1,14 +1,13 @@
 {
   "name": "viralradar",
   "version": "1.0.0",
-  "description": "Local manager for Shorts Studio exports + free trend radar",
-  "main": "server/index.js",
+  "description": "Shorts Studio companion: ideas, scripts, results and a daily trend radar, synced through Supabase",
+  "main": "public/app.js",
   "type": "commonjs",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "start": "node server/index.js",
     "test": "node --test test/*.test.js",
     "test:rls": "node scripts/test-rls.mjs",
     "inspect:db": "node scripts/inspect-db.mjs",
@@ -18,12 +17,8 @@
   "license": "MIT",
   "dependencies": {
     "@supabase/supabase-js": "^2.117.2",
-    "better-sqlite3": "^13.0.3",
     "chokidar": "^4.0.3",
-    "dotenv": "^18.0.5",
-    "express": "^5.2.1",
-    "node-cron": "^4.6.0",
-    "qrcode-terminal": "^0.12.0"
+    "dotenv": "^18.0.5"
   },
   "devDependencies": {
     "libpg-query": "^18.1.5",

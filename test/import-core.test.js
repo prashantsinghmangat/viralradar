@@ -8,8 +8,6 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { runImport, toRow, COLUMNS } = require('../shared/import-core.mjs');
 const { ImportError } = require('../shared/contract.mjs');
-const { openDb } = require('../server/db');
-const { importExport } = require('../server/importer');
 
 const USER_A = '11111111-1111-4111-8111-111111111111';
 const USER_B = '22222222-2222-4222-8222-222222222222';
@@ -216,55 +214,63 @@ test('the column lists cover the contract and nothing more', () => {
   assert.deepEqual(row.raw, { id: 'r1' });
 });
 
-// The whole point of sharing shared/contract.mjs is that a person sees the same
-// words whichever path the file took. This checks that against the real local
-// importer rather than trusting it.
-test('the cloud importer says exactly what the local SQLite importer says', async () => {
-  const cases = [
-    wrap('script', [script('s1')]),
-    wrap('ideas', [{ id: 'i1', date: '2026-10-06', title: 'Idea', hook: 'h' }]),
-    wrap('results', [result('r1')]),
-    wrap('bundle', [{ ...script('s1'), kind: 'script' }, { ...result('r1'), kind: 'result' }, { ...result('r2'), kind: 'result' }]),
-    wrap('ideas', [{ id: 'i1', title: 'One' }, { id: 'i2', title: 'Two' }]),
-  ];
+// These exact strings came out of the local SQLite importer, captured before
+// that code was moved off this branch. They are the contract: the same file
+// imported through the cloud path must say the same words it always said, so
+// nothing about the migration changes what a person reads on screen.
+//
+// The messages are built by shared/contract.mjs, which both importers used.
+// If one of these changes, it changed for everyone.
+const GOLDEN = {
+  script: 'Imported 1 script: Free AI site that edits PDFs',
+  ideas_one: 'Imported 1 idea: Idea',
+  ideas_two: 'Imported 2 ideas',
+  results: 'Imported 1 result: PDF AI',
+  bundle: 'Imported 1 script, 2 results',
+  script_again: 'Imported 1 script (1 updated): Free AI site that edits PDFs',
+};
 
-  for (const input of cases) {
-    const sqlite = openDb(':memory:');
-    const local = importExport(sqlite, JSON.parse(JSON.stringify(input)));
-    const cloud = await runImport(JSON.parse(JSON.stringify(input)), fakeDb().storeFor(USER_A));
-    assert.equal(cloud.message, local.message, `message differs for a ${input.type} export`);
-    assert.deepEqual(cloud.counts, local.counts, `counts differ for a ${input.type} export`);
-    assert.equal(cloud.type, local.type);
+const GOLDEN_ERRORS = {
+  wrong_app: 'Wrong app: expected "app": "shorts-studio" but got "other-tool". Only Shorts Studio exports can be imported.',
+  schema: 'Schema mismatch: this app understands schema 1 but the file has schema 2. Update ViralRadar or re-export from Shorts Studio.',
+  type: 'Unknown export type "video". Expected one of: script, ideas, results, bundle.',
+  no_id: 'Item #1 has no "id".',
+  empty: 'The export has no items in it.',
+  kind: 'Bundle item #1 (id x) has kind "video"; expected "script" or "result".',
+};
+
+test('the words a person sees are the ones the local app always used', async () => {
+  const cases = {
+    script: wrap('script', [script('s1')]),
+    ideas_one: wrap('ideas', [{ id: 'i1', title: 'Idea' }]),
+    ideas_two: wrap('ideas', [{ id: 'i1', title: 'One' }, { id: 'i2', title: 'Two' }]),
+    results: wrap('results', [{ ...result('r1'), title: 'PDF AI' }]),
+    bundle: wrap('bundle', [{ ...script('s1'), kind: 'script' }, { ...result('r1'), kind: 'result' }, { ...result('r2'), kind: 'result' }]),
+  };
+  for (const [name, input] of Object.entries(cases)) {
+    const { message } = await runImport(input, fakeDb().storeFor(USER_A));
+    assert.equal(message, GOLDEN[name], `the ${name} message changed`);
   }
 
-  // And the same for a re-import, which produces the "(n updated)" wording.
-  const sqlite = openDb(':memory:');
-  const db = fakeDb();
-  const store = db.storeFor(USER_A);
-  importExport(sqlite, wrap('script', [script('s1')]));
+  // And the wording for a re-import, which is where the counting shows.
+  const store = fakeDb().storeFor(USER_A);
   await runImport(wrap('script', [script('s1')]), store);
-  const localAgain = importExport(sqlite, wrap('script', [script('s1')]));
-  const cloudAgain = await runImport(wrap('script', [script('s1')]), store);
-  assert.equal(cloudAgain.message, localAgain.message);
-  assert.match(cloudAgain.message, /1 updated/);
+  const again = await runImport(wrap('script', [script('s1')]), store);
+  assert.equal(again.message, GOLDEN.script_again);
 });
 
-test('the same errors come back word for word from both importers', async () => {
-  const bad = [
-    { ...wrap('script', [script('s1')]), app: 'other-tool' },
-    wrap('script', [script('s1')], { schema: 2 }),
-    wrap('video', [script('s1')]),
-    wrap('script', [{ title: 'no id' }]),
-    wrap('ideas', []),
-    wrap('bundle', [{ id: 'x', kind: 'video' }]),
-  ];
-  for (const input of bad) {
-    const sqlite = openDb(':memory:');
-    let localMessage;
-    try { importExport(sqlite, JSON.parse(JSON.stringify(input))); } catch (e) { localMessage = e.message; }
-    let cloudMessage;
-    try { await runImport(JSON.parse(JSON.stringify(input)), fakeDb().storeFor(USER_A)); } catch (e) { cloudMessage = e.message; }
-    assert.ok(localMessage, 'the local importer should have refused this');
-    assert.equal(cloudMessage, localMessage);
+test('the refusals are word for word what they always were', async () => {
+  const bad = {
+    wrong_app: { ...wrap('script', [script('s1')]), app: 'other-tool' },
+    schema: wrap('script', [script('s1')], { schema: 2 }),
+    type: wrap('video', [script('s1')]),
+    no_id: wrap('script', [{ title: 'no id' }]),
+    empty: wrap('ideas', []),
+    kind: wrap('bundle', [{ id: 'x', kind: 'video' }]),
+  };
+  for (const [name, input] of Object.entries(bad)) {
+    let message = null;
+    try { await runImport(input, fakeDb().storeFor(USER_A)); } catch (e) { message = e.message; }
+    assert.equal(message, GOLDEN_ERRORS[name], `the ${name} refusal changed`);
   }
 });

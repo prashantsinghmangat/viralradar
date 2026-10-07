@@ -508,20 +508,6 @@ second or two later.
 You can also always paste or upload exports in the **Import** screen, so the
 watcher is a convenience, not a requirement.
 
-## Step 17. Move your existing data over
-
-Only if you have data in the old local app. You currently have no
-`data\viralradar.db` file, so there may be nothing to move.
-
-```powershell
-npm run migrate:to-cloud
-```
-
-It reads the old SQLite file and sends everything through the import function.
-It is safe to run twice: imports match on id, so nothing duplicates.
-
----
-
 # Keeping it running
 
 - **Nothing to do daily.** The trend refresh runs by itself at 7:00 AM IST.

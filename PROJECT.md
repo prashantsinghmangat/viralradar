@@ -172,8 +172,12 @@ shared/              runtime-agnostic cores — Node, Deno and the browser all u
   stats.mjs            results analytics (runs in the browser in the cloud build)
   defaults.mjs, time.mjs, http.mjs
 
-server/              the local SQLite app (branch main). Kept for the data migration
-                     and because its tests are the proof the extraction was faithful.
+(no server/)         the local SQLite app lives on the `local-sqlite` branch,
+                     not here. Nothing on this branch needs it, so this branch
+                     does not carry express or better-sqlite3 either. The exact
+                     messages it produced were captured first, and are asserted
+                     in test/import-core.test.js, so the cloud path still has
+                     to say the same words.
 
 supabase/
   migrations/        the schema and the policies
@@ -260,8 +264,7 @@ kept; the cloud version changes where the data comes from and adds the AI.
 | 7. Generate / Write script / Paste buttons | not started |
 | 8. Netlify build and deploy | **done** — PWA (manifest, service worker) still to do |
 | 9. Watcher as a standalone script | not started |
-| 10. SQLite → cloud migration script | not started |
-| 11. README rewrite | SETUP.md done; README still describes the local app |
+| 10. README rewrite | SETUP.md done; README still describes the local app |
 
 ### What works today
 
@@ -278,8 +281,7 @@ database. An import on one device shows up on the other within a second or two.
 - **No "Paste from Shorts Studio" button** yet; the paste box and file upload on
   the Import screen both work. Phase 7.
 - **Not installable to a home screen** — no manifest or service worker. Phase 8.
-- **No folder watcher** and **no migration from the old SQLite file**. Phases 9
-  and 10.
+- **No folder watcher** yet. Phase 9.
 
 **Done by hand so far:** migrations pushed, schema exposed to the Data API,
 account created with a password and on the allowlist, all three API keys in
@@ -290,7 +292,7 @@ Supabase secrets, `ALLOWED_ORIGINS` set, code on GitHub, Netlify deploying from
 
 ## 10. Testing
 
-`npm test` — **174 tests**, no network, no database, no keys needed.
+`npm test` — **164 tests**, no network, no database, no keys needed.
 
 `npm run test:rls` — **193 assertions and 4 proofs** against the real Supabase
 database. It connects as `postgres`, which owns the tables and therefore
@@ -403,7 +405,7 @@ Two things that were unknown until the first deploy, now settled: the
 | `npm run inspect:db` | read-only report plus a setup checklist | `DATABASE_URL`, optionally `SUPABASE_URL`/`SUPABASE_ANON_KEY` |
 | `npm run sync:shared` | refresh the copy under `supabase/functions/` | nothing |
 | `npm run build` | build the site into dist/, as Netlify does | `SUPABASE_URL`, `SUPABASE_ANON_KEY` |
-| `npm start` | the old local app (branch `local-sqlite` only) | nothing |
+| `npm start` | the old local app — **on the `local-sqlite` branch only** | nothing |
 | `npx supabase db push` | apply migrations | logged in, linked |
 | `npx supabase secrets list` | names and hashes of the secrets | logged in, linked |
 | `npx supabase functions deploy vr-import --use-api` | deploy a function without Docker | logged in, linked |
