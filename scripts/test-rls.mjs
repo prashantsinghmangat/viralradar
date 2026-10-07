@@ -18,6 +18,7 @@
 import 'dotenv/config';
 import postgres from 'postgres';
 import { randomUUID } from 'node:crypto';
+import { describe, explain, WHERE_TO_FIND } from './db-url.mjs';
 import { buildPlan, buildProofs, runPlan, runProofs } from './rls-plan.mjs';
 
 const HELP = `
@@ -46,6 +47,16 @@ if (!url) {
   console.error(HELP);
   process.exit(2);
 }
+
+// Catch the wrong connection string here, rather than after a 30 second timeout.
+const check = describe(url);
+if (!check.ok) {
+  console.error('\nThat DATABASE_URL will not work:\n');
+  console.error(explain(check));
+  console.error(WHERE_TO_FIND);
+  process.exit(2);
+}
+if (check.warnings.length) console.error('\n' + explain(check) + '\n');
 
 // Used to roll every assertion back while still carrying its outcome out.
 class Rollback extends Error {

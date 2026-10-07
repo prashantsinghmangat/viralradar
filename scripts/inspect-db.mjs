@@ -10,6 +10,7 @@
 // and whether the viralradar schema has been created yet.
 import 'dotenv/config';
 import postgres from 'postgres';
+import { describe, explain, WHERE_TO_FIND } from './db-url.mjs';
 
 const HELP = `
 Read-only inspection of your Supabase project.
@@ -34,6 +35,16 @@ if (!url) {
   console.error(HELP);
   process.exit(2);
 }
+
+// Catch the wrong connection string here, rather than after a 30 second timeout.
+const check = describe(url);
+if (!check.ok) {
+  console.error('\nThat DATABASE_URL will not work:\n');
+  console.error(explain(check));
+  console.error(WHERE_TO_FIND);
+  process.exit(2);
+}
+if (check.warnings.length) console.error('\n' + explain(check) + '\n');
 
 const db = postgres(url, { ssl: 'require', max: 1, prepare: false, connect_timeout: 30, onnotice: () => {} });
 
