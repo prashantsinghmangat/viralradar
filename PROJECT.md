@@ -15,7 +15,7 @@ gaps. [SETUP.md](SETUP.md) is the step-by-step list of things to do by hand.
 
 ## 1. The two versions
 
-| | `main` branch | `cloud` branch |
+| | `local-sqlite` branch | `main` branch |
 |---|---|---|
 | Runs on | one laptop | Netlify + Supabase |
 | Data | `data/viralradar.db` (SQLite) | Postgres, in a `viralradar` schema |
@@ -25,8 +25,10 @@ gaps. [SETUP.md](SETUP.md) is the step-by-step list of things to do by hand.
 | AI | none | Gemini, falling back to OpenRouter |
 | Phone | same Wi-Fi only | anywhere, installable |
 
-`main` still works and is untouched (`npm start`). It is the fallback and the
-source for the one-time data migration.
+`main` is the cloud version, and is what Netlify deploys. The local-only
+version is kept intact on the **`local-sqlite`** branch, also tagged
+**`v1-local`**: it still runs with `npm start`, and it is both the fallback
+and the source for the one-time data migration.
 
 ---
 

@@ -20,11 +20,14 @@ test('the copy of shared/ inside supabase/functions is up to date', async () => 
   assert.ok(sharedFiles().length >= 10, 'expected the shared modules to be listed');
 });
 
-test('the copies are byte-identical to the originals, apart from a header', async () => {
+test('the copies match the originals, apart from a header', async () => {
   const { sharedFiles, SOURCE_DIR, TARGET_DIR } = await import('../scripts/sync-shared.mjs');
+  // Line endings are not part of the comparison: git rewrites them on checkout
+  // on Windows, which would otherwise report every file as drifted.
+  const text = (s) => s.split(String.fromCharCode(13)).join('');
   for (const relative of sharedFiles()) {
-    const original = fs.readFileSync(path.join(SOURCE_DIR, relative), 'utf8');
-    const copy = fs.readFileSync(path.join(TARGET_DIR, relative), 'utf8');
+    const original = text(fs.readFileSync(path.join(SOURCE_DIR, relative), 'utf8'));
+    const copy = text(fs.readFileSync(path.join(TARGET_DIR, relative), 'utf8'));
     assert.ok(copy.startsWith('// GENERATED FILE - DO NOT EDIT.'), `${relative}: the copy has no warning header`);
     assert.ok(copy.endsWith(original), `${relative}: the copy differs from the original`);
   }

@@ -10,8 +10,8 @@
 #     SUPABASE_URL        https://<project-ref>.supabase.co
 #     SUPABASE_ANON_KEY   the publishable key, never the secret one
 #
-# And the production branch must be "cloud", not "main": main is the old
-# local-only version.
+# The production branch is "main". The old local-only version lives on the
+# "local-sqlite" branch (tag v1-local) and is never deployed.
 
 [build]
   command = "npm run build"

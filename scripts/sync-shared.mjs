@@ -38,12 +38,17 @@ export function sharedFiles(dir = SOURCE_DIR, prefix = '') {
 export const expectedContent = (relative) =>
   BANNER.replace('SOURCE', relative) + readFileSync(join(SOURCE_DIR, relative), 'utf8');
 
+// Git rewrites line endings on checkout on Windows, so a copy that is perfectly
+// in sync can still differ byte for byte from what was written. Compare the
+// text, not the line endings.
+const sameText = (a, b) => a.split(String.fromCharCode(13)).join('') === b.split(String.fromCharCode(13)).join('');
+
 /** Returns the list of files that are missing or out of date. */
 export function drift() {
   const stale = [];
   for (const relative of sharedFiles()) {
     const target = join(TARGET_DIR, relative);
-    if (!existsSync(target) || readFileSync(target, 'utf8') !== expectedContent(relative)) stale.push(relative);
+    if (!existsSync(target) || !sameText(readFileSync(target, 'utf8'), expectedContent(relative))) stale.push(relative);
   }
   // Anything in the copy that no longer exists in shared/ is also drift.
   if (existsSync(TARGET_DIR)) {

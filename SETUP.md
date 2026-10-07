@@ -3,8 +3,8 @@
 This is the full list of manual steps, in order. Each step says whether you can
 do it **now** or whether it is **waiting on code I have not written yet**.
 
-Nothing here is urgent. The local app on the `main` branch keeps working the
-whole time (`npm start`).
+Nothing here is urgent. The local app keeps working the whole time on the
+`local-sqlite` branch: `git switch local-sqlite` then `npm start`.
 
 **One rule above all others:** this Supabase project is shared with your
 tracebug app. **Never run `supabase db reset`.** It erases the entire database,
@@ -381,7 +381,7 @@ keeps tracebug awake too.
 2. **Add new site → Import an existing project → GitHub**.
 3. Authorise Netlify, then pick your `viralradar` repository.
 4. Set these, exactly:
-   - **Branch to deploy**: `cloud` ← important, not `main`
+   - **Branch to deploy**: `main`
    - **Build command**: leave as whatever `netlify.toml` provides
    - **Publish directory**: leave as whatever `netlify.toml` provides
 5. Before the first deploy, click **Add environment variables** (or set them

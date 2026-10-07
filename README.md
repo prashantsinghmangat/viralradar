@@ -1,9 +1,10 @@
 # ViralRadar
 
-> **This README describes the local-only version** (branch `main`): Express +
-> SQLite, one laptop, same Wi-Fi for the phone. It still works, unchanged.
+> **This README describes the local-only version**: Express + SQLite, one
+> laptop, same Wi-Fi for the phone. It still works, unchanged, on the
+> **`local-sqlite`** branch (tag `v1-local`): `git switch local-sqlite`.
 >
-> The cloud version lives on branch `cloud`. Start with:
+> The cloud version is on **`main`**, and is what Netlify deploys. Start with:
 > - **[PROJECT.md](PROJECT.md)** — what it is, how it is built, and where it has got to
 > - **[SETUP.md](SETUP.md)** — every step you do by hand, in order
 
