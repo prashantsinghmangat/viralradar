@@ -266,3 +266,11 @@ tr:last-child td { border-bottom: 0; }
 
 .spin { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- sign in ---------- */
+/* Shown before there is a session. The nav is hidden, so this is the whole app. */
+.signin { max-width: 520px; margin: 8vh auto 0; }
+.signin h1 { font-size: 2rem; margin: 0 0 6px; }
+.signin > p { margin: 0 0 18px; }
+.signin input[type="email"] { font-size: 1rem; }
+body.signed-out .topbar .brand { pointer-events: none; }
