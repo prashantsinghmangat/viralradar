@@ -221,14 +221,20 @@ async function main() {
         },
       });
       const body = await res.text();
-      // PGRST106 means PostgREST has never heard of the schema, which is exactly
-      // what an un-exposed schema looks like. A permission error instead means
-      // the schema IS exposed and anon is correctly being refused, which is the
-      // result we want.
-      if (/PGRST106/.test(body)) {
+      // The order of these matters. An earlier version treated ANY 401 as
+      // "exposed, and anon correctly refused", which reported success when the
+      // key itself was being rejected and the schema was never checked at all.
+      // A check that can say OK without having looked is worse than no check.
+      if (/legacy api keys/i.test(body)) {
+        line('  ?     Could not tell: the project rejected this key before looking at the schema.');
+        line('        SUPABASE_ANON_KEY is a legacy key and this project has legacy keys off.');
+        line('        Use the key beginning sb_publishable_ and run this again.');
+      } else if (/PGRST106|invalid schema/i.test(body)) {
+        const exposed = (body.match(/Only the following schemas are exposed: ([^"]*)/) || [])[1];
         line('  TODO  "viralradar" is NOT in Exposed schemas.');
-        line('        Project Settings -> API -> Exposed schemas -> add viralradar -> Save.');
-        line('        Until then the app will not be able to read anything.');
+        if (exposed) line(`        Right now only these are: ${exposed}`);
+        line('        Project Settings -> API -> Data API -> Exposed schemas -> add viralradar -> Save.');
+        line('        Until then every screen in the app will fail to load.');
       } else if (res.status === 401 || res.status === 403 || /42501|permission denied/i.test(body)) {
         line('  OK    the schema is exposed, and anon is refused as it should be');
         line('        (that refusal is the allowlist and RLS working, not a problem)');

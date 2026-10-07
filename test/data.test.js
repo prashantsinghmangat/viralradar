@@ -322,6 +322,11 @@ test('database errors are turned into something worth reading', async () => {
     [{ message: 'JWT expired' }, /session has expired/],
     [{ message: 'permission denied for table ideas' }, /not allowed to use ViralRadar/],
     [{ message: 'The schema must be one of the following: public' }, /Exposed schemas/],
+    // What PostgREST actually says when the schema is not exposed. The first
+    // version of this only matched the other wording, so the real failure came
+    // through as a raw database message on every screen.
+    [{ message: 'Invalid schema: viralradar' }, /Exposed schemas/],
+    [{ code: 'PGRST106', message: 'Invalid schema: viralradar' }, /not switched on in Supabase/],
     [{ message: 'something odd' }, /Could not load your ideas: something odd/],
   ];
   for (const [error, expected] of cases) {
@@ -373,4 +378,17 @@ test('an empty email or password never reaches the server', async () => {
   await assert.rejects(() => auth.signInWithPassword('', 'pw'), /Enter your email/);
   await assert.rejects(() => auth.signInWithPassword('me@example.com', ''), /Enter your password/);
   assert.equal(called, false);
+});
+
+test('an error is turned into a sentence once, not wrapped twice', async () => {
+  const { createData } = await load();
+  const client = fakeClient({ respond: () => ({ data: null, error: { message: 'Invalid schema: viralradar' } }) });
+  let message = null;
+  try { await createData(client).settings.get(USER); } catch (e) { message = e.message; }
+
+  assert.ok(message, 'the read should have failed');
+  // Passing an already-readable Error back through readable() is what produced
+  // "Could not read your settings: Could not read your settings: ..." on screen.
+  const first = message.indexOf('Could not');
+  assert.equal(message.indexOf('Could not', first + 1), -1, `the message is wrapped twice: ${message}`);
 });

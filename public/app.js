@@ -925,7 +925,9 @@ async function signedIn(session) {
   startLive();
   await render();
   // Make sure the settings row exists, but never block the first paint on it.
-  data.settings.get(session.user.id).catch((e) => toast(readable(e, 'read your settings'), true));
+  // The data layer has already turned this into a sentence; wrapping it again
+  // produced "Could not read your settings: Could not read your settings: ...".
+  data.settings.get(session.user.id).catch((e) => toast(e.message, true));
 }
 
 async function boot() {

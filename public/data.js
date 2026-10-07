@@ -30,8 +30,12 @@ export function readable(error, doing) {
   if (/permission denied|row-level security|42501/i.test(message)) {
     return 'That account is not allowed to use ViralRadar.';
   }
-  if (/schema must be one of|PGRST106/i.test(message)) {
-    return 'The database is not set up yet: add "viralradar" to Exposed schemas in Supabase.';
+  // PostgREST says "Invalid schema: viralradar" when the schema is not in the
+  // Data API's exposed list. Nothing in the app can work until it is, so say
+  // exactly what to do rather than repeating the database's wording.
+  if (/schema must be one of|PGRST106|invalid schema/i.test(message)) {
+    return 'ViralRadar is not switched on in Supabase yet. Add "viralradar" under '
+      + 'Project Settings → API → Data API → Exposed schemas, then reload this page.';
   }
   return `Could not ${doing}: ${message}`;
 }
