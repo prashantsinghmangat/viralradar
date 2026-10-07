@@ -124,33 +124,41 @@ async function execBroken(proof) {
 const FIXTURES = [
   [
     'ideas',
-    (u, key) => db`insert into public.ideas (user_id, id, title, hook, source)
+    (u, key) => db`insert into viralradar.ideas (user_id, id, title, hook, source)
                    values (${u}, ${key}, 'Fixture idea', 'a hook', 'manual')`,
   ],
   [
     'scripts',
-    (u, key) => db`insert into public.scripts (user_id, id, topic, title, source)
+    (u, key) => db`insert into viralradar.scripts (user_id, id, topic, title, source)
                    values (${u}, ${key}, 'fixture', 'Fixture script', 'manual')`,
   ],
   [
     'results',
-    (u, key) => db`insert into public.results (user_id, id, title, views, saves, posted_on, source)
+    (u, key) => db`insert into viralradar.results (user_id, id, title, views, saves, posted_on, source)
                    values (${u}, ${key}, 'Fixture result', 1000, 50, current_date, 'manual')`,
   ],
   [
     'trends',
-    (u, key) => db`insert into public.trends (user_id, url, title, source, score)
+    (u, key) => db`insert into viralradar.trends (user_id, url, title, source, score)
                    values (${u}, ${key}, 'Fixture trend', 'youtube', 12)`,
   ],
   [
     'usage',
-    (u, key) => db`insert into public.usage (user_id, date, provider, units, requests)
+    (u, key) => db`insert into viralradar.usage (user_id, date, provider, units, requests)
                    values (${u}, current_date, ${key}, 100, 1)`,
   ],
   [
     'import_tokens',
-    (u, key) => db`insert into public.import_tokens (user_id, token_hash, label)
+    (u, key) => db`insert into viralradar.import_tokens (user_id, token_hash, label)
                    values (${u}, ${key}, 'Fixture token')`,
+  ],
+  // Settings rows are created by the app on first use, not by a trigger on
+  // auth.users: this Supabase project is shared with another app, and a trigger
+  // there would fire for that app's signups too. So the test creates them the
+  // same way the app does.
+  [
+    'settings',
+    (u) => db`insert into viralradar.settings (user_id) values (${u}) on conflict (user_id) do nothing`,
   ],
 ];
 
@@ -161,6 +169,7 @@ const FIXTURE_KEYS = {
   trends: { A: 'https://a.example/trend-1', B: 'https://b.example/trend-1' },
   usage: { A: 'youtube', B: 'youtube' },
   import_tokens: { A: 'hash-of-token-a', B: 'hash-of-token-b' },
+  settings: { A: null, B: null }, // keyed by user_id alone
 };
 
 async function createUsers() {
@@ -180,7 +189,7 @@ async function createFixtures() {
 }
 
 async function deleteUsers() {
-  // Cascades through every table, including the settings row made on signup.
+  // Cascades through every table, including the settings row.
   await db`delete from auth.users where id in (${A}, ${B})`;
 }
 
@@ -199,15 +208,8 @@ async function main() {
     created = true;
     await createFixtures();
 
-    // Both users must have got a settings row from the signup trigger.
-    const [{ n: settingsRows }] = await db`select count(*)::int as n from public.settings where user_id in (${A}, ${B})`;
-    const settingsOk = settingsRows === 2;
-
     console.log('--- isolation assertions ---');
-    console.log(`  ${settingsOk ? 'PASS' : 'FAIL'}  signup gives each user exactly one settings row`
-      + (settingsOk ? '' : `\n        found ${settingsRows} row(s) for 2 users`));
     plan = await runPlan(buildPlan({ A, B }), exec, (line) => console.log('  ' + line));
-    if (settingsOk) plan.passed++; else plan.failed++;
 
     console.log('\n--- proofs that these assertions are real ---');
     console.log('  Each proof breaks one policy inside a transaction, re-runs one');

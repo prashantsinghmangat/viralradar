@@ -139,7 +139,7 @@ test('a missing select policy makes the own-rows assertions fail', async () => {
   assert.ok(failed > 0);
   const failedNames = results.filter((r) => !r.ok).map((r) => r.name);
   assert.ok(failedNames.includes('ideas: A can see their own rows'));
-  assert.ok(failedNames.includes('settings: B has exactly one settings row, created on signup'));
+  assert.ok(failedNames.includes('settings: B has exactly one settings row, created on first use'));
 });
 
 test('a WITH CHECK that accepts anything makes the insert and update assertions fail', async () => {

@@ -53,6 +53,70 @@ test('the plpgsql inside every function and DO block compiles', async () => {
   }
 });
 
+// This Supabase project is shared with another app, so the migrations must stay
+// strictly inside their own schema. These checks are the guard rail: if a future
+// migration reaches into public or auth, or drops something, it fails here
+// rather than on someone else's data.
+test('the migrations touch nothing outside the viralradar schema', () => {
+  const dir = path.join(ROOT, 'supabase', 'migrations');
+  for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.sql'))) {
+    const sql = fs.readFileSync(path.join(dir, f), 'utf8');
+    const code = sql.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n');
+
+    assert.ok(!/create (table|view|materialized view) (?!viralradar\.)/i.test(code),
+      `${f}: creates a table or view outside the viralradar schema`);
+    // An index name is never schema-qualified: it lives wherever its table lives,
+    // so what matters is the table it is attached to.
+    for (const m of code.matchAll(/create index \w+ on (\S+)/gi)) {
+      assert.match(m[1], /^viralradar\./, `${f}: indexes a table outside the viralradar schema (${m[1]})`);
+    }
+    for (const m of code.matchAll(/create trigger \w+[\s\S]{0,60}?on (\S+)/gi)) {
+      assert.match(m[1], /^viralradar\./, `${f}: puts a trigger on a table outside the viralradar schema (${m[1]})`);
+    }
+    assert.ok(!/\bcreate (or replace )?function (?!viralradar\.)/i.test(code),
+      `${f}: creates a function outside the viralradar schema`);
+    // A trigger on auth.users would fire for the other app's signups too.
+    assert.ok(!/create trigger[\s\S]{0,120}?on auth\./i.test(code),
+      `${f}: puts a trigger on an auth table, which the other app in this project shares`);
+    assert.ok(!/\bdrop (table|schema|function|trigger|index)\b/i.test(code),
+      `${f}: a migration must never drop anything in a shared project`);
+    assert.ok(!/\btruncate\b|\bdelete from\b/i.test(code),
+      `${f}: a migration must never remove rows in a shared project`);
+    // auth may only be read from: auth.users for the foreign key, auth.uid()
+    // for the owner default and the policies. Nothing else.
+    for (const m of code.match(/auth\.\w+/g) || []) {
+      assert.ok(['auth.users', 'auth.uid'].includes(m),
+        `${f}: only auth.users and auth.uid() may be referenced, found ${m}`);
+    }
+    assert.ok(!/\balter table auth\.|\binsert into auth\./i.test(code), `${f}: must not write to auth`);
+  }
+});
+
+test('the schema is created and hidden from anon', () => {
+  const dir = path.join(ROOT, 'supabase', 'migrations');
+  const schema = fs.readdirSync(dir).filter((f) => f.includes('init'))
+    .map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
+  assert.match(schema, /create schema if not exists viralradar;/);
+  assert.match(schema, /grant usage on schema viralradar to authenticated, service_role;/);
+  assert.match(schema, /revoke all on schema viralradar from anon;/);
+});
+
+test('settings rows are created by the app, not by a trigger on shared auth', () => {
+  const dir = path.join(ROOT, 'supabase', 'migrations');
+  const schema = fs.readdirSync(dir).filter((f) => f.includes('init'))
+    .map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
+  assert.ok(!/handle_new_user|on_auth_user_created/.test(schema),
+    'the signup trigger must be gone: it would fire for the other app in this project');
+  // Every settings column needs a default, so "insert (user_id) values (...)" is enough.
+  const body = schema.split('create table viralradar.settings')[1].slice(0, schema.split('create table viralradar.settings')[1].indexOf(');'));
+  const columns = body.split('\n').map((l) => l.trim()).filter((l) => /^\w+\s+\S/.test(l) && !l.startsWith('primary key'));
+  for (const col of columns) {
+    const name = col.match(/^(\w+)/)[1];
+    if (name === 'user_id') continue;
+    assert.match(col, /default /, `settings.${name} has no default, so first-use creation would fail`);
+  }
+});
+
 test('migrations run in a sensible order and are named for the CLI', () => {
   const names = fs.readdirSync(path.join(ROOT, 'supabase', 'migrations')).filter((f) => f.endsWith('.sql'));
   for (const n of names) {
@@ -72,18 +136,18 @@ test('every table created in the schema is locked down in the RLS migration', ()
   const schema = read('init');
   const rls = read('rls');
 
-  const tables = [...schema.matchAll(/create table public\.(\w+)/g)].map((m) => m[1]);
+  const tables = [...schema.matchAll(/create table viralradar\.(\w+)/g)].map((m) => m[1]);
   assert.ok(tables.length >= 7, `expected at least 7 tables, found ${tables.join(', ')}`);
 
   for (const t of tables) {
-    assert.ok(new RegExp(`alter table public\\.${t} enable row level security`).test(rls),
+    assert.ok(new RegExp(`alter table viralradar\\.${t} enable row level security`).test(rls),
       `${t}: row level security is never enabled`);
     // One policy per verb, so a mistake can only ever widen one of them.
     for (const verb of ['select', 'insert', 'update', 'delete']) {
-      assert.ok(new RegExp(`create policy ${t}_${verb}_own on public\\.${t}`).test(rls),
+      assert.ok(new RegExp(`create policy ${t}_${verb}_own on viralradar\\.${t}`).test(rls),
         `${t}: no ${verb} policy`);
     }
-    assert.ok(new RegExp(`revoke all on table[\\s\\S]*?public\\.${t}[\\s\\S]*?from anon`).test(rls),
+    assert.ok(new RegExp(`revoke all on table[\\s\\S]*?viralradar\\.${t}[\\s\\S]*?from anon`).test(rls),
       `${t}: anon is never revoked`);
   }
 
@@ -112,7 +176,7 @@ test('every user-owned table defaults user_id to auth.uid() and refuses a null o
     .map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
 
   // Split the file into one chunk per CREATE TABLE so each is checked on its own.
-  const chunks = schema.split(/create table public\./).slice(1);
+  const chunks = schema.split(/create table viralradar\./).slice(1);
   assert.ok(chunks.length >= 7);
   for (const chunk of chunks) {
     const table = chunk.match(/^(\w+)/)[1];
@@ -131,7 +195,7 @@ test('ideas, scripts and results have the indexed origin_at the UI sorts by', ()
   const schema = fs.readdirSync(dir).filter((f) => f.includes('init'))
     .map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
   for (const t of ['ideas', 'scripts', 'results']) {
-    assert.match(schema, new RegExp(`create index ${t}_origin_at_idx on public\\.${t} \\(user_id, origin_at desc\\)`),
+    assert.match(schema, new RegExp(`create index ${t}_origin_at_idx on viralradar\\.${t} \\(user_id, origin_at desc\\)`),
       `${t}: origin_at must be indexed for the sort the UI does`);
   }
   // The source values the app can write, and nothing else.
@@ -149,11 +213,11 @@ test('ideas, scripts and results upsert on (user_id, id) so imports never duplic
   const schema = fs.readdirSync(dir).filter((f) => f.includes('init'))
     .map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
   for (const t of ['ideas', 'scripts', 'results']) {
-    const body = schema.split(`create table public.${t}`)[1];
+    const body = schema.split(`create table viralradar.${t}`)[1];
     assert.match(body.slice(0, body.indexOf(');')), /primary key \(user_id, id\)/, `${t}: primary key must be (user_id, id)`);
   }
   // Trends are one row per URL per user.
-  const trends = schema.split('create table public.trends')[1];
+  const trends = schema.split('create table viralradar.trends')[1];
   assert.match(trends.slice(0, trends.indexOf(');')), /primary key \(user_id, url\)/);
 });
 
@@ -161,6 +225,6 @@ test('realtime only publishes the three tables the app subscribes to', () => {
   const dir = path.join(ROOT, 'supabase', 'migrations');
   const rls = fs.readdirSync(dir).filter((f) => f.includes('rls'))
     .map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
-  const published = [...rls.matchAll(/alter publication supabase_realtime add table public\.(\w+)/g)].map((m) => m[1]);
+  const published = [...rls.matchAll(/alter publication supabase_realtime add table viralradar\.(\w+)/g)].map((m) => m[1]);
   assert.deepEqual(published.sort(), ['ideas', 'results', 'scripts']);
 });

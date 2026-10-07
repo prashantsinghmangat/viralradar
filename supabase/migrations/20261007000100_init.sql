@@ -1,14 +1,31 @@
--- ViralRadar: tables, defaults and indexes.
+-- ViralRadar: schema, tables, defaults and indexes.
+--
+-- WHY A SCHEMA OF ITS OWN
+--   This Supabase project is shared with another app, so nothing here goes in
+--   "public". Everything lives in the "viralradar" schema: no table name can
+--   ever collide with the other app's, and the whole app can be backed up or
+--   removed as one unit. Nothing in this file touches public or auth.
+--
+--   One manual step makes it reachable from the browser:
+--     Dashboard -> Project Settings -> API -> Exposed schemas -> add "viralradar"
+--   That is additive; "public" stays exposed and the other app is unaffected.
+--   The frontend then uses createClient(url, key, { db: { schema: 'viralradar' } }).
+--
 -- Every table is per-user: user_id defaults to auth.uid() so the browser never
 -- has to send it, and it is NOT NULL so a service-role write that forgets to
 -- set it fails loudly instead of creating an ownerless row.
 
-create extension if not exists pgcrypto with schema extensions;
+create schema if not exists viralradar;
+
+-- Only signed-in users and the service role may even see the schema. "anon"
+-- (a browser with no session) is given nothing.
+grant usage on schema viralradar to authenticated, service_role;
+revoke all on schema viralradar from anon;
 
 -- ---------- helpers ----------
 
 -- Keeps updated_at honest on every UPDATE.
-create or replace function public.touch_updated_at()
+create or replace function viralradar.touch_updated_at()
 returns trigger
 language plpgsql
 as $$
@@ -20,7 +37,7 @@ $$;
 
 -- "Today" for quota counting and trend runs. One fixed timezone (IST) keeps
 -- the daily YouTube cap predictable, matching shared/time.mjs.
-create or replace function public.ist_today()
+create or replace function viralradar.ist_today()
 returns date
 language sql
 stable
@@ -30,7 +47,7 @@ $$;
 
 -- ---------- ideas ----------
 
-create table public.ideas (
+create table viralradar.ideas (
   user_id    uuid not null default auth.uid() references auth.users (id) on delete cascade,
   id         text not null,
   date       date,
@@ -51,19 +68,19 @@ create table public.ideas (
   primary key (user_id, id)
 );
 
-comment on column public.ideas.id is 'The id from the Shorts Studio export. Unique per user, so re-importing updates instead of duplicating.';
-comment on column public.ideas.origin_at is 'When the item was made according to the export (date), falling back to import time. The UI sorts by this.';
-comment on column public.ideas.raw is 'The original export item, kept whole so new Shorts Studio fields are never lost.';
+comment on column viralradar.ideas.id is 'The id from the Shorts Studio export. Unique per user, so re-importing updates instead of duplicating.';
+comment on column viralradar.ideas.origin_at is 'When the item was made according to the export (date), falling back to import time. The UI sorts by this.';
+comment on column viralradar.ideas.raw is 'The original export item, kept whole so new Shorts Studio fields are never lost.';
 
-create index ideas_origin_at_idx on public.ideas (user_id, origin_at desc);
-create index ideas_status_idx on public.ideas (user_id, status);
+create index ideas_origin_at_idx on viralradar.ideas (user_id, origin_at desc);
+create index ideas_status_idx on viralradar.ideas (user_id, status);
 
-create trigger ideas_touch_updated_at before update on public.ideas
-  for each row execute function public.touch_updated_at();
+create trigger ideas_touch_updated_at before update on viralradar.ideas
+  for each row execute function viralradar.touch_updated_at();
 
 -- ---------- scripts ----------
 
-create table public.scripts (
+create table viralradar.scripts (
   user_id        uuid not null default auth.uid() references auth.users (id) on delete cascade,
   id             text not null,
   topic          text,
@@ -88,18 +105,18 @@ create table public.scripts (
   primary key (user_id, id)
 );
 
-comment on column public.scripts.stage is 'Pipeline column on the Scripts board. Re-importing a script never resets it.';
-comment on column public.scripts.origin_at is 'The export created_at, falling back to import time. The UI sorts by this.';
+comment on column viralradar.scripts.stage is 'Pipeline column on the Scripts board. Re-importing a script never resets it.';
+comment on column viralradar.scripts.origin_at is 'The export created_at, falling back to import time. The UI sorts by this.';
 
-create index scripts_origin_at_idx on public.scripts (user_id, origin_at desc);
-create index scripts_stage_idx on public.scripts (user_id, stage);
+create index scripts_origin_at_idx on viralradar.scripts (user_id, origin_at desc);
+create index scripts_stage_idx on viralradar.scripts (user_id, stage);
 
-create trigger scripts_touch_updated_at before update on public.scripts
-  for each row execute function public.touch_updated_at();
+create trigger scripts_touch_updated_at before update on viralradar.scripts
+  for each row execute function viralradar.touch_updated_at();
 
 -- ---------- results ----------
 
-create table public.results (
+create table viralradar.results (
   user_id    uuid not null default auth.uid() references auth.users (id) on delete cascade,
   id         text not null,
   title      text,
@@ -127,19 +144,19 @@ create table public.results (
 
 -- Deliberately not a foreign key to scripts: a bundle export can list a result
 -- before the script it belongs to, and an import must never fail on item order.
-comment on column public.results.script_id is 'Optional link to scripts.id for the same user. Not enforced, so import order never matters.';
-comment on column public.results.origin_at is 'The export logged_at, falling back to posted_on, then import time.';
+comment on column viralradar.results.script_id is 'Optional link to scripts.id for the same user. Not enforced, so import order never matters.';
+comment on column viralradar.results.origin_at is 'The export logged_at, falling back to posted_on, then import time.';
 
-create index results_origin_at_idx on public.results (user_id, origin_at desc);
-create index results_posted_on_idx on public.results (user_id, posted_on desc);
-create index results_script_id_idx on public.results (user_id, script_id);
+create index results_origin_at_idx on viralradar.results (user_id, origin_at desc);
+create index results_posted_on_idx on viralradar.results (user_id, posted_on desc);
+create index results_script_id_idx on viralradar.results (user_id, script_id);
 
-create trigger results_touch_updated_at before update on public.results
-  for each row execute function public.touch_updated_at();
+create trigger results_touch_updated_at before update on viralradar.results
+  for each row execute function viralradar.touch_updated_at();
 
 -- ---------- trends ----------
 
-create table public.trends (
+create table viralradar.trends (
   user_id        uuid not null default auth.uid() references auth.users (id) on delete cascade,
   url            text not null,
   title          text,
@@ -150,26 +167,26 @@ create table public.trends (
   views_per_hour numeric,
   published_at   timestamptz,
   score          numeric not null default 0,
-  fetched_on     date not null default public.ist_today(),
+  fetched_on     date not null default viralradar.ist_today(),
   extra          jsonb not null default '{}'::jsonb,
   created_at     timestamptz not null default now(),
   updated_at     timestamptz not null default now(),
   primary key (user_id, url)
 );
 
-comment on column public.trends.url is 'Cleaned and deduped by shared/radar.mjs. One row per URL per user.';
-comment on column public.trends.score is 'Per-hour velocity within the source (views, points, upvotes or stars per hour). Compare within one source only.';
-comment on column public.trends.extra is 'Source-specific details, including the keyword that found a YouTube clip.';
+comment on column viralradar.trends.url is 'Cleaned and deduped by shared/radar.mjs. One row per URL per user.';
+comment on column viralradar.trends.score is 'Per-hour velocity within the source (views, points, upvotes or stars per hour). Compare within one source only.';
+comment on column viralradar.trends.extra is 'Source-specific details, including the keyword that found a YouTube clip.';
 
-create index trends_day_idx on public.trends (user_id, fetched_on desc, score desc);
-create index trends_source_idx on public.trends (user_id, source);
+create index trends_day_idx on viralradar.trends (user_id, fetched_on desc, score desc);
+create index trends_source_idx on viralradar.trends (user_id, source);
 
-create trigger trends_touch_updated_at before update on public.trends
-  for each row execute function public.touch_updated_at();
+create trigger trends_touch_updated_at before update on viralradar.trends
+  for each row execute function viralradar.touch_updated_at();
 
 -- ---------- settings (one row per user) ----------
 
-create table public.settings (
+create table viralradar.settings (
   user_id          uuid primary key default auth.uid() references auth.users (id) on delete cascade,
   niche_keywords   text[] not null default array['ai tools', 'free ai website', 'useful websites', 'chatgpt tricks', 'coding tips', 'tech hacks'],
   language         text not null default 'English',
@@ -181,35 +198,23 @@ create table public.settings (
   updated_at       timestamptz not null default now()
 );
 
-comment on table public.settings is 'Exactly one row per user, created automatically on signup.';
-comment on column public.settings.ai_order is 'Providers are tried in this order; one with no key on the server is skipped.';
+-- There is deliberately NO trigger on auth.users to create this row. This
+-- project is shared with another app, and a trigger there would fire for that
+-- app's signups too. Instead the row is created on first use, by the app:
+--   insert into viralradar.settings (user_id) values (auth.uid())
+--   on conflict (user_id) do nothing;
+-- Every column has a default, so that one statement is enough.
+comment on table viralradar.settings is 'Exactly one row per user, created by the app on first use. Nothing here touches auth.';
+comment on column viralradar.settings.ai_order is 'Providers are tried in this order; one with no key on the server is skipped.';
 
-create trigger settings_touch_updated_at before update on public.settings
-  for each row execute function public.touch_updated_at();
-
--- Give every new account its settings row, so the app never has to guess
--- whether one exists.
-create or replace function public.handle_new_user()
-returns trigger
-language plpgsql
-security definer
-set search_path = ''
-as $$
-begin
-  insert into public.settings (user_id) values (new.id) on conflict (user_id) do nothing;
-  return new;
-end;
-$$;
-
-create trigger on_auth_user_created
-  after insert on auth.users
-  for each row execute function public.handle_new_user();
+create trigger settings_touch_updated_at before update on viralradar.settings
+  for each row execute function viralradar.touch_updated_at();
 
 -- ---------- usage (YouTube quota and AI call counts) ----------
 
-create table public.usage (
+create table viralradar.usage (
   user_id    uuid not null default auth.uid() references auth.users (id) on delete cascade,
-  date       date not null default public.ist_today(),
+  date       date not null default viralradar.ist_today(),
   provider   text not null,
   units      integer not null default 0,
   requests   integer not null default 0,
@@ -218,17 +223,17 @@ create table public.usage (
   primary key (user_id, date, provider)
 );
 
-comment on table public.usage is 'One row per user, per IST day, per provider.';
-comment on column public.usage.units is 'YouTube quota units (search.list costs 100, videos.list costs 1). Zero for AI providers.';
-comment on column public.usage.requests is 'Number of calls made: YouTube searches, or AI generate calls.';
+comment on table viralradar.usage is 'One row per user, per IST day, per provider.';
+comment on column viralradar.usage.units is 'YouTube quota units (search.list costs 100, videos.list costs 1). Zero for AI providers.';
+comment on column viralradar.usage.requests is 'Number of calls made: YouTube searches, or AI generate calls.';
 
-create trigger usage_touch_updated_at before update on public.usage
-  for each row execute function public.touch_updated_at();
+create trigger usage_touch_updated_at before update on viralradar.usage
+  for each row execute function viralradar.touch_updated_at();
 
 -- ---------- import tokens (for the laptop folder watcher) ----------
 
-create table public.import_tokens (
-  id           uuid primary key default extensions.gen_random_uuid(),
+create table viralradar.import_tokens (
+  id           uuid primary key default gen_random_uuid(),
   user_id      uuid not null default auth.uid() references auth.users (id) on delete cascade,
   token_hash   text not null unique,
   label        text,
@@ -237,9 +242,9 @@ create table public.import_tokens (
   updated_at   timestamptz not null default now()
 );
 
-comment on table public.import_tokens is 'Personal tokens for the local watcher. Only the SHA-256 hash is stored; the token itself is shown once, in the browser, and never saved anywhere.';
+comment on table viralradar.import_tokens is 'Personal tokens for the local watcher. Only the SHA-256 hash is stored; the token itself is shown once, in the browser, and never saved anywhere.';
 
-create index import_tokens_user_idx on public.import_tokens (user_id);
+create index import_tokens_user_idx on viralradar.import_tokens (user_id);
 
-create trigger import_tokens_touch_updated_at before update on public.import_tokens
-  for each row execute function public.touch_updated_at();
+create trigger import_tokens_touch_updated_at before update on viralradar.import_tokens
+  for each row execute function viralradar.touch_updated_at();

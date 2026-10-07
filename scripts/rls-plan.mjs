@@ -102,14 +102,14 @@ export function buildPlan({ A, B }) {
       add({
         name: `${table}: ${me} can see their own rows`,
         as: me, table, sim: 'select-own', owner: me,
-        sql: `select ${key} from public.${table} where user_id = $1`,
+        sql: `select ${key} from viralradar.${table} where user_id = $1`,
         params: [uid[me]],
         expect: { minRows: 1 },
       });
       add({
         name: `${table}: ${me} cannot see ${them}'s rows`,
         as: me, table, sim: 'select-other', owner: them,
-        sql: `select ${key} from public.${table} where user_id = $1`,
+        sql: `select ${key} from viralradar.${table} where user_id = $1`,
         params: [uid[them]],
         expect: { rowCount: 0 },
       });
@@ -117,7 +117,7 @@ export function buildPlan({ A, B }) {
       add({
         name: `${table}: an unfiltered select by ${me} returns only ${me}'s rows`,
         as: me, table, sim: 'select-unfiltered', owner: them,
-        sql: `select count(*)::int as n from public.${table} where user_id <> $1`,
+        sql: `select count(*)::int as n from viralradar.${table} where user_id <> $1`,
         params: [uid[me]],
         expect: { rows: [{ n: 0 }] },
       });
@@ -126,14 +126,14 @@ export function buildPlan({ A, B }) {
       add({
         name: `${table}: ${me} cannot update ${them}'s rows`,
         as: me, table, sim: 'update-other', owner: them,
-        sql: `update public.${table} ${t.update} where user_id = $1 returning ${key}`,
+        sql: `update viralradar.${table} ${t.update} where user_id = $1 returning ${key}`,
         params: [uid[them]],
         expect: { rowCount: 0 },
       });
       add({
         name: `${table}: ${me} can update their own rows`,
         as: me, table, sim: 'update-own', owner: me,
-        sql: `update public.${table} ${t.update} where user_id = $1 and ${key} = $2 returning ${key}`,
+        sql: `update viralradar.${table} ${t.update} where user_id = $1 and ${key} = $2 returning ${key}`,
         params: [uid[me], t.fixture[me]],
         expect: { rowCount: 1 },
       });
@@ -141,7 +141,7 @@ export function buildPlan({ A, B }) {
       add({
         name: `${table}: ${me} cannot give their own row away to ${them}`,
         as: me, table, sim: 'update-give-away', owner: me,
-        sql: `update public.${table} set user_id = $1 where user_id = $2 and ${key} = $3 returning ${key}`,
+        sql: `update viralradar.${table} set user_id = $1 where user_id = $2 and ${key} = $3 returning ${key}`,
         params: [uid[them], uid[me], t.fixture[me]],
         expect: { errorCode: '42501' },
       });
@@ -150,14 +150,14 @@ export function buildPlan({ A, B }) {
       add({
         name: `${table}: ${me} cannot delete ${them}'s rows`,
         as: me, table, sim: 'delete-other', owner: them,
-        sql: `delete from public.${table} where user_id = $1 returning ${key}`,
+        sql: `delete from viralradar.${table} where user_id = $1 returning ${key}`,
         params: [uid[them]],
         expect: { rowCount: 0 },
       });
       add({
         name: `${table}: ${me} can delete their own rows`,
         as: me, table, sim: 'delete-own', owner: me,
-        sql: `delete from public.${table} where user_id = $1 and ${key} = $2 returning ${key}`,
+        sql: `delete from viralradar.${table} where user_id = $1 and ${key} = $2 returning ${key}`,
         params: [uid[me], t.fixture[me]],
         expect: { rowCount: 1 },
       });
@@ -167,14 +167,14 @@ export function buildPlan({ A, B }) {
       add({
         name: `${table}: ${me} cannot insert a row owned by ${them}`,
         as: me, table, sim: 'insert-other', owner: them,
-        sql: `insert into public.${table} (user_id, ${fresh.cols}) values ($1, ${fresh.vals}) returning ${key}`,
+        sql: `insert into viralradar.${table} (user_id, ${fresh.cols}) values ($1, ${fresh.vals}) returning ${key}`,
         params: [uid[them], t.fresh],
         expect: { errorCode: '42501' },
       });
       add({
         name: `${table}: ${me} can insert their own row`,
         as: me, table, sim: 'insert-own', owner: me,
-        sql: `insert into public.${table} (user_id, ${fresh.cols}) values ($1, ${fresh.vals}) returning ${key}`,
+        sql: `insert into viralradar.${table} (user_id, ${fresh.cols}) values ($1, ${fresh.vals}) returning ${key}`,
         params: [uid[me], t.fresh],
         expect: { rowCount: 1 },
       });
@@ -183,7 +183,7 @@ export function buildPlan({ A, B }) {
       add({
         name: `${table}: a row inserted by ${me} without a user_id belongs to ${me}`,
         as: me, table, sim: 'insert-default-owner', owner: me,
-        sql: `insert into public.${table} (${defaulted.cols}) values (${defaulted.vals}) returning user_id`,
+        sql: `insert into viralradar.${table} (${defaulted.cols}) values (${defaulted.vals}) returning user_id`,
         params: [t.fresh],
         expect: { rows: [{ user_id: uid[me] }] },
       });
@@ -198,14 +198,14 @@ export function buildPlan({ A, B }) {
       add({
         name: `${table}: a row with no owner is rejected`,
         as: 'A', table, sim: 'insert-null-owner', owner: null,
-        sql: `insert into public.${table} (user_id, ${fresh.cols}) values (null, ${fresh.vals}) returning ${key}`,
+        sql: `insert into viralradar.${table} (user_id, ${fresh.cols}) values (null, ${fresh.vals}) returning ${key}`,
         params: [t.fresh],
         expect: { errorCodeIn: ['23502', '42501'] },
       });
       add({
         name: `${table}: an insert with no session is rejected, because auth.uid() is null`,
         as: 'noclaims', table, sim: 'insert-no-session', owner: null,
-        sql: `insert into public.${table} (${fresh.cols}) values (${fresh.vals}) returning ${key}`,
+        sql: `insert into viralradar.${table} (${fresh.cols}) values (${fresh.vals}) returning ${key}`,
         params: [t.fresh],
         expect: { errorCodeIn: ['23502', '42501'] },
       });
@@ -215,50 +215,50 @@ export function buildPlan({ A, B }) {
     add({
       name: `${table}: anon (not signed in) has no access`,
       as: 'anon', table, sim: 'anon-denied', owner: null,
-      sql: `select ${key} from public.${table}`,
+      sql: `select ${key} from viralradar.${table}`,
       params: [],
       expect: { errorCode: '42501' },
     });
   }
 
-  // ---- settings: one row per user, created on signup ----
+  // ---- settings: one row per user, created on first use ----
   // There are no insert assertions here on purpose: the signup trigger already
   // created each user's only settings row, so an insert would hit the primary
   // key before RLS and the result would be ambiguous.
   for (const me of ['A', 'B']) {
     const them = OTHER[me];
     add({
-      name: `settings: ${me} has exactly one settings row, created on signup`,
+      name: `settings: ${me} has exactly one settings row, created on first use`,
       as: me, table: 'settings', sim: 'settings-own-count', owner: me,
-      sql: 'select count(*)::int as n from public.settings',
+      sql: 'select count(*)::int as n from viralradar.settings',
       params: [],
       expect: { rows: [{ n: 1 }] },
     });
     add({
       name: `settings: ${me} cannot see ${them}'s settings`,
       as: me, table: 'settings', sim: 'select-other', owner: them,
-      sql: 'select user_id from public.settings where user_id = $1',
+      sql: 'select user_id from viralradar.settings where user_id = $1',
       params: [uid[them]],
       expect: { rowCount: 0 },
     });
     add({
       name: `settings: ${me} cannot change ${them}'s settings`,
       as: me, table: 'settings', sim: 'update-other', owner: them,
-      sql: "update public.settings set language = 'changed by the wrong user' where user_id = $1 returning user_id",
+      sql: "update viralradar.settings set language = 'changed by the wrong user' where user_id = $1 returning user_id",
       params: [uid[them]],
       expect: { rowCount: 0 },
     });
     add({
       name: `settings: ${me} cannot delete ${them}'s settings`,
       as: me, table: 'settings', sim: 'delete-other', owner: them,
-      sql: 'delete from public.settings where user_id = $1 returning user_id',
+      sql: 'delete from viralradar.settings where user_id = $1 returning user_id',
       params: [uid[them]],
       expect: { rowCount: 0 },
     });
     add({
       name: `settings: ${me} can change their own settings`,
       as: me, table: 'settings', sim: 'update-own', owner: me,
-      sql: "update public.settings set language = 'Hindi' where user_id = $1 returning language",
+      sql: "update viralradar.settings set language = 'Hindi' where user_id = $1 returning language",
       params: [uid[me]],
       expect: { rowCount: 1 },
     });
@@ -266,7 +266,7 @@ export function buildPlan({ A, B }) {
   add({
     name: 'settings: anon (not signed in) has no access',
     as: 'anon', table: 'settings', sim: 'anon-denied', owner: null,
-    sql: 'select user_id from public.settings',
+    sql: 'select user_id from viralradar.settings',
     params: [],
     expect: { errorCode: '42501' },
   });
@@ -287,11 +287,11 @@ export function buildProofs({ A, B }) {
   return [
     {
       name: 'dropping ideas_select_own must break "A can see their own rows"',
-      breakSql: 'drop policy ideas_select_own on public.ideas',
+      breakSql: 'drop policy ideas_select_own on viralradar.ideas',
       check: {
         name: 'ideas: A can see their own rows',
         as: 'A', table: 'ideas', sim: 'select-own', owner: 'A',
-        sql: 'select id from public.ideas where user_id = $1',
+        sql: 'select id from viralradar.ideas where user_id = $1',
         params: [A],
         expect: { minRows: 1 },
       },
@@ -299,11 +299,11 @@ export function buildProofs({ A, B }) {
     },
     {
       name: 'widening ideas_select_own to using(true) must break "B cannot see A\'s rows"',
-      breakSql: 'alter policy ideas_select_own on public.ideas using (true)',
+      breakSql: 'alter policy ideas_select_own on viralradar.ideas using (true)',
       check: {
         name: "ideas: B cannot see A's rows",
         as: 'B', table: 'ideas', sim: 'select-other', owner: 'A',
-        sql: 'select id from public.ideas where user_id = $1',
+        sql: 'select id from viralradar.ideas where user_id = $1',
         params: [A],
         expect: { rowCount: 0 },
       },
@@ -311,11 +311,11 @@ export function buildProofs({ A, B }) {
     },
     {
       name: 'widening ideas_insert_own to with check(true) must break "B cannot insert a row owned by A"',
-      breakSql: 'alter policy ideas_insert_own on public.ideas with check (true)',
+      breakSql: 'alter policy ideas_insert_own on viralradar.ideas with check (true)',
       check: {
         name: 'ideas: B cannot insert a row owned by A',
         as: 'B', table: 'ideas', sim: 'insert-other', owner: 'A',
-        sql: "insert into public.ideas (user_id, id, title, source) values ($1, 'proof-row', 'planted', 'manual') returning id",
+        sql: "insert into viralradar.ideas (user_id, id, title, source) values ($1, 'proof-row', 'planted', 'manual') returning id",
         params: [A],
         expect: { errorCode: '42501' },
       },

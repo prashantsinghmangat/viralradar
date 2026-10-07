@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node server/index.js",
     "test": "node --test test/*.test.js",
-    "test:rls": "node scripts/test-rls.mjs"
+    "test:rls": "node scripts/test-rls.mjs",
+    "inspect:db": "node scripts/inspect-db.mjs"
   },
   "license": "MIT",
   "dependencies": {
