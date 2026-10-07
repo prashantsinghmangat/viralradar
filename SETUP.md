@@ -77,6 +77,28 @@ migrations. It also shows how much of the 500 MB free limit is used.
 
 ## Step 3. Create the tables
 
+First let the CLI into your Supabase account. This is separate from the database
+password: it is how the CLI proves it is allowed to act on your projects.
+
+```powershell
+npx supabase login
+```
+
+A browser window opens. Sign in and approve it; the CLI may show a short
+verification code to confirm it matches what the browser shows. The token is
+stored on this laptop, outside the project folder, so it never reaches git.
+
+If the browser does not open, create a token by hand at
+**https://supabase.com/dashboard/account/tokens**, then:
+
+```powershell
+$env:SUPABASE_ACCESS_TOKEN = "sbp_the-token-you-created"
+```
+
+That lasts for the current terminal window only, which is a good thing.
+
+Then link the project and push the migrations:
+
 ```powershell
 npx supabase link --project-ref <your-project-ref>
 npx supabase db push
@@ -85,6 +107,10 @@ npx supabase db push
 Your project ref is the random-looking part of your project URL
 (`https://abcdefghijkl.supabase.co` → `abcdefghijkl`), also shown under
 **Project Settings → General → Reference ID**.
+
+`link` asks for your database password. You can paste it (it is saved in
+`supabase/.temp`, which is gitignored) or press Enter to skip, in which case
+`db push` asks for it instead.
 
 `db push` will ask you to confirm the two migrations. It creates a new schema
 called `viralradar` and eight tables inside it: the seven the app uses, plus
@@ -426,6 +452,7 @@ It is safe to run twice: imports match on id, so nothing duplicates.
 |---|---|
 | `ENOTFOUND` or a timeout from `npm run test:rls` | You used the Direct connection string. Switch to the pooled one (**Shared pooler**, port 5432). |
 | `password authentication failed` | Wrong database password in `DATABASE_URL`. Reset it under Project Settings → Database. |
+| `Access token not provided` from a supabase command | Run `npx supabase login` first (Step 3). That is the CLI signing in to your account, not the database password. |
 | App loads but every screen is empty, no error | `viralradar` is probably missing from **Exposed schemas** (Step 4). |
 | Logged in fine, but everything is empty and nothing saves | You are not on the allowlist (Step 6b). This is also exactly what a tracebug account sees. |
 | `permission denied for schema viralradar` | Same as above, or the migrations have not been pushed. |
