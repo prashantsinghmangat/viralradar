@@ -78,9 +78,13 @@ export function describe(raw) {
       + '  Use the "Session pooler" tab instead: the host ends in .pooler.supabase.com and the port is 5432.');
   }
   if (out.kind === 'transaction-pooler') {
-    out.problems.push(
-      'This is the "Transaction pooler" string (port 6543). It does not keep session state, which the RLS test needs.\n'
-      + '  Use the "Session pooler" tab instead: same host, but port 5432.');
+    // Not refused: every statement these scripts run is inside a transaction,
+    // and SET LOCAL / set_config(..., true) are transaction-scoped, so this
+    // should work. Session pooler is still the one to prefer.
+    out.warnings.push(
+      'This is the "Transaction pooler" string (port 6543). It should still work here, because everything\n'
+      + '  these scripts do happens inside a transaction, but the "Session pooler" string (same host, port 5432)\n'
+      + '  is the one to prefer. If you see odd connection errors, switch to it.');
   }
   if (out.kind === 'unknown') {
     out.warnings.push(`The host ${out.host} is not a Supabase address. Carrying on, but double-check you copied the right string.`);

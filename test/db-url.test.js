@@ -28,12 +28,13 @@ test('the direct connection is rejected, because it is IPv6 only', () => {
   assert.match(explain(i), /Session pooler/);
 });
 
-test('the transaction pooler is rejected, because it keeps no session state', () => {
+test('the transaction pooler is accepted with a note, since every statement runs in a transaction', () => {
   const i = describe(TRANSACTION);
-  assert.equal(i.ok, false);
+  assert.equal(i.ok, true, explain(i));
   assert.equal(i.kind, 'transaction-pooler');
   assert.match(explain(i), /6543/);
-  assert.match(explain(i), /port 5432/);
+  assert.match(explain(i), /should still work/);
+  assert.match(explain(i), /Session pooler/);
 });
 
 test('a string with the placeholder password still in it is rejected', () => {
