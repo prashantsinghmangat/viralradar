@@ -132,6 +132,18 @@ The app cannot read anything until you do this. The CLI cannot do it for you.
 
 This is additive. tracebug keeps working exactly as before.
 
+**Check it took.** Add these two lines to `.env` (both from Project Settings →
+API Keys — the **publishable** key, never the secret one):
+
+```
+SUPABASE_URL=https://<your-project-ref>.supabase.co
+SUPABASE_ANON_KEY=<your-publishable-key>
+```
+
+then run `npm run inspect:db` again. The last section tells you whether the
+schema is really exposed — this is the one setting nothing else can verify, and
+if it is wrong the app just looks empty with no error.
+
 ## Step 5. Prove nobody can read your data
 
 ```powershell

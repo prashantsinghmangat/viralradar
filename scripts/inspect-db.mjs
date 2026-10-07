@@ -186,12 +186,63 @@ async function main() {
     line(`  ${size} used, roughly ${pct}% of the free tier's 500 MB`);
   });
 
+  head('ViralRadar setup checks');
+  await safely('the setup checks', async () => {
+    const [{ n: tables }] = await db`
+      select count(*)::int as n from pg_tables where schemaname = 'viralradar'`;
+    const [{ n: policies }] = await db`
+      select count(*)::int as n from pg_policies where schemaname = 'viralradar'`;
+    const [{ n: unprotected }] = await db`
+      select count(*)::int as n from pg_tables
+      where schemaname = 'viralradar' and not rowsecurity`;
+    const [{ n: allowed }] = await db`select count(*)::int as n from viralradar.allowed_users`;
+
+    const say = (ok, label, detail) => line(`  ${ok ? 'OK  ' : 'TODO'} ${label.padEnd(34)} ${detail}`);
+    say(tables === 8, 'migrations pushed', `${tables} of 8 tables`);
+    say(unprotected === 0, 'row level security on every table', unprotected === 0 ? 'yes' : `${unprotected} table(s) unprotected`);
+    say(policies === 28, 'policies in place', `${policies} of 28`);
+    say(allowed > 0, 'you are on the allowlist (step 6b)',
+      allowed > 0 ? `${allowed} user(s) allowed` : 'nobody is allowed yet, so the app will look empty');
+  });
+
+  head('Data API: is the viralradar schema exposed? (step 4)');
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
+    line('  Skipped. Add SUPABASE_URL and SUPABASE_ANON_KEY to .env and run this again');
+    line('  to check the one setting that only the dashboard can change.');
+    line('  Both come from Project Settings -> API Keys. Use the publishable key');
+    line('  (older projects call it "anon public"), never the secret / service_role one.');
+  } else {
+    await safely('the Data API', async () => {
+      const res = await fetch(`${process.env.SUPABASE_URL.replace(/\/+$/, '')}/rest/v1/ideas?select=id&limit=1`, {
+        headers: {
+          apikey: process.env.SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${process.env.SUPABASE_ANON_KEY}`,
+          'Accept-Profile': 'viralradar',
+        },
+      });
+      const body = await res.text();
+      // PGRST106 means PostgREST has never heard of the schema, which is exactly
+      // what an un-exposed schema looks like. A permission error instead means
+      // the schema IS exposed and anon is correctly being refused, which is the
+      // result we want.
+      if (/PGRST106/.test(body)) {
+        line('  TODO  "viralradar" is NOT in Exposed schemas.');
+        line('        Project Settings -> API -> Exposed schemas -> add viralradar -> Save.');
+        line('        Until then the app will not be able to read anything.');
+      } else if (res.status === 401 || res.status === 403 || /42501|permission denied/i.test(body)) {
+        line('  OK    the schema is exposed, and anon is refused as it should be');
+        line('        (that refusal is the allowlist and RLS working, not a problem)');
+      } else if (res.ok) {
+        line(`  CHECK the schema is exposed, but anon got a ${res.status} with data back.`);
+        line('        Tell me about this: anon should never be able to read rows.');
+      } else {
+        line(`  CHECK unexpected response ${res.status}: ${body.slice(0, 200)}`);
+      }
+    });
+  }
+
   line();
-  line('Done. Nothing was changed. Paste this back and I will adjust the plan to fit.');
-  line();
-  line('One thing this cannot see: the Data API "Exposed schemas" setting, which');
-  line('lives in the dashboard (Project Settings -> API). The browser needs');
-  line('"viralradar" added there before the app can read anything.');
+  line('Done. Nothing was changed.');
   line();
 }
 
