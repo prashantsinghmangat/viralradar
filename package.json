@@ -9,7 +9,8 @@
   },
   "scripts": {
     "start": "node server/index.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "test:rls": "node scripts/test-rls.mjs"
   },
   "license": "MIT",
   "dependencies": {
@@ -19,5 +20,9 @@
     "express": "^5.2.1",
     "node-cron": "^4.6.0",
     "qrcode-terminal": "^0.12.0"
+  },
+  "devDependencies": {
+    "libpg-query": "^18.1.5",
+    "postgres": "^3.4.9"
   }
 }
