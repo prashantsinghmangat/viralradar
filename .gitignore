@@ -1,3 +1,7 @@
 node_modules/
 data/
 .env
+
+# Secrets handed to Supabase with: supabase secrets set --env-file
+.env.secrets
+supabase/.env.secrets

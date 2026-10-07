@@ -291,19 +291,59 @@ what is coming; they will not work before the function files exist.
 
 ## Step 9. Give Supabase the API keys
 
+You can do this now; it does not depend on the functions existing yet.
+
 ```powershell
 cd D:\Project\viralradar
-npx supabase secrets set GEMINI_API_KEY=your-gemini-key
-npx supabase secrets set OPENROUTER_API_KEY=your-openrouter-key
-npx supabase secrets set YOUTUBE_API_KEY=your-youtube-key
+npx supabase secrets set "GEMINI_API_KEY=AIza-your-real-key"
 ```
 
-These live on Supabase's servers only. They are never sent to your browser or
-phone, and never stored in the database. Check them with
-`npx supabase secrets list` — it shows the names and a hash, never the values.
+Quote the whole `NAME=value` pair: PowerShell otherwise treats some characters
+in a key as syntax. Repeat for the others as you get them:
 
-You do **not** need to set a service role key. Supabase gives the functions that
-automatically.
+```powershell
+npx supabase secrets set "OPENROUTER_API_KEY=sk-or-your-real-key"
+npx supabase secrets set "YOUTUBE_API_KEY=your-youtube-key"
+```
+
+Check it worked:
+
+```powershell
+npx supabase secrets list
+```
+
+That prints the **names and a hash**, never the values. Seeing
+`GEMINI_API_KEY` in the list is the confirmation.
+
+### Setting several at once, without them in your command history
+
+PowerShell remembers every command you type, including the key. If you would
+rather it did not, put them in a file instead:
+
+1. Create `supabase/.env.secrets` (gitignored, so it stays on this laptop):
+   ```
+   GEMINI_API_KEY=AIza-your-real-key
+   OPENROUTER_API_KEY=sk-or-your-real-key
+   YOUTUBE_API_KEY=your-youtube-key
+   ```
+2. Push them all in one go, then delete the file:
+   ```powershell
+   npx supabase secrets set --env-file supabase/.env.secrets
+   Remove-Item supabase/.env.secrets
+   ```
+
+**Do not** point `--env-file` at your main `.env`. It would try to send
+`DATABASE_URL` as well, which has no business being there, and Supabase refuses
+any name starting with `SUPABASE_` anyway.
+
+### What you must NOT set
+
+- `SUPABASE_URL`, `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` are given
+  to every function automatically. Supabase rejects those names, and the
+  functions already expect the built-in ones.
+- Nothing here ever reaches your browser, your phone or the database. That is
+  the whole reason the AI calls happen in an Edge Function instead of in the
+  app.
 
 ## Step 10. Deploy the three functions
 
