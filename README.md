@@ -1,5 +1,12 @@
 # ViralRadar
 
+> **This README describes the local-only version** (branch `main`): Express +
+> SQLite, one laptop, same Wi-Fi for the phone. It still works, unchanged.
+>
+> The cloud version lives on branch `cloud`. Start with:
+> - **[PROJECT.md](PROJECT.md)** — what it is, how it is built, and where it has got to
+> - **[SETUP.md](SETUP.md)** — every step you do by hand, in order
+
 A small app that runs on your laptop. It keeps the ideas, scripts and results you export from **Shorts Studio**, and each morning it finds trending Shorts and tech posts for your niche. You can open it on your laptop and on your phone over the same Wi-Fi.
 
 - No AI inside. Everything comes from Shorts Studio exports or free public APIs.

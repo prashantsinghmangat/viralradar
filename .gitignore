@@ -5,3 +5,6 @@ data/
 # Secrets handed to Supabase with: supabase secrets set --env-file
 .env.secrets
 supabase/.env.secrets
+
+# Other tools' scratch worktrees
+.kilo/
