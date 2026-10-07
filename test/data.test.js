@@ -392,3 +392,34 @@ test('an error is turned into a sentence once, not wrapped twice', async () => {
   const first = message.indexOf('Could not');
   assert.equal(message.indexOf('Could not', first + 1), -1, `the message is wrapped twice: ${message}`);
 });
+
+test('a function that is not deployed says so, and how to deploy it', async () => {
+  const { createData } = await load();
+  const client = fakeClient();
+  // What supabase-js reports when the function does not exist: the gateway's
+  // 404 carries no CORS headers, so the browser only sees a failed request.
+  client.functions.invoke = async () => ({
+    data: null,
+    error: { name: 'FunctionsFetchError', message: 'Failed to send a request to the Edge Function' },
+  });
+
+  await assert.rejects(
+    () => createData(client).imports.send('{}'),
+    (e) => /vr-import.*not deployed yet/s.test(e.message) && /functions deploy vr-import --use-api/.test(e.message),
+  );
+});
+
+test('a function that answers with its own error keeps that error', async () => {
+  const { createData } = await load();
+  const client = fakeClient();
+  // A real refusal from the function must not be replaced by the generic
+  // "not deployed" wording, or a bad file would look like a missing function.
+  client.functions.invoke = async () => ({
+    data: null,
+    error: {
+      message: 'Edge Function returned a non-2xx status code',
+      context: { json: async () => ({ error: 'Schema mismatch: this app understands schema 1' }) },
+    },
+  });
+  await assert.rejects(() => createData(client).imports.send('{}'), /Schema mismatch/);
+});

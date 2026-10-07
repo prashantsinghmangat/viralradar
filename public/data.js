@@ -247,8 +247,21 @@ export function createData(client) {
     const { data, error } = await client.functions.invoke(name, { body });
     if (error) {
       // The function's own message is the useful one, when there is one.
-      const detail = (await readFunctionError(error)) || error.message;
-      throw new Error(detail || `Could not ${doing}.`);
+      const detail = await readFunctionError(error);
+      if (detail) throw new Error(detail);
+
+      const message = error.message || '';
+      // A function that was never deployed cannot answer, and the browser
+      // cannot see why: the gateway's 404 carries no CORS headers, so this
+      // arrives as a bare "failed to send a request". Say what is missing.
+      if (/failed to send a request|FunctionsFetchError|NetworkError|Failed to fetch/i.test(message)) {
+        throw new Error(`This needs the "${name}" function, which is not deployed yet.`
+          + ` Deploy it with: npx supabase functions deploy ${name} --use-api`);
+      }
+      if (/relay|timeout|timed out/i.test(message)) {
+        throw new Error(`The "${name}" function took too long to answer. Try again.`);
+      }
+      throw new Error(message || `Could not ${doing}.`);
     }
     return data;
   }
