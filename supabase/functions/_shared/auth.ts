@@ -80,8 +80,12 @@ function userClient(jwt: string): SupabaseClient {
   });
 }
 
-/** A client that bypasses RLS. Only ever used behind a verified token. */
-function serviceClient(): SupabaseClient {
+/**
+ * A client that bypasses RLS. Only ever used behind something already
+ * verified: a token whose hash was found, or the schedule secret. Whatever
+ * uses it must set user_id itself and check the allowlist itself.
+ */
+export function serviceClient(): SupabaseClient {
   // An empty key here does not fail loudly: the client simply has no privileges
   // and every query comes back "permission denied".
   if (!serviceKey()) console.error("[vr-import] no usable service key in SUPABASE_SECRET_KEYS or SUPABASE_SERVICE_ROLE_KEY");

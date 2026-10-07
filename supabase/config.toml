@@ -433,3 +433,9 @@ enabled = true
 # credentials comes back 401 "Not signed in".
 [functions.vr-import]
 verify_jwt = false
+
+# The schedule calls this with a shared secret in a header, not a JWT, so the
+# gateway must not demand one. The function checks the secret itself with a
+# constant-time compare, and checks the allowlist, before doing anything.
+[functions.vr-refresh-trends]
+verify_jwt = false

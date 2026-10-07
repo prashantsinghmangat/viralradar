@@ -12,10 +12,19 @@ const path = require('node:path');
 const ROOT = path.join(__dirname, '..');
 const SQL_DIRS = [path.join(ROOT, 'supabase', 'migrations'), path.join(ROOT, 'supabase', 'tests')];
 
-// allowed_users is not user data. It is the list of who may use the app at all,
-// and it is locked down the opposite way: RLS on with no policies, so it denies
-// every signed-in user. It is checked by its own test below.
-const CONTROL_TABLES = ['allowed_users'];
+// These are not user data, and they are locked down the opposite way: RLS on
+// with NO policies, so they deny every signed-in user, and nothing is granted
+// to anon or authenticated. Each has its own test below.
+//   allowed_users  who may use the app at all
+//   cron_config    where the morning refresh calls, and for whom
+const CONTROL_TABLES = ['allowed_users', 'cron_config'];
+
+/** Every migration, joined. Tables can be added by any of them, not just the first. */
+const allMigrations = () => {
+  const dir = path.join(ROOT, 'supabase', 'migrations');
+  return fs.readdirSync(dir).filter((f) => f.endsWith('.sql'))
+    .map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
+};
 
 // Pull the USING and WITH CHECK clauses out of a policy by balancing brackets.
 // auth.uid() and is_allowed() contain brackets of their own, so a regex here
@@ -159,8 +168,10 @@ test('every table created in the schema is locked down in the RLS migration', ()
   const dir = path.join(ROOT, 'supabase', 'migrations');
   const read = (match) => fs.readdirSync(dir).filter((f) => f.includes(match))
     .map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
-  const schema = read('init');
-  const rls = read('rls');
+  // Every migration, not just the first: a table added by a later one would
+  // otherwise never be checked, which is how cron_config slipped through once.
+  const schema = allMigrations();
+  const rls = allMigrations();
 
   const all = [...schema.matchAll(/create table viralradar\.(\w+)/g)].map((m) => m[1]);
   const tables = all.filter((t) => !CONTROL_TABLES.includes(t));
@@ -265,6 +276,69 @@ test('the allowlist is locked down harder than the data tables', () => {
   // The allowlist must not be reachable through the API either.
   assert.ok(!/alter publication supabase_realtime add table viralradar\.allowed_users/.test(rls),
     'the allowlist must never be published over realtime');
+});
+
+test('the schedule config is as shut as the allowlist, and holds no secret', () => {
+  const sql = allMigrations();
+
+  assert.match(sql, /create table viralradar\.cron_config/);
+  assert.match(sql, /alter table viralradar\.cron_config enable row level security/);
+  assert.ok(!/create policy \w+ on viralradar\.cron_config/.test(sql),
+    'no policies: a signed-in browser has no business reading where the schedule calls');
+  assert.match(sql, /revoke all on table viralradar\.cron_config from anon, authenticated;/);
+
+  // The secret is in Vault. Having it in this table as well would mean reading
+  // the table was enough to trigger a refresh for someone.
+  const table = sql.slice(sql.indexOf('create table viralradar.cron_config'));
+  const body = table.slice(0, table.indexOf(');'));
+  // Column names only: "primary key" is not a secret, and matching raw text
+  // said it was.
+  const columns = body.split('\n').slice(1)
+    .map((line) => (line.trim().match(/^(\w+)\s+\S/) || [])[1])
+    .filter(Boolean);
+  assert.ok(columns.length >= 3, `expected to find the columns, got ${columns.join(', ')}`);
+  for (const column of columns) {
+    assert.ok(!/secret|token|password/i.test(column),
+      `cron_config.${column} looks like a secret; it belongs in Vault, not in a table`);
+  }
+  assert.match(sql, /vault\.decrypted_secrets/, 'the secret is read from Vault at the moment it is used');
+});
+
+test('the morning refresh is scheduled for 07:00 IST, under its own name', () => {
+  const sql = allMigrations();
+  const job = sql.match(/cron\.schedule\(\s*'([^']+)',\s*'([^']+)'/);
+  assert.ok(job, 'the schedule should be created by a migration, not by hand');
+
+  const [, name, schedule] = job;
+  // This project already has another app's job in it.
+  assert.match(name, /^viralradar-/, 'the job name must not collide with the other app\'s');
+  assert.equal(schedule, '30 1 * * *', '01:30 UTC');
+
+  // Confirm that really is 07:00 in India, rather than trusting the comment.
+  const [minute, hour] = schedule.split(' ');
+  const ist = new Date(Date.UTC(2026, 0, 1, Number(hour), Number(minute)))
+    .toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
+  assert.equal(ist, '07:00');
+
+  assert.match(sql, /create extension if not exists pg_cron/);
+  assert.match(sql, /create extension if not exists pg_net/, 'pg_cron alone cannot make an HTTP call');
+});
+
+test('counting usage cannot lose a count, and cannot be done for someone else', () => {
+  const sql = allMigrations();
+  const fn = sql.slice(sql.indexOf('function viralradar.add_usage'));
+  const body = fn.slice(0, fn.indexOf('$$;') + 3);
+
+  // Read-then-write loses a count when two refreshes overlap; one statement
+  // with ON CONFLICT cannot.
+  assert.match(body, /on conflict \(user_id, date, provider\) do update/);
+  assert.ok(!/select .* into/i.test(body), 'reading the row first would make this racy');
+
+  // SECURITY INVOKER means the policies still apply, so passing another user's
+  // id is refused rather than quietly accepted.
+  assert.match(body, /security invoker/);
+  assert.ok(!/security definer/.test(body));
+  assert.match(sql, /revoke all on function viralradar\.add_usage[^;]*from public;/);
 });
 
 test('ideas, scripts and results have the indexed origin_at the UI sorts by', () => {

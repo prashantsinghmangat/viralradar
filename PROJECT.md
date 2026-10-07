@@ -258,8 +258,8 @@ kept; the cloud version changes where the data comes from and adds the AI.
 | 3. Schema, RLS, isolation test | **done, verified against the real database** |
 | 4. `vr-import` | **done, deployed and probed live** |
 | 4. `vr-generate` | not started |
-| 4. `vr-refresh-trends` | not started |
-| 5. pg_cron daily refresh | not started |
+| 4. `vr-refresh-trends` | **done, deployed, run live** |
+| 5. pg_cron daily refresh | **done** — 01:30 UTC, triggered and verified |
 | 6. Frontend on supabase-js + Realtime | **done, deployed** |
 | 7. Generate / Write script / Paste buttons | not started |
 | 8. Netlify build and deploy | **done** — PWA (manifest, service worker) still to do |
@@ -274,8 +274,9 @@ database. An import on one device shows up on the other within a second or two.
 
 ### What does not work yet
 
-- **Radar is empty and "Refresh now" fails** — `vr-refresh-trends` is not
-  written, so nothing has ever collected trends. Phase 4/5.
+- **YouTube is missing from the Radar.** Everything else works, but the
+  `YOUTUBE_API_KEY` secret is rejected: "API key not valid". Hacker News,
+  Reddit and GitHub all return results.
 - **"Generate ideas", "Write script" and "Test AI" fail** — `vr-generate` is not
   written. Phase 4/7.
 - **No "Paste from Shorts Studio" button** yet; the paste box and file upload on
@@ -292,7 +293,7 @@ Supabase secrets, `ALLOWED_ORIGINS` set, code on GitHub, Netlify deploying from
 
 ## 10. Testing
 
-`npm test` — **164 tests**, no network, no database, no keys needed.
+`npm test` — **180 tests**, no network, no database, no keys needed.
 
 `npm run test:rls` — **193 assertions and 4 proofs** against the real Supabase
 database. It connects as `postgres`, which owns the tables and therefore
