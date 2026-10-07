@@ -355,4 +355,4 @@ introduced on purpose, the suite is confirmed to fail, and the file is restored.
 | `npx supabase secrets list` | names and hashes of the secrets | logged in, linked |
 
 Environment: Node 24, Supabase CLI 2.120.0, PostgreSQL 17.6, project
-`ichmkfjymrzwzhxfdbqk` in `ap-south-1`.
+`tracebug` (shared with another app), region `ap-south-1`.

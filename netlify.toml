@@ -20,6 +20,18 @@
 [build.environment]
   # Pinned to the version this was developed and tested with.
   NODE_VERSION = "24.11.0"
+
+  # Netlify treats every environment variable as a secret and fails the build if
+  # it finds one in the output. These two are deliberately public and have to be
+  # in the output: the browser cannot reach Supabase without them. The anon
+  # (publishable) key is safe in a browser because Row Level Security is what
+  # protects the data, which supabase/tests and `npm run test:rls` prove.
+  #
+  # Only these two are exempt. Scanning stays ON for everything else, so a
+  # service_role key or a database password reaching the build would still stop
+  # it — which is exactly the mistake worth being stopped for. Do NOT replace
+  # this with SECRETS_SCAN_ENABLED = "false".
+  SECRETS_SCAN_OMIT_KEYS = "SUPABASE_URL,SUPABASE_ANON_KEY"
   # The site needs no optional native modules; better-sqlite3 is only used by
   # the local version and the one-off migration script.
   NPM_FLAGS = "--no-audit --no-fund"

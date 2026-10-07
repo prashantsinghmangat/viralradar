@@ -12,7 +12,7 @@ const ROOT = path.join(__dirname, '..');
 const DIST = path.join(ROOT, 'dist');
 
 const GOOD = {
-  SUPABASE_URL: 'https://ichmkfjymrzwzhxfdbqk.supabase.co',
+  SUPABASE_URL: 'https://examplerefabcdefghij.supabase.co',
   SUPABASE_ANON_KEY: 'sb_publishable_' + 'x'.repeat(40),
 };
 
@@ -32,8 +32,8 @@ test('a missing or wrong-looking configuration is refused with a readable reason
   const { readConfig } = await import('../scripts/build.mjs');
   const cases = [
     [{ ...GOOD, SUPABASE_URL: '' }, /SUPABASE_URL is not set/],
-    [{ ...GOOD, SUPABASE_URL: 'ichmkfjymrzwzhxfdbqk.supabase.co' }, /does not look right/],
-    [{ ...GOOD, SUPABASE_URL: 'http://ichmkfjymrzwzhxfdbqk.supabase.co' }, /does not look right/],
+    [{ ...GOOD, SUPABASE_URL: 'examplerefabcdefghij.supabase.co' }, /does not look right/],
+    [{ ...GOOD, SUPABASE_URL: 'http://examplerefabcdefghij.supabase.co' }, /does not look right/],
     [{ ...GOOD, SUPABASE_URL: 'https://ytshortradar.netlify.app' }, /does not look right/],
     [{ ...GOOD, SUPABASE_ANON_KEY: '' }, /SUPABASE_ANON_KEY is not set/],
     [{ ...GOOD, SUPABASE_ANON_KEY: 'short' }, /too short/],
@@ -138,4 +138,34 @@ test('netlify.toml matches how the build actually works', () => {
 test('the build output is never committed', () => {
   const ignore = fs.readFileSync(path.join(ROOT, '.gitignore'), 'utf8');
   assert.match(ignore, /^dist\/$/m, 'dist/ holds a generated env.js and must stay out of git');
+});
+
+test('secret scanning is narrowed, not switched off', () => {
+  // Netlify treats every environment variable as a secret and fails the build
+  // if it appears in the output. The two public ones have to appear there, so
+  // they are exempted by name. Exempting them is fine; turning the scanner off
+  // would also stop it catching a service_role key, which is the whole point.
+  // Comments are stripped first: this file explains in prose why scanning must
+  // not be turned off, and the explanation itself names the setting.
+  const toml = fs.readFileSync(path.join(ROOT, 'netlify.toml'), 'utf8')
+    .split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');
+  const omit = toml.match(/SECRETS_SCAN_OMIT_KEYS = "([^"]*)"/);
+  assert.ok(omit, 'the two public variables must be exempted, or every build fails');
+  assert.deepEqual(omit[1].split(',').map((s) => s.trim()).sort(), ['SUPABASE_ANON_KEY', 'SUPABASE_URL'],
+    'only the two deliberately-public variables may be exempt');
+  assert.ok(!/SECRETS_SCAN_ENABLED\s*=\s*"?false/i.test(toml),
+    'scanning must stay on: it is what would catch a service_role key reaching the build');
+  assert.ok(!/SECRETS_SCAN_OMIT_PATHS/.test(toml),
+    'exempting whole paths would hide real leaks; exempt the two known-public keys instead');
+});
+
+test('no real project address is hard-coded in the tests', () => {
+  // A real project ref in a test file is not a secret, but Netlify's scanner
+  // flags it and the build stops. Fixtures use an obviously fake ref.
+  const self = fs.readFileSync(__filename, 'utf8');
+  const refs = [...self.matchAll(/https:\/\/([a-z0-9-]+)\.supabase\.co/g)].map((m) => m[1]);
+  assert.ok(refs.length > 0, 'the fixtures should still exercise a realistic URL');
+  for (const ref of refs) {
+    assert.match(ref, /example/, `"${ref}" looks like a real project ref; use an obviously fake one`);
+  }
 });
