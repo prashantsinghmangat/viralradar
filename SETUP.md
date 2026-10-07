@@ -421,9 +421,23 @@ From then on, every push to the `cloud` branch redeploys automatically.
 3. Check your email and click the magic link. It opens the app, logged in.
 4. Do the same on your phone.
 
-If the link does not come: check spam, and check **Authentication → URL
-Configuration** has your Netlify address in **Site URL** and in **Redirect
-URLs**. I will put the exact values in the README.
+If the link arrives but opens **the other app** (tracebug.dev), that is the one
+genuinely shared setting in Authentication. Fix it like this:
+
+**Authentication → URL Configuration → Redirect URLs → Add URL:**
+
+```
+https://ytshortradar.netlify.app/**
+```
+
+**Leave Site URL as `https://tracebug.dev`.** Site URL is project-wide and the
+other app depends on it. Redirect URLs is a list and only ever adds, so both
+apps can live together: each one asks to come back to its own address, and
+Supabase allows it only if the address is on this list. ViralRadar does ask —
+but when the address is not listed, Supabase quietly falls back to Site URL,
+which is how a sign-in link ends up on the wrong site.
+
+If the link does not arrive at all, check your spam folder first.
 
 Free Supabase sends a limited number of emails per hour, which is plenty for one
 person.
@@ -530,6 +544,7 @@ It is safe to run twice: imports match on id, so nothing duplicates.
 | `ENOTFOUND` or a timeout from `npm run test:rls` | You used the Direct connection string. Switch to the pooled one (**Shared pooler**, port 5432). |
 | `password authentication failed` | Wrong database password in `DATABASE_URL`. Reset it under Project Settings → Database. |
 | `Access token not provided` from a supabase command | Run `npx supabase login` first (Step 3). That is the CLI signing in to your account, not the database password. |
+| Sign-in link opens tracebug.dev instead of ViralRadar | Add `https://ytshortradar.netlify.app/**` to **Authentication → URL Configuration → Redirect URLs**. Leave Site URL alone. |
 | `Legacy API keys are disabled` when signing in | `SUPABASE_ANON_KEY` is the old `eyJ...` key. Use the `sb_publishable_...` one in Netlify and in `.env`, then deploy again. |
 | App loads but every screen is empty, no error | `viralradar` is probably missing from **Exposed schemas** (Step 4). |
 | Logged in fine, but everything is empty and nothing saves | You are not on the allowlist (Step 6b). This is also exactly what a tracebug account sees. |
