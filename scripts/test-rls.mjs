@@ -245,7 +245,7 @@ async function main() {
     if (created) {
       try {
         await deleteUsers();
-        console.log('\nCleaned up: both throwaway users and all their rows are deleted.');
+        console.log('\nCleaned up: all three throwaway users and all their rows are deleted.');
       } catch (e) {
         console.error(`\nCOULD NOT CLEAN UP. Delete these users by hand:\n  ${A}\n  ${B}\n  ${e.message}`);
       }
