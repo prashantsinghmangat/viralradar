@@ -417,3 +417,19 @@ enabled = true
 # formatted with uppercase keywords, indent 2, max width 180, trailing commas,
 # and column/key alignment. Set to "null" to emit raw, unformatted SQL.
 # format_options = "{\"keywordCase\":\"upper\",\"indent\":2,\"maxWidth\":180,\"commaStyle\":\"trailing\"}"
+
+# ---------- ViralRadar Edge Functions ----------
+#
+# verify_jwt = false means Supabase's gateway does NOT check the Authorization
+# header before the function runs. That is required here, not a shortcut: the
+# import function accepts a personal "vr_..." token from the laptop watcher as
+# well as a user's JWT, and the gateway rejects anything that is not a JWT with
+# "UNAUTHORIZED_INVALID_JWT_FORMAT" before the function ever sees it.
+#
+# The function is not unprotected. It authenticates every request itself, and
+# refuses anything without valid credentials — a JWT it verifies with getUser(),
+# or a token whose SHA-256 hash it looks up and whose owner must be on the
+# allowlist. Verified against the deployed function: a request with no
+# credentials comes back 401 "Not signed in".
+[functions.vr-import]
+verify_jwt = false

@@ -18,6 +18,7 @@
 
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2';
 import { hashToken, readAuthorization } from './core/tokens.mjs';
+import { pickKey } from './core/keys.mjs';
 
 export const SCHEMA = 'viralradar';
 
@@ -27,6 +28,29 @@ export class AuthError extends Error {
     super(message);
     this.status = status;
   }
+}
+
+/**
+ * Why a lookup against the database failed.
+ *
+ * These functions reach the database through PostgREST, exactly as the browser
+ * does, so they hit the same wall when the schema is not in the Data API's
+ * exposed list. Reporting that as "try again in a moment" sends someone
+ * refreshing forever, because it will never come right on its own.
+ */
+function lookupFailed(error: { message?: string; code?: string }): AuthError {
+  const message = error?.message ?? '';
+  // The detail goes to the function's log, never to the caller: a stranger
+  // probing with made-up tokens should learn nothing about the inside.
+  console.error(`[vr-import] token lookup failed: ${error?.code ?? '?'} ${message}`);
+  if (/PGRST106|invalid schema|schema must be one of/i.test(message) || error?.code === 'PGRST106') {
+    return new AuthError(
+      'ViralRadar is not switched on in Supabase yet: add "viralradar" under '
+      + 'Project Settings -> API -> Data API -> Exposed schemas.',
+      503,
+    );
+  }
+  return new AuthError('Could not check that import token. Try again in a moment.', 503);
 }
 
 export type Caller = {
@@ -41,13 +65,10 @@ export type Caller = {
 // and then using them fails with "Legacy API keys are disabled". So prefer the
 // new ones and keep the old as a fallback, rather than assuming either.
 //
-// The PUBLISHABLE/SECRET variables can hold more than one key while a rotation
-// is in progress, comma separated; the first is the current one.
-const firstOf = (value: string | undefined) => (value ?? '').split(',')[0].trim();
-
+// pickKey lives in shared/ because getting it wrong is silent: see keys.mjs.
 const url = () => Deno.env.get('SUPABASE_URL') ?? '';
-const anonKey = () => firstOf(Deno.env.get('SUPABASE_PUBLISHABLE_KEYS')) || firstOf(Deno.env.get('SUPABASE_ANON_KEY'));
-const serviceKey = () => firstOf(Deno.env.get('SUPABASE_SECRET_KEYS')) || firstOf(Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'));
+const anonKey = () => pickKey(Deno.env.get('SUPABASE_PUBLISHABLE_KEYS'), Deno.env.get('SUPABASE_ANON_KEY'));
+const serviceKey = () => pickKey(Deno.env.get('SUPABASE_SECRET_KEYS'), Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'));
 
 const options = { db: { schema: SCHEMA }, auth: { persistSession: false, autoRefreshToken: false } };
 
@@ -61,6 +82,9 @@ function userClient(jwt: string): SupabaseClient {
 
 /** A client that bypasses RLS. Only ever used behind a verified token. */
 function serviceClient(): SupabaseClient {
+  // An empty key here does not fail loudly: the client simply has no privileges
+  // and every query comes back "permission denied".
+  if (!serviceKey()) console.error("[vr-import] no usable service key in SUPABASE_SECRET_KEYS or SUPABASE_SERVICE_ROLE_KEY");
   return createClient(url(), serviceKey(), options);
 }
 
@@ -96,7 +120,7 @@ export async function authenticate(req: Request): Promise<Caller> {
     .eq('token_hash', tokenHash)
     .maybeSingle();
 
-  if (error) throw new AuthError('Could not check that import token. Try again in a moment.', 503);
+  if (error) throw lookupFailed(error);
   if (!token) {
     // Same wording whether the token never existed or has been revoked.
     throw new AuthError('That import token is not valid. Make a new one in Settings.');
@@ -110,7 +134,7 @@ export async function authenticate(req: Request): Promise<Caller> {
     .eq('user_id', token.user_id)
     .maybeSingle();
 
-  if (allowedError) throw new AuthError('Could not check that import token. Try again in a moment.', 503);
+  if (allowedError) throw lookupFailed(allowedError);
   if (!allowed) {
     throw new AuthError('That import token belongs to an account that is not allowed to use ViralRadar.', 403);
   }

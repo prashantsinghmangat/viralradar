@@ -47,7 +47,7 @@ and the source for the one-time data migration.
    │ SUPABASE  (project "tracebug", shared with another app)         │
    │                                                                 │
    │  Postgres — schema "viralradar", 8 tables, RLS on every one     │
-   │  Auth     — email magic link (auth.users is shared)             │
+   │  Auth     — email + password (auth.users is shared)             │
    │  Edge Functions (Deno):                                         │
    │     vr-import          JWT or vr_ token                         │
    │     vr-generate        holds GEMINI / OPENROUTER keys           │
@@ -182,7 +182,7 @@ supabase/
     _shared/cors.ts    allow-list of origins, no wildcard
     _shared/auth.ts    JWT vs vr_ token, and the storage port
     _shared/core/      GENERATED copy of shared/*.mjs — see below
-    vr-import/         the only function built so far
+    vr-import/         deployed. vr-generate and vr-refresh-trends
 
 scripts/             sync-shared, inspect-db, test-rls, rls-plan, db-url
 public/              the frontend (still the local version)
@@ -251,26 +251,46 @@ kept; the cloud version changes where the data comes from and adds the AI.
 |---|---|
 | 1. Branch and baseline | **done** |
 | 2. Shared cores extracted | **done** — local app still passes its original tests |
-| 3. Schema, RLS, isolation test | **done and verified against the real database** |
-| 4. `vr-import` | **built**, not yet deployed |
+| 3. Schema, RLS, isolation test | **done, verified against the real database** |
+| 4. `vr-import` | **done, deployed and probed live** |
 | 4. `vr-generate` | not started |
 | 4. `vr-refresh-trends` | not started |
 | 5. pg_cron daily refresh | not started |
-| 6. Frontend on supabase-js + Realtime | not started |
+| 6. Frontend on supabase-js + Realtime | **done, deployed** |
 | 7. Generate / Write script / Paste buttons | not started |
-| 8. PWA + Netlify | not started |
+| 8. Netlify build and deploy | **done** — PWA (manifest, service worker) still to do |
 | 9. Watcher as a standalone script | not started |
 | 10. SQLite → cloud migration script | not started |
 | 11. README rewrite | SETUP.md done; README still describes the local app |
 
-**Done by hand so far:** migrations pushed, schema exposed, account created and
-on the allowlist, all three API keys in Supabase secrets, code on GitHub.
+### What works today
+
+Open **https://ytshortradar.netlify.app**, sign in with an email and password,
+and Ideas, Scripts, Results, Import and Settings all read and write the real
+database. An import on one device shows up on the other within a second or two.
+
+### What does not work yet
+
+- **Radar is empty and "Refresh now" fails** — `vr-refresh-trends` is not
+  written, so nothing has ever collected trends. Phase 4/5.
+- **"Generate ideas", "Write script" and "Test AI" fail** — `vr-generate` is not
+  written. Phase 4/7.
+- **No "Paste from Shorts Studio" button** yet; the paste box and file upload on
+  the Import screen both work. Phase 7.
+- **Not installable to a home screen** — no manifest or service worker. Phase 8.
+- **No folder watcher** and **no migration from the old SQLite file**. Phases 9
+  and 10.
+
+**Done by hand so far:** migrations pushed, schema exposed to the Data API,
+account created with a password and on the allowlist, all three API keys in
+Supabase secrets, `ALLOWED_ORIGINS` set, code on GitHub, Netlify deploying from
+`main`, `vr-import` deployed.
 
 ---
 
 ## 10. Testing
 
-`npm test` — **116 tests**, no network, no database, no keys needed.
+`npm test` — **174 tests**, no network, no database, no keys needed.
 
 `npm run test:rls` — **193 assertions and 4 proofs** against the real Supabase
 database. It connects as `postgres`, which owns the tables and therefore
@@ -289,6 +309,13 @@ Other things the suite checks that are easy to get wrong:
 - migrations never touch `public` or `auth`, never drop, never delete rows
 - the cloud and local importers produce identical messages
 - the generated copies under `supabase/functions/` match their originals
+
+A deployed Edge Function cannot be run here, so it is **probed over HTTP**
+instead: a pre-flight from the real site gets CORS headers and one from any
+other site gets none; a GET is refused; a request with no credentials, an
+unknown import token and an expired session each come back with their own
+message. That is six of the function's paths checked against the live thing.
+The success path is covered in Node against a fake store.
 
 Where a check could pass vacuously, it has been **tamper-tested**: the mistake is
 introduced on purpose, the suite is confirmed to fail, and the file is restored.
@@ -319,6 +346,19 @@ introduced on purpose, the suite is confirmed to fail, and the file is restored.
   the first run against the real database; nothing offline could have caught it.
 - *A clause check that only matched correct clauses* — gating an update's
   `USING` half but not its `WITH CHECK` half passed. Found by tamper-testing.
+- *The gateway rejected import tokens before the function ran* — Supabase
+  verifies the Authorization header as a JWT by default, so a `vr_...` token
+  came back "UNAUTHORIZED_INVALID_JWT_FORMAT" and the watcher could never have
+  worked. Fixed with `verify_jwt = false` in config.toml; the function does its
+  own authentication either way. Found by probing the deployed function.
+- *A mangled service key failed silently* — the key variable held a list in a
+  shape the first parser did not expect, so the client was built with no
+  privileges and every query came back "permission denied for schema
+  viralradar", which reads like a database problem and is not. Now in
+  shared/keys.mjs with its own tests.
+- *A build-time check reported success without looking* — it treated any 401
+  as "schema exposed, anon refused", when the 401 was the project rejecting
+  the key. It said step 4 was done when it had not been.
 - *A bare `Bearer` header* was classified as a JWT and would have been forwarded
   as one.
 - *`decodeURIComponent` throws on a stray `%`* — exactly the password that sends
@@ -328,17 +368,26 @@ introduced on purpose, the suite is confirmed to fail, and the file is restored.
 
 ## 12. Known gaps
 
-- **Nothing is deployed yet.** `vr-import` has never run on Supabase.
 - **Deno is not installed on this machine**, so the functions cannot be
-  type-checked or executed locally. TypeScript parses them, and the untestable
-  layer is kept deliberately thin — all behaviour lives in `shared/*.mjs`.
-- Two things only a deploy can confirm: that `jsr:@supabase/supabase-js@2`
-  resolves, and that `--use-api` bundles `_shared/core/` as expected.
-- **OpenRouter key is not set locally**, so provider *fallback* cannot yet be
-  tested against two real providers. Gemini is set in both `.env` and Supabase
-  secrets; OpenRouter and YouTube are in Supabase secrets only.
-- Realtime between two devices, and the PWA install, can only be checked by hand
-  once the frontend is deployed.
+  type-checked or executed locally. TypeScript parses them, the untestable layer
+  is kept deliberately thin — all behaviour lives in `shared/*.mjs` — and the
+  deployed function is probed over HTTP instead (see §10).
+- **`vr-import` has not yet been used to import a real file.** Its six refusal
+  paths are verified against the deployed function; the success path has only
+  been tested against a fake store in Node. Importing anything from the app
+  settles it.
+- **OpenRouter key is not set locally**, so provider *fallback* cannot be tested
+  against two real providers. Gemini is in both `.env` and Supabase secrets;
+  OpenRouter and YouTube are in Supabase secrets only.
+- **Realtime between two devices** has not been watched happening, and there is
+  no PWA to install yet.
+- The **allowlist** has one entry. The other three accounts in this project can
+  sign in and will see an empty app that saves nothing — by design, but it has
+  not been confirmed by signing in as one of them.
+
+Two things that were unknown until the first deploy, now settled: the
+`jsr:@supabase/supabase-js@2` import resolves, and `--use-api` does bundle the
+`_shared/core/` copies.
 
 ---
 
@@ -350,9 +399,11 @@ introduced on purpose, the suite is confirmed to fail, and the file is restored.
 | `npm run test:rls` | isolation test against the real database | `DATABASE_URL` |
 | `npm run inspect:db` | read-only report plus a setup checklist | `DATABASE_URL`, optionally `SUPABASE_URL`/`SUPABASE_ANON_KEY` |
 | `npm run sync:shared` | refresh the copy under `supabase/functions/` | nothing |
-| `npm start` | the old local app (branch `main`) | nothing |
+| `npm run build` | build the site into dist/, as Netlify does | `SUPABASE_URL`, `SUPABASE_ANON_KEY` |
+| `npm start` | the old local app (branch `local-sqlite` only) | nothing |
 | `npx supabase db push` | apply migrations | logged in, linked |
 | `npx supabase secrets list` | names and hashes of the secrets | logged in, linked |
+| `npx supabase functions deploy vr-import --use-api` | deploy a function without Docker | logged in, linked |
 
 Environment: Node 24, Supabase CLI 2.120.0, PostgreSQL 17.6, project
 `tracebug` (shared with another app), region `ap-south-1`.
