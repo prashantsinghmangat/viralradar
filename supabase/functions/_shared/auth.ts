@@ -36,9 +36,18 @@ export type Caller = {
   via: 'jwt' | 'token';
 };
 
+// Supabase hands a function both the new keys and the legacy ones. A project
+// can have the legacy anon/service_role keys switched off — this one does —
+// and then using them fails with "Legacy API keys are disabled". So prefer the
+// new ones and keep the old as a fallback, rather than assuming either.
+//
+// The PUBLISHABLE/SECRET variables can hold more than one key while a rotation
+// is in progress, comma separated; the first is the current one.
+const firstOf = (value: string | undefined) => (value ?? '').split(',')[0].trim();
+
 const url = () => Deno.env.get('SUPABASE_URL') ?? '';
-const anonKey = () => Deno.env.get('SUPABASE_ANON_KEY') ?? '';
-const serviceKey = () => Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+const anonKey = () => firstOf(Deno.env.get('SUPABASE_PUBLISHABLE_KEYS')) || firstOf(Deno.env.get('SUPABASE_ANON_KEY'));
+const serviceKey = () => firstOf(Deno.env.get('SUPABASE_SECRET_KEYS')) || firstOf(Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'));
 
 const options = { db: { schema: SCHEMA }, auth: { persistSession: false, autoRefreshToken: false } };
 

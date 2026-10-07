@@ -394,10 +394,17 @@ keeps tracebug awake too.
 
 6. **Deploy**.
 
-Both values come from **Project Settings → API Keys**. You want the
-**publishable** key — on older projects it is labelled **anon / public**. It is
-safe in a browser: Row Level Security is what protects your data, which is what
-Step 5 proved.
+Both values come from **Project Settings → API Keys**. You want the key that
+begins **`sb_publishable_`**.
+
+**Not the long `eyJ...` one.** That is the legacy anon key, and this project has
+legacy keys switched off (they were disabled on 2026-07-19). Using it gives
+"Legacy API keys are disabled" when you try to sign in. `npm run build` now asks
+the project whether it accepts the key and refuses to build if it does not, so
+this fails at deploy time rather than on the sign-in screen.
+
+The publishable key is safe in a browser: Row Level Security is what protects
+your data, which is what Step 5 proved.
 
 **Never use the secret / `service_role` key here.** That one bypasses all
 security. It belongs only in Supabase secrets.
@@ -523,6 +530,7 @@ It is safe to run twice: imports match on id, so nothing duplicates.
 | `ENOTFOUND` or a timeout from `npm run test:rls` | You used the Direct connection string. Switch to the pooled one (**Shared pooler**, port 5432). |
 | `password authentication failed` | Wrong database password in `DATABASE_URL`. Reset it under Project Settings → Database. |
 | `Access token not provided` from a supabase command | Run `npx supabase login` first (Step 3). That is the CLI signing in to your account, not the database password. |
+| `Legacy API keys are disabled` when signing in | `SUPABASE_ANON_KEY` is the old `eyJ...` key. Use the `sb_publishable_...` one in Netlify and in `.env`, then deploy again. |
 | App loads but every screen is empty, no error | `viralradar` is probably missing from **Exposed schemas** (Step 4). |
 | Logged in fine, but everything is empty and nothing saves | You are not on the allowlist (Step 6b). This is also exactly what a tracebug account sees. |
 | `permission denied for schema viralradar` | Same as above, or the migrations have not been pushed. |

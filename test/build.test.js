@@ -82,7 +82,7 @@ test('env.js carries the two public values and nothing else', async () => {
 
 test('a real build produces the app, the configuration and the vendored library', async () => {
   const { build } = await import('../scripts/build.mjs');
-  const { files } = build({ env: GOOD, builtAt: '2026-10-07T00:00:00.000Z' });
+  const { files } = await build({ env: GOOD, builtAt: '2026-10-07T00:00:00.000Z', check: false });
 
   for (const expected of ['index.html', 'app.js', 'styles.css', 'env.js', 'vendor/supabase.js']) {
     assert.ok(files.includes(expected), `dist/${expected} is missing`);
@@ -105,8 +105,8 @@ test('a secret that somehow reaches the output stops the build and deletes it', 
   const { build } = await import('../scripts/build.mjs');
   // "ViralRadar" really is in index.html, so this stands in for a secret whose
   // value happens to appear in a built file. The guard must notice and refuse.
-  assert.throws(
-    () => build({ env: { ...GOOD, GEMINI_API_KEY: 'ViralRadar' }, builtAt: '2026-10-07T00:00:00.000Z' }),
+  await assert.rejects(
+    () => build({ env: { ...GOOD, GEMINI_API_KEY: 'ViralRadar' }, builtAt: '2026-10-07T00:00:00.000Z', check: false }),
     /Refusing to publish.*GEMINI_API_KEY appears in dist/s,
   );
   assert.equal(fs.existsSync(DIST), false, 'a build that leaked must not be left on disk');
@@ -114,10 +114,49 @@ test('a secret that somehow reaches the output stops the build and deletes it', 
 
 test('an incomplete configuration fails the build rather than deploying a broken site', async () => {
   const { build } = await import('../scripts/build.mjs');
-  assert.throws(() => build({ env: { SUPABASE_URL: '', SUPABASE_ANON_KEY: '' } }), /Cannot build the site/);
+  await assert.rejects(() => build({ env: { SUPABASE_URL: '', SUPABASE_ANON_KEY: '' } }), /Cannot build the site/);
   // On Netlify the message should point at the Netlify UI, not at a local file.
-  assert.throws(() => build({ env: { NETLIFY: 'true' } }), /Netlify: Site configuration/);
-  assert.throws(() => build({ env: {} }), /your \.env file/);
+  await assert.rejects(() => build({ env: { NETLIFY: 'true' } }), /Netlify: Site configuration/);
+  await assert.rejects(() => build({ env: {} }), /your \.env file/);
+});
+
+test('a key the project refuses stops the build, naming the fix', async () => {
+  const { verifyKey, build } = await import('../scripts/build.mjs');
+  const reply = (status, body) => async () => ({ status, json: async () => body });
+
+  // The failure that sent me looking: a project with the legacy anon and
+  // service_role keys switched off, handed a legacy key anyway. Well formed,
+  // correct project, and refused — which only showed up on the sign-in screen.
+  const legacy = await verifyKey('https://examplerefabcdefghij.supabase.co', 'eyJ...', reply(401, {
+    message: 'Legacy API keys are disabled',
+    hint: 'Your legacy API keys (anon, service_role) were disabled on 2026-07-19. Use the new publishable key.',
+  }));
+  assert.equal(legacy.ok, false);
+  assert.match(legacy.problem, /legacy API keys switched off/);
+  assert.match(legacy.problem, /sb_publishable_/, 'the message has to say what to use instead');
+
+  // Any other refusal is still a refusal, and repeats what the server said.
+  const other = await verifyKey('https://examplerefabcdefghij.supabase.co', 'nonsense', reply(401, { message: 'Invalid API key' }));
+  assert.equal(other.ok, false);
+  assert.match(other.problem, /Invalid API key/);
+
+  // A working key passes.
+  assert.equal((await verifyKey('https://examplerefabcdefghij.supabase.co', 'sb_publishable_x', reply(200, {}))).ok, true);
+
+  // No network is not a failure: an offline build should still produce a site.
+  const offline = await verifyKey('https://examplerefabcdefghij.supabase.co', 'k', async () => { throw new Error('getaddrinfo ENOTFOUND'); });
+  assert.equal(offline.ok, true);
+  assert.equal(offline.checked, false);
+
+  // And the build refuses to go on when the key is refused.
+  const refusing = { ...GOOD, VR_SKIP_KEY_CHECK: '0' };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = reply(401, { hint: 'Your legacy API keys were disabled.' });
+  try {
+    await assert.rejects(() => build({ env: refusing }), /legacy API keys switched off/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });
 
 test('netlify.toml matches how the build actually works', () => {

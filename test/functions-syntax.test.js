@@ -90,6 +90,12 @@ test('the token path sets the owner itself and checks the allowlist', () => {
   assert.match(source, /user_id: caller\.userId|userId: caller\.userId/, 'rows must carry an explicit owner');
   assert.match(source, /last_used_at/);
   assert.match(source, /SUPABASE_SERVICE_ROLE_KEY/);
+  // A project can have the legacy anon/service_role keys switched off, and
+  // this one does. Supabase injects both sets, so the new ones come first.
+  assert.match(source, /SUPABASE_PUBLISHABLE_KEYS/, 'the legacy anon key fails outright when legacy keys are disabled');
+  assert.match(source, /SUPABASE_SECRET_KEYS/);
+  const publishableFirst = source.indexOf('SUPABASE_PUBLISHABLE_KEYS') < source.indexOf("SUPABASE_ANON_KEY'))");
+  assert.ok(publishableFirst, 'the new key must be preferred, with the legacy one only as a fallback');
   // The service key must never be handed to a client built from a user's JWT.
   const userClient = source.slice(source.indexOf('function userClient'), source.indexOf('function serviceClient'));
   assert.ok(!/serviceKey/.test(userClient), 'the user client must never be built with the service key');

@@ -74,6 +74,52 @@ export function readConfig(env = process.env) {
   return { url, anonKey, problems };
 }
 
+/**
+ * Ask the project whether it actually accepts this key.
+ *
+ * A key can be perfectly well formed and still be refused — most commonly when
+ * a project has the legacy anon/service_role keys switched off and is handed
+ * one anyway. That failure otherwise shows up much later, as "Legacy API keys
+ * are disabled" on the sign-in screen, which is a long way from the cause.
+ *
+ * Returns { ok, problem }. A network failure is not a problem: an offline build
+ * should still produce a site.
+ */
+export async function verifyKey(url, key, fetchImpl = globalThis.fetch) {
+  let response;
+  try {
+    response = await fetchImpl(`${url}/auth/v1/health`, {
+      headers: { apikey: key, Authorization: `Bearer ${key}` },
+    });
+  } catch {
+    return { ok: true, problem: null, checked: false }; // no network; carry on
+  }
+
+  if (response.status !== 401 && response.status !== 403) return { ok: true, problem: null, checked: true };
+
+  let hint = '';
+  try {
+    const body = await response.json();
+    hint = body.hint || body.message || body.msg || '';
+  } catch { /* no body to read */ }
+
+  if (/legacy api keys/i.test(hint)) {
+    return {
+      ok: false,
+      checked: true,
+      problem: 'This project has the legacy API keys switched off, and SUPABASE_ANON_KEY is a legacy one.\n'
+        + '  Use the new publishable key instead: Supabase -> Project Settings -> API Keys ->\n'
+        + '  the key beginning sb_publishable_. Update it in Netlify and in .env, then deploy again.',
+    };
+  }
+  return {
+    ok: false,
+    checked: true,
+    problem: `The project refused SUPABASE_ANON_KEY (HTTP ${response.status}).${hint ? `\n  ${hint}` : ''}\n`
+      + '  Check you copied the publishable key for this project.',
+  };
+}
+
 /** The contents of dist/env.js. The only generated file carrying configuration. */
 export function envScript({ url, anonKey }, builtAt) {
   return `// Generated at build time by scripts/build.mjs. Do not edit, do not commit.
@@ -92,7 +138,7 @@ function listFiles(dir, prefix = '') {
   return out;
 }
 
-export function build({ env = process.env, builtAt = new Date().toISOString() } = {}) {
+export async function build({ env = process.env, builtAt = new Date().toISOString(), check = true } = {}) {
   const config = readConfig(env);
   if (config.problems.length) {
     const where = env.NETLIFY
@@ -103,6 +149,14 @@ export function build({ env = process.env, builtAt = new Date().toISOString() } 
 
   if (!existsSync(SUPABASE_UMD)) {
     throw new Error(`The supabase-js browser bundle is missing:\n  ${SUPABASE_UMD}\nRun npm install first.`);
+  }
+
+  // Ask the project whether it actually accepts this key, so one it refuses
+  // fails here rather than on the sign-in screen. Set VR_SKIP_KEY_CHECK=1 to
+  // build without asking.
+  if (check && env.VR_SKIP_KEY_CHECK !== '1') {
+    const verdict = await verifyKey(config.url, config.anonKey);
+    if (!verdict.ok) throw new Error(`Cannot build the site.\n\n  ${verdict.problem}\n`);
   }
 
   rmSync(OUT_DIR, { recursive: true, force: true });
@@ -143,12 +197,14 @@ if (process.argv[1] && process.argv[1].endsWith('build.mjs')) {
     try { (await import('dotenv')).config({ quiet: true }); } catch { /* fine without it */ }
   }
   try {
-    const { files, bytes, url } = build();
+    const { files, bytes, url } = await build();
     console.log(`Built dist/ — ${files.length} files, ${Math.round(bytes / 1024)} KB`);
     console.log(`  Supabase: ${url}`);
     for (const f of files) console.log(`  ${f}`);
   } catch (e) {
     console.error(`\n${e.message}`);
-    process.exit(1);
+    // exitCode rather than exit(), so an in-flight request can finish closing
+    // instead of tripping an assertion on the way out.
+    process.exitCode = 1;
   }
 }
