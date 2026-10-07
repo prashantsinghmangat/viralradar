@@ -211,13 +211,31 @@ optional — see Step 15.
 
 ## Step 7. Get the three API keys
 
-All free. Save each one in a notepad file for now — do not put them in `.env`,
-and never paste them into the browser. They go into Supabase in Part 2.
+All free. **Never paste a key into the app itself or into the browser.**
+
+Each key goes in up to two places, and nowhere else:
+
+- **Supabase secrets** (Part 2, Step 9) — required. This is where the deployed
+  functions read them from. They never reach your phone or your browser.
+- **`.env` on this laptop** — optional. Only so the tests can call the real
+  providers instead of a stand-in. `.env` is gitignored, so it stays here.
 
 **Gemini** (main AI)
-1. Go to https://aistudio.google.com/apikey
-2. Sign in with your Google account → **Create API key**
-3. Copy it. Free tier, with a daily request limit.
+1. Go to **https://aistudio.google.com/apikey** and sign in with your Google
+   account.
+2. Click **Create API key**.
+3. If it asks about a Google Cloud project, choose **Create API key in new
+   project** — the simplest option, and nothing else will use it.
+4. Copy the key. It starts with `AIza...` and is shown in full whenever you go
+   back to that page, so it is not a once-only secret like the database one.
+5. Optional, for the tests: add it to `.env` as
+   ```
+   GEMINI_API_KEY=AIza...
+   ```
+
+Free tier, with a per-day request limit. The model is set in ViralRadar's
+Settings (default `gemini-2.5-flash`), so if your account does not have free
+access to a particular model you can change it there without touching any code.
 
 **OpenRouter** (backup AI, used when Gemini is out of quota)
 1. Go to https://openrouter.ai and sign up
