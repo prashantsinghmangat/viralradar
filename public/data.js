@@ -55,6 +55,33 @@ export function createData(client) {
       const session = await auth.session();
       return session?.user ?? null;
     },
+    /**
+     * Sign in with an email and password.
+     *
+     * The password is never in this code or in the repository: it lives hashed
+     * in Supabase, set from the dashboard. Nothing in the browser could hold a
+     * password safely — the files are served to anyone who asks for them.
+     */
+    async signInWithPassword(email, password) {
+      const address = String(email || '').trim();
+      if (!address) throw new Error('Enter your email address.');
+      if (!password) throw new Error('Enter your password.');
+
+      const { data: result, error } = await client.auth.signInWithPassword({ email: address, password });
+      if (error) {
+        const message = error.message || '';
+        // Deliberately the same wording for a wrong address and a wrong
+        // password, so neither tells you which accounts exist.
+        if (/invalid login credentials/i.test(message)) throw new Error('Wrong email or password.');
+        if (/email not confirmed/i.test(message)) {
+          throw new Error('That account is not confirmed yet. Confirm it in Supabase, under Authentication → Users.');
+        }
+        if (/rate limit|too many/i.test(message)) throw new Error('Too many attempts. Wait a minute and try again.');
+        throw new Error(readable(error, 'sign in'));
+      }
+      return result?.session ?? null;
+    },
+
     /** Send the magic link. The address it returns to must be allow-listed in Supabase. */
     async signIn(email, redirectTo) {
       const address = String(email || '').trim();

@@ -108,8 +108,37 @@ test('user text is escaped wherever it is put into HTML', () => {
 });
 
 test('the sign-in screen explains itself without jargon', () => {
+  const screen = appjs.slice(appjs.indexOf('function renderLogin'), appjs.indexOf('actions.signInPassword'));
+  assert.match(screen, /stays signed in/i, 'people should know it is once per device, not every visit');
+  assert.ok(!/magic link|OTP|JWT|RLS/i.test(screen.replace(/sign-in link/gi, '')), 'say what it does, not what it is called');
+});
+
+test('no password or credential is baked into the shipped files', () => {
+  // Everything in public/ is served to whoever asks for it, so a password in
+  // the code is a password everyone has. The only safe place for one is
+  // Supabase, which stores it hashed and never gives it back.
+  const files = fs.readdirSync(PUBLIC).filter((n) => /\.(js|html|css)$/.test(n));
+  const assigned = /(password|passwd|secret|pwd)\s*[:=]\s*['"`]([^'"`]{3,})['"`]/gi;
+  // Naming an input, or an autocomplete hint, is not a stored credential.
+  const harmless = /^(current-password|new-password|password|Your password|#password)$/i;
+
+  const suspicious = [];
+  for (const name of files) {
+    const source = fs.readFileSync(path.join(PUBLIC, name), 'utf8');
+    for (const m of source.matchAll(assigned)) {
+      if (harmless.test(m[2])) continue;
+      suspicious.push(`${name}: ${m[0]}`);
+    }
+  }
+  assert.deepEqual(suspicious, [], `these look like credentials in shipped code:\n  ${suspicious.join('\n  ')}`);
+});
+
+test('the sign-in screen asks for a password and keeps the link as a fallback', () => {
   const screen = appjs.slice(appjs.indexOf('function renderLogin'), appjs.indexOf('actions.sendLink'));
-  assert.match(screen, /no password/i, 'people need to be told there is no password to remember');
-  assert.match(screen, /spam/i, 'the first thing that goes wrong is the email landing in spam');
-  assert.ok(!/magic link|OTP|JWT/i.test(screen.replace(/sign-in link/gi, '')), 'say what it does, not what it is called');
+  assert.match(screen, /type="password"/, 'there has to be a password field');
+  assert.match(screen, /autocomplete="current-password"/, 'so a password manager can fill it');
+  assert.match(screen, /autocomplete="username"/);
+  assert.match(screen, /signInPassword/, 'the primary action is signing in with the password');
+  assert.match(screen, /sendLink/, 'the email link stays as a way back in');
+  assert.match(screen, /stays signed in/i, 'people should know it is once per device');
 });

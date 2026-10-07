@@ -178,29 +178,67 @@ view.addEventListener('click', async (e) => {
 const actions = {};
 
 // ================= SIGN IN =================
+//
+// Email and password. The password is not in this code and not in the
+// repository: it lives hashed in Supabase, and nothing here could hold one
+// safely, because every file on this page is served to whoever asks for it.
+//
+// Signing in once per device is the whole cost. The session renews itself, so
+// this screen should not come back unless the browser's data is cleared.
 function renderLogin(message = '') {
   document.body.classList.add('signed-out');
   $('#nav').hidden = true;
   view.innerHTML = `
     <div class="signin">
       <h1>ViralRadar</h1>
-      <p class="muted">Sign in with your email. There is no password: you get a link that signs you in.</p>
+      <p class="muted">Sign in once on this device. It stays signed in afterwards.</p>
       ${message ? `<div class="notice">${esc(message)}</div>` : ''}
       <div class="card stack" style="max-width:420px">
         <label class="field" for="email">Email address</label>
-        <input type="email" id="email" autocomplete="email" inputmode="email" placeholder="you@example.com" spellcheck="false">
-        <div><button type="button" class="primary" data-action="sendLink">Email me a sign-in link</button></div>
+        <input type="email" id="email" autocomplete="username" inputmode="email" placeholder="you@example.com" spellcheck="false">
+        <label class="field" for="password">Password</label>
+        <input type="password" id="password" autocomplete="current-password" placeholder="Your password">
+        <div><button type="button" class="primary" data-action="signInPassword">Sign in</button></div>
         <div id="signinResult"></div>
+        <p class="muted small" style="margin:0">
+          Forgotten it? <button type="button" class="linkish" data-action="sendLink">Email me a sign-in link instead</button>
+        </p>
       </div>
-      <p class="muted small" style="margin-top:16px">Only accounts that have been allowed can use ViralRadar. If the link does not arrive, check your spam folder.</p>
+      <p class="muted small" style="margin-top:16px">Only accounts that have been allowed can use ViralRadar.</p>
     </div>`;
-  const input = $('#email');
-  if (input) {
-    try { input.value = localStorage.getItem('vr-email') || ''; } catch { /* private mode */ }
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') actions.sendLink($('[data-action=sendLink]')); });
-    input.focus();
+  const email = $('#email');
+  if (email) {
+    try { email.value = localStorage.getItem('vr-email') || ''; } catch { /* private mode */ }
+    email.focus();
+    if (email.value) $('#password').focus();
+  }
+  for (const id of ['#email', '#password']) {
+    $(id).addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') actions.signInPassword($('[data-action=signInPassword]'));
+    });
   }
 }
+
+actions.signInPassword = async (btn) => {
+  const email = $('#email').value.trim();
+  const password = $('#password').value;
+  const box = $('#signinResult');
+  btn.disabled = true;
+  btn.textContent = 'Signing in…';
+  box.innerHTML = '';
+  try {
+    await data.auth.signInWithPassword(email, password);
+    try { localStorage.setItem('vr-email', email); } catch { /* private mode */ }
+    // onAuthStateChange takes it from here and draws the app.
+  } catch (e) {
+    box.innerHTML = `<div class="badge bad" style="display:block;border-radius:10px;padding:10px 12px;white-space:normal">${esc(e.message)}</div>`;
+    $('#password').value = '';
+    $('#password').focus();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Sign in';
+  }
+};
 
 actions.sendLink = async (btn) => {
   const email = $('#email').value.trim();
@@ -214,7 +252,7 @@ actions.sendLink = async (btn) => {
     btn.textContent = 'Send another link';
   } catch (e) {
     box.innerHTML = `<div class="badge bad" style="display:block;border-radius:10px;padding:10px 12px;white-space:normal">${esc(e.message)}</div>`;
-    btn.textContent = 'Email me a sign-in link';
+    btn.textContent = 'Email me a sign-in link instead';
   } finally {
     btn.disabled = false;
   }

@@ -176,10 +176,22 @@ Your login. Do this now, because the daily schedule needs your user id.
 1. **Authentication → Users → Add user → Create new user**
 2. Enter your email. Tick **Auto Confirm User** so you do not have to click a
    confirmation link.
-3. A password is fine to set but you will not use it — the app logs in with a
-   magic link sent to your email.
+3. **Set a password.** This is the one you will type to sign in. Pick something
+   only you know — nobody else, including whoever wrote this, ever sees it:
+   Supabase stores a hash, not the password.
 4. Click your new user in the list and copy the **User UID** (a long
    `xxxxxxxx-xxxx-...` string).
+
+**To change the password later:** Authentication → Users → click your user →
+**Reset password**, or send yourself a sign-in link from the app and set a new
+one.
+
+> **Why the password cannot live in the code.** Everything the site serves —
+> every `.js` and `.html` file — is downloaded by the browser and readable by
+> anyone who opens it. A password written into the app would be a password
+> everybody has. Keeping it in Supabase is what makes "only I know it" true. A
+> test fails the build if anything that looks like a credential appears in the
+> shipped files.
 
 **Save that UID somewhere.** I need it in Part 2 for the daily schedule.
 

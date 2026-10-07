@@ -274,3 +274,5 @@ tr:last-child td { border-bottom: 0; }
 .signin > p { margin: 0 0 18px; }
 .signin input[type="email"] { font-size: 1rem; }
 body.signed-out .topbar .brand { pointer-events: none; }
+/* A button that reads as a link, for the secondary sign-in route. */
+.linkish { background: none; border: 0; padding: 0; font: inherit; color: var(--accent, #2a78d6); text-decoration: underline; cursor: pointer; }

@@ -335,3 +335,42 @@ test('a database error on a read surfaces as a readable failure, not empty data'
   const client = fakeClient({ respond: () => ({ data: null, error: { message: 'permission denied for table ideas' } }) });
   await assert.rejects(() => createData(client).ideas.list(), /not allowed to use ViralRadar/);
 });
+
+test('signing in with a password sends exactly what was typed, trimmed', async () => {
+  const { createData } = await load();
+  let sent = null;
+  const client = fakeClient({ auth: { signInWithPassword: async (o) => { sent = o; return { data: { session: { user: { id: USER } } }, error: null }; } } });
+  const session = await createData(client).auth.signInWithPassword('  me@example.com  ', 'a real password');
+
+  assert.deepEqual(sent, { email: 'me@example.com', password: 'a real password' });
+  assert.equal(session.user.id, USER);
+});
+
+test('a wrong password and an unknown address give the same answer', async () => {
+  const { createData } = await load();
+  // Different wording would let someone work out which accounts exist.
+  const client = fakeClient({ auth: { signInWithPassword: async () => ({ data: null, error: { message: 'Invalid login credentials' } }) } });
+  await assert.rejects(() => createData(client).auth.signInWithPassword('me@example.com', 'wrong'), /Wrong email or password./);
+});
+
+test('the other sign-in failures are explained rather than passed through', async () => {
+  const { createData } = await load();
+  const cases = [
+    ['Email not confirmed', /not confirmed yet/],
+    ['Request rate limit reached', /Wait a minute/],
+  ];
+  for (const [message, expected] of cases) {
+    const client = fakeClient({ auth: { signInWithPassword: async () => ({ data: null, error: { message } }) } });
+    await assert.rejects(() => createData(client).auth.signInWithPassword('me@example.com', 'x'), expected);
+  }
+});
+
+test('an empty email or password never reaches the server', async () => {
+  const { createData } = await load();
+  let called = false;
+  const client = fakeClient({ auth: { signInWithPassword: async () => { called = true; return { data: null, error: null }; } } });
+  const auth = createData(client).auth;
+  await assert.rejects(() => auth.signInWithPassword('', 'pw'), /Enter your email/);
+  await assert.rejects(() => auth.signInWithPassword('me@example.com', ''), /Enter your password/);
+  assert.equal(called, false);
+});
