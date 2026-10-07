@@ -36,18 +36,24 @@ These unblock me. After step 2 the database is real and I can stop guessing.
 ## Step 1. Point the tools at your database
 
 1. Open the Supabase dashboard and pick your **tracebug** project.
-2. Go to **Project Settings → Database → Connection string**.
-3. Click the **Session pooler** tab. **Not** "Direct connection" — that one is
+2. Click **Connect** at the top of the page, next to the branch name.
+3. Choose the **Direct / Connection string** tab (the database icon). That tab
+   means "connect straight to Postgres" rather than through a client library —
+   it is not only the direct-connection string.
+4. Use the **pooled** string, labelled **Shared pooler** (older wording: Session
+   pooler). You can recognise it by three things: the host ends in
+   `.pooler.supabase.com`, the port is `5432`, and the user is
+   `postgres.<project-ref>` — with a dot, not plain `postgres`.
+   ```
+   postgresql://postgres.abcdefghijkl:[YOUR-PASSWORD]@aws-1-ap-south-1.pooler.supabase.com:5432/postgres
+   ```
+   Avoid the **Direct connection** string (host `db.<ref>.supabase.co`): it is
    IPv6-only and usually does not work from a home internet connection.
-4. Copy the string. It looks like this:
-   ```
-   postgresql://postgres.abcdefghijkl:[YOUR-PASSWORD]@aws-0-ap-south-1.pooler.supabase.com:5432/postgres
-   ```
 5. In `D:\Project\viralradar`, copy `.env.example` to `.env` if you have not
    already. Open `.env` in Notepad and add the line, with `[YOUR-PASSWORD]`
    replaced by your real database password:
    ```
-   DATABASE_URL=postgresql://postgres.abcdefghijkl:your-real-password@aws-0-ap-south-1.pooler.supabase.com:5432/postgres
+   DATABASE_URL=postgresql://postgres.abcdefghijkl:your-real-password@aws-1-ap-south-1.pooler.supabase.com:5432/postgres
    ```
    If you have forgotten the password: **Project Settings → Database → Reset
    database password**. Resetting it does not affect tracebug's data, but if
@@ -381,7 +387,7 @@ It is safe to run twice: imports match on id, so nothing duplicates.
 
 | What you see | What it means |
 |---|---|
-| `ENOTFOUND` or a timeout from `npm run test:rls` | You used the Direct connection string. Switch to **Session pooler**. |
+| `ENOTFOUND` or a timeout from `npm run test:rls` | You used the Direct connection string. Switch to the pooled one (**Shared pooler**, port 5432). |
 | `password authentication failed` | Wrong database password in `DATABASE_URL`. Reset it under Project Settings → Database. |
 | App loads but every screen is empty, no error | `viralradar` is probably missing from **Exposed schemas** (Step 4). |
 | `permission denied for schema viralradar` | Same as above, or the migrations have not been pushed. |

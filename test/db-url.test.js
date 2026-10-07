@@ -92,6 +92,11 @@ test('a hand-edited pooler username is flagged', () => {
 
 test('the instructions name the button to click and the shape to expect', () => {
   assert.match(WHERE_TO_FIND, /Connect/);
-  assert.match(WHERE_TO_FIND, /Session pooler/);
+  assert.match(WHERE_TO_FIND, /Direct \/ Connection string/);
+  // The dashboard calls the pooled string "Shared pooler"; it used to say
+  // "Session pooler", so both namings are spelled out for whoever reads this.
+  assert.match(WHERE_TO_FIND, /Shared pooler/);
+  assert.match(WHERE_TO_FIND, /Session[\s\S]{0,6}pooler/);
   assert.match(WHERE_TO_FIND, /pooler.supabase.com:5432/);
+  assert.match(WHERE_TO_FIND, /postgres.<project-ref>/);
 });

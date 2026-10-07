@@ -127,10 +127,13 @@ export const WHERE_TO_FIND = `
 Where to find the right string:
   1. Open your project in the Supabase dashboard.
   2. Click "Connect" at the top of the page (next to the branch name).
-  3. Choose the "Session pooler" option.
-  4. Copy it, and replace [YOUR-PASSWORD] with your database password.
+  3. Pick the "Direct / Connection string" tab. That tab means "connect straight
+     to Postgres" rather than through a client library; it is not only the
+     direct-connection string.
+  4. Use the pooled string, labelled "Shared pooler" (older wording: "Session
+     pooler"). Copy it and replace [YOUR-PASSWORD] with your database password.
 
   The right one looks like:
-    postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres
+    postgresql://postgres.<project-ref>:<password>@aws-<n>-<region>.pooler.supabase.com:5432/postgres
   host ends in .pooler.supabase.com, port is 5432, user is postgres.<project-ref>
 `;
