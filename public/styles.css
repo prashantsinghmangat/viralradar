@@ -276,3 +276,16 @@ tr:last-child td { border-bottom: 0; }
 body.signed-out .topbar .brand { pointer-events: none; }
 /* A button that reads as a link, for the secondary sign-in route. */
 .linkish { background: none; border: 0; padding: 0; font: inherit; color: var(--accent, #2a78d6); text-decoration: underline; cursor: pointer; }
+
+/* ---------- edit plan ---------- */
+/* Shown under the teleprompter when a script carries one. */
+.edit-plan { margin-top: 4px; }
+.edit-plan .timeline { list-style: none; margin: 0; padding: 0; counter-reset: step; }
+.edit-plan .timeline li { padding: 10px 0; border-bottom: 1px solid var(--line, #2a2a2a); }
+.edit-plan .timeline li:last-child { border-bottom: 0; padding-bottom: 0; }
+.edit-plan .step-head { font-weight: 600; }
+.edit-plan .step-head .sep { opacity: .45; margin: 0 .5em; }
+.edit-plan .on-screen { margin-top: 3px; }
+.edit-plan .checklist { margin: 0; padding-left: 1.1em; }
+.edit-plan .checklist li { margin: 4px 0; }
+.edit-plan dl { margin: 0; }

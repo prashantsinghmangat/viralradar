@@ -76,6 +76,21 @@ test('the page ships no secret, and loads nothing from another host', () => {
   }
 });
 
+test('every module the browser imports is actually shipped', () => {
+  // There is no bundler: an import the browser cannot resolve is a 404 and a
+  // blank screen. Adding shared/edit-plan.mjs without adding it to the list the
+  // build ships nearly did exactly that.
+  const missing = [];
+  for (const name of fs.readdirSync(PUBLIC).filter((n) => n.endsWith('.js'))) {
+    const source = fs.readFileSync(path.join(PUBLIC, name), 'utf8');
+    for (const m of source.matchAll(/from\s+['"](\.[^'"]+)['"]/g)) {
+      const target = path.resolve(PUBLIC, m[1]);
+      if (!fs.existsSync(target)) missing.push(`${name} imports ${m[1]}, which is not in public/`);
+    }
+  }
+  assert.deepEqual(missing, [], `${missing.join('\n  ')}\n  Add it to BROWSER_SHARED and run: npm run sync:shared`);
+});
+
 test('the client targets the viralradar schema', () => {
   // Without this every query hits "public", which belongs to the other app in
   // this Supabase project. It would fail confusingly rather than loudly.
@@ -91,7 +106,7 @@ test('user text is escaped wherever it is put into HTML', () => {
   assert.ok(htmlLiterals.length > 10, `expected to find the screens, found ${htmlLiterals.length} HTML templates`);
 
   // Values that escape for themselves, or that cannot carry user text.
-  const safe = /^(esc\(|fmt\(|compact\(|ago\(|when\(|copyBtn\(|hbars\(|format\(|KIND_ICON|SOURCE|LIVE_LABEL|STAGES|LENGTHS|DEFAULT_AI_ORDER)/;
+  const safe = /^(esc\(|fmt\(|compact\(|ago\(|when\(|copyBtn\(|hbars\(|format\(|renderEditPlan\(|KIND_ICON|SOURCE|LIVE_LABEL|STAGES|LENGTHS|DEFAULT_AI_ORDER)/;
   const bad = [];
   for (const literal of htmlLiterals) {
     for (const m of literal.matchAll(/\$\{([^{}]*)\}/g)) {

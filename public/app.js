@@ -8,6 +8,7 @@
 import { data, readable } from './data.js';
 import { newToken, hashToken } from './shared/tokens.mjs';
 import { LENGTHS, DEFAULT_AI_ORDER } from './shared/defaults.mjs';
+import { readEditPlan, editPlanText } from './shared/edit-plan.mjs';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -486,6 +487,8 @@ async function renderScriptDetail(id) {
       </div>
     </section>
 
+    ${renderEditPlan(s)}
+
     <div class="outputs grid">
       ${outputs.map(([label, value]) => `<div class="card out">
         <div class="out-head"><h3>${esc(label)}</h3>${copyBtn(value)}</div>
@@ -494,6 +497,55 @@ async function renderScriptDetail(id) {
     </div>
     <p style="margin-top:20px"><button type="button" class="sm ghost" data-action="deleteScript" data-id="${esc(s.id)}">Delete script</button></p>`;
 }
+// ---- edit plan ----
+//
+// Shorts Studio can attach a shooting-and-editing plan to a script. It has no
+// column of its own: it rides along in `raw`, so it has been arriving since the
+// first import. Scripts without one show nothing at all, which is most of them.
+function renderEditPlan(script) {
+  const plan = readEditPlan(script);
+  if (!plan) return '';
+
+  const step = (s) => {
+    const head = [s.at, s.clip, s.action].filter(Boolean).map(esc).join('<span class="sep">·</span>');
+    const detail = [
+      s.text && `<div class="on-screen">“${esc(s.text)}”</div>`,
+      s.sfx && `<div class="muted small">🔊 ${esc(s.sfx)}</div>`,
+      s.tip && `<div class="muted small">💡 ${esc(s.tip)}</div>`,
+    ].filter(Boolean).join('');
+    return `<li>${head ? `<div class="step-head">${head}</div>` : ''}${detail}</li>`;
+  };
+
+  const music = [
+    plan.music.mood && ['Mood', plan.music.mood],
+    plan.music.search && ['Search for', plan.music.search],
+    plan.music.volume && ['Volume', plan.music.volume],
+  ].filter(Boolean);
+  const cover = [
+    plan.cover.frame && ['Frame', plan.cover.frame],
+    plan.cover.text && ['Text', plan.cover.text],
+  ].filter(Boolean);
+
+  const block = (title, body) => (body ? `<section class="card stack"><h3>${title}</h3>${body}</section>` : '');
+  const pairs = (rows) => `<dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`;
+
+  return `
+    <section class="edit-plan">
+      <div class="page-head" style="margin-top:22px">
+        <h2 style="margin:0">Edit plan${plan.total_sec ? ` <span class="muted small">${plan.total_sec}s</span>` : ''}</h2>
+        ${copyBtn(editPlanText(plan), 'Copy edit plan', 'sm primary')}
+      </div>
+      ${plan.timeline.length ? `<section class="card"><ol class="timeline">${plan.timeline.map(step).join('')}</ol></section>` : ''}
+      <div class="grid">
+        ${block('Captions', plan.captions ? `<p class="small">${esc(plan.captions)}</p>` : '')}
+        ${block('Music', music.length ? pairs(music) : '')}
+        ${block('Cover', cover.length ? pairs(cover) : '')}
+        ${block('Before you post', plan.checklist.length
+          ? `<ul class="checklist">${plan.checklist.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>` : '')}
+      </div>
+    </section>`;
+}
+
 actions.setStage = async (btn) => {
   try { await data.scripts.setStage(btn.dataset.id, btn.dataset.v); render(); }
   catch (e) { toast(e.message, true); }

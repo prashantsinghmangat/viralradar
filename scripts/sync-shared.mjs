@@ -32,7 +32,8 @@ export const BROWSER_DIR = join(ROOT, 'public', 'shared');
 //   time      "today" in IST, so a day means the same thing everywhere
 //   tokens    an import token is made and hashed in the browser, so the token
 //             itself never travels anywhere it does not have to
-export const BROWSER_SHARED = ['stats.mjs', 'defaults.mjs', 'time.mjs', 'tokens.mjs'];
+//   edit-plan the shooting plan a script can carry, read out of raw
+export const BROWSER_SHARED = ['stats.mjs', 'defaults.mjs', 'time.mjs', 'tokens.mjs', 'edit-plan.mjs'];
 
 const BANNER = [
   '// GENERATED FILE - DO NOT EDIT.',
