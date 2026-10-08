@@ -9,6 +9,7 @@ import { data, readable } from './data.js';
 import { newToken, hashToken } from './shared/tokens.mjs';
 import { LENGTHS, DEFAULT_AI_ORDER } from './shared/defaults.mjs';
 import { readEditPlan, editPlanText } from './shared/edit-plan.mjs';
+import { lessonLabel } from './shared/learning.mjs';
 import {
   MAX_FILE_BYTES, POSTED_RETENTION_DAYS, TOTAL_BYTES_CAP,
   checkUpload, cleanDeviceName, downloadUrl, formatBytes, guessDeviceName, itemPreview, usageSummary,
@@ -376,6 +377,7 @@ async function renderRadar() {
         <div class="actions">
           <a class="btn sm" href="${esc(t.url)}" target="_blank" rel="noopener noreferrer">Open ↗</a>
           <button type="button" class="btn sm primary" data-action="writeScript" data-topic="${esc([t.title, t.summary].filter(Boolean).join(' — ').slice(0, 300))}">✍️ Write script</button>
+          ${ANGLES_BUTTON([t.title, t.summary].filter(Boolean).join(' — ').slice(0, 300))}
           ${copyBtn(copy, 'Copy', 'sm')}
         </div>
       </div>
@@ -391,6 +393,7 @@ async function renderRadar() {
       ${day ? `<span>Collected ${esc(day)}</span>` : '<span>Not run yet. Tap “Refresh now”, or wait for 7:00 AM IST.</span>'}
       <span class="badge accent" title="search.list costs 100 units, videos.list costs 1">YouTube today: ${yt.requests} searches · ${fmt(yt.units)} units</span>
     </div>
+    ${renderAngles()}
     <div class="chips" style="margin-bottom:14px">
       ${[['', 'All'], ...Object.entries(SOURCE).map(([k, v]) => [k, v.label])].map(([k, l]) =>
         `<button type="button" class="chip ${radarSource === k ? 'on' : ''}" data-action="radarSource" data-v="${k}">${esc(l)}</button>`).join('')}
@@ -409,6 +412,77 @@ actions.refreshRadar = async (btn) => {
   } catch (e) { toast(e.message, true); }
   render();
 };
+
+// ================= ANGLES =================
+//
+// The step between "here is a trend" and "here is a script".
+//
+// Asking for a script straight off a trending video gives you the video
+// somebody else already made. Asking for angles first gives five different ways
+// in — tried it on something odd, did not believe it, three more like it — and
+// then the script is written to whichever one you pick.
+//
+// They are never stored. An angle is a decision on the way to a script, and
+// writing five of them to the database every time a trend was looked at would
+// fill the Ideas screen with things nobody chose to make. They live here until
+// dismissed, and render at the top of whichever screen asked for them.
+let angles = null; // { topic, items: [...], personalised, resultsCount }
+
+function renderAngles() {
+  if (!angles) return '';
+  const cards = angles.items.map((a, i) => `
+    <article class="card angle">
+      <div class="rank">${esc(a.type || `Angle ${i + 1}`)}</div>
+      <h3>${esc(a.title || '(untitled)')}</h3>
+      ${a.hook ? `<div class="angle-hook">“${esc(a.hook)}”</div>` : ''}
+      ${a.twist ? `<div class="muted small">${esc(a.twist)}</div>` : ''}
+      <div class="actions">
+        <button type="button" class="sm primary" data-action="writeAngle" data-i="${i}">✍️ Write this angle</button>
+        ${copyBtn([a.title, a.hook, a.twist].filter(Boolean).join('\n'), 'Copy', 'sm')}
+      </div>
+    </article>`).join('');
+
+  return `
+    <section class="angles-block">
+      <div class="page-head" style="margin-bottom:8px">
+        <h2 style="margin:0;font-size:1rem">🎯 Angles on: ${esc(angles.topic.slice(0, 80))}</h2>
+        ${angles.personalised ? `<span class="badge accent">${esc(lessonLabel({ active: true, count: angles.resultsCount }))}</span>` : ''}
+        <button type="button" class="sm ghost" data-action="closeAngles">✕ Close</button>
+      </div>
+      <p class="muted small">Pick one. The script is then written to that angle rather than to the plainest
+        version of the subject — which is the one everybody else made.</p>
+      <div class="grid">${cards}</div>
+    </section>`;
+}
+
+actions.closeAngles = () => { angles = null; render(); };
+
+/** Ask for angles on a subject. The button carries the topic. */
+actions.findAngles = async (btn) => {
+  const topic = btn.dataset.topic;
+  if (!topic) { toast('Nothing to find angles on.', true); return; }
+  const result = await askAi(btn, { kind: 'angles', topic });
+  if (!result) return;
+  angles = {
+    topic,
+    items: result.angles || [],
+    personalised: result.personalised === true,
+    resultsCount: result.results_count || 0,
+  };
+  render();
+  window.scrollTo(0, 0);
+};
+
+actions.writeAngle = (btn) => {
+  const angle = angles && angles.items[Number(btn.dataset.i)];
+  if (!angle) { toast('That angle is no longer there.', true); return; }
+  // The topic goes with it: the angle says how, the topic says what.
+  return askAi(btn, { kind: 'script', topic: angles.topic, angle });
+};
+
+/** "🎯 Find angles" — on anything that could become a video. */
+const ANGLES_BUTTON = (topic) =>
+  `<button type="button" class="btn sm" data-action="findAngles" data-topic="${esc(topic)}">🎯 Find angles</button>`;
 
 // ================= IDEAS =================
 let ideaFilter = 'all';
@@ -439,11 +513,16 @@ async function renderIdeas() {
             </div>
             ${copyBtn([i.title, i.hook, i.tool, i.show, i.why].filter(Boolean).join('\n'), 'Copy')}
           </div>
+          <div class="actions">
+            <button type="button" class="sm primary" data-action="writeScript" data-topic="${esc([i.title, i.hook, i.tool].filter(Boolean).join(' — ').slice(0, 300))}">✍️ Write script</button>
+            ${ANGLES_BUTTON([i.title, i.hook, i.tool].filter(Boolean).join(' — ').slice(0, 300))}
+          </div>
         </article>`).join('')}</div>
     </section>`).join('');
 
   return `
     <div class="page-head"><h1>Ideas</h1><button type="button" class="primary" data-action="generateIdeas">✨ Generate ideas</button>${PASTE_BUTTON()}</div>
+    ${renderAngles()}
     <div class="chips" style="margin-bottom:14px">
       ${[['all', 'All'], ['new', 'New'], ['picked', 'Picked'], ['skipped', 'Skipped']].map(([k, l]) =>
         `<button type="button" class="chip ${ideaFilter === k ? 'on' : ''}" data-action="ideaFilter" data-v="${k}">${l} · ${counts[k] || 0}</button>`).join('')}
@@ -1623,6 +1702,7 @@ async function renderImport() {
 // limit for now", "No AI key is set" — and are shown as they are.
 const GENERATING = {
   ideas: 'Writing ideas… up to 40 sec',
+  angles: 'Finding angles… up to 40 sec',
   script: 'Writing script… up to 40 sec',
   edit_plan: 'Planning the edit… up to 40 sec',
 };
@@ -1634,7 +1714,10 @@ async function askAi(btn, body) {
   try {
     const result = await data.ai.generate(body);
     const by = result.provider ? ` (by ${result.provider})` : '';
-    toast((result.message || 'Done') + by);
+    // Say when the creator's own results shaped it. Silent when they did not,
+    // which is the honest state until there are five logged videos.
+    const tuned = result.personalised ? ` · ${lessonLabel({ active: true, count: result.results_count })}` : '';
+    toast((result.message || 'Done') + by + tuned);
     render();
     return result;
   } catch (e) {

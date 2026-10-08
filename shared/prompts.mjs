@@ -3,7 +3,7 @@
 // identical to imported ones. Kept here (not in the function) so the browser
 // can show them and the tests can assert on them.
 
-export const CTAS = ['save this', 'follow for more', 'comment for link'];
+export const CTAS = ['save this', 'follow for a new tool every day', 'comment for the link'];
 
 export const RULES = [
   'Stop the scroll in the first 2 seconds: the first line must be the hook, never a greeting or an intro.',
@@ -11,11 +11,25 @@ export const RULES = [
   'One idea per video. Do not bundle several tools or tips into one script.',
   'Only free tools a viewer can try in under a minute: no signup walls, no paid plans, no installs.',
   'Honest claims only. No "this will make you rich", no invented numbers, no fake urgency.',
-  `Vary the call to action between videos; pick one of: ${CTAS.join(' / ')}.`,
+  // Cutting on a fixed rhythm is what makes a short feel padded in the middle:
+  // the cut should land where the viewer learns something new, not on a timer.
+  'Cut when the information changes, not on a beat. A new shot earns its place by showing something the last one did not.',
+  // One, chosen on purpose. "Comment for the link" is a promise, and a promise
+  // nobody keeps costs more than no call to action at all.
+  `Exactly one call to action, at the end, chosen from: ${CTAS.join(' / ')}. `
+    + 'Only use "comment for the link" if a link really will be sent to everyone who comments; otherwise pick another.',
   'Plain spoken language, short sentences, no jargon, no emoji inside the spoken lines.',
 ];
 
 const rulesBlock = () => RULES.map((r, i) => `${i + 1}. ${r}`).join('\n');
+
+/**
+ * What the creator's own results say, if there is enough of it to say anything.
+ *
+ * Empty string when there is not, so every prompt can include it
+ * unconditionally and a new channel's prompts are unchanged.
+ */
+const lessonBlock = (lesson) => (lesson && lesson.summary ? `\n${lesson.summary}\n` : '');
 
 // A shape carries the real date rather than a "YYYY-MM-DD (today)" placeholder:
 // a smaller model copied that parenthetical straight into its answer and the
@@ -52,7 +66,7 @@ Return exactly this shape:
 ${wrapper.replace('SHAPE', shape)}`;
 
 export function ideasPrompt(
-  { keywords = [], language = 'English', length = '30s', count = 6, today = new Date().toISOString().slice(0, 10) } = {},
+  { keywords = [], language = 'English', length = '30s', count = 6, today = new Date().toISOString().slice(0, 10), lesson = null } = {},
 ) {
   const niche = keywords.length ? keywords.join(', ') : 'free AI tools and useful websites';
   return `You write short-video ideas for a creator whose niche is: ${niche}.
@@ -62,19 +76,80 @@ Today is ${today}.
 
 Rules:
 ${rulesBlock()}
-
+${lessonBlock(lesson)}
 ${jsonOnly(ideaShape(today), '{ "items": [ SHAPE ] }')}`;
 }
 
-export function scriptPrompt({ topic, language = 'English', length = '30s', today } = {}) {
+// ---------- angles ----------
+//
+// The step between "here is a trend" and "here is a script".
+//
+// Pasting a trending video and asking for a script gives you the same video
+// somebody else already made. Asking for angles first gives you a way into the
+// subject that is yours: the same tool, approached as an experiment, or as a
+// challenge, or by someone who did not believe it. The creator picks, then the
+// script is written to that choice.
+//
+// Nothing here is stored. An angle is a decision, not an item.
+export const ANGLE_TYPES = [
+  ['Discovery', 'you found it and are showing it off — the plainest version'],
+  ['Experiment', 'you tried it on something specific and unusual, and show what happened'],
+  ['Challenge', 'you set yourself a limit — time, budget, one attempt — and see if it holds up'],
+  ['Reaction/Skeptic', 'you did not believe it worked, and tested it to find out'],
+  ['List', 'this one plus two or three more like it, fast'],
+  ['Comparison', 'this one against the obvious alternative, with a verdict'],
+  ['Mistake', 'the thing everyone gets wrong about it, corrected'],
+];
+
+const ANGLE_SHAPE = `{
+  "type": "one of the angle types listed above",
+  "title": "the video this angle becomes, as a working title",
+  "hook": "the exact first spoken line for this angle, under 12 words",
+  "twist": "what makes this different from simply showing the tool"
+}`;
+
+export function anglesPrompt({ topic, language = 'English', length = '30s', count = 5, today, lesson = null } = {}) {
+  const types = ANGLE_TYPES.map(([name, what]) => `- ${name}: ${what}`).join('\n');
+  return `A creator who demos free tools and useful websites has found this subject:
+
+${topic}
+
+Give ${count} genuinely different ways to make a ${length} vertical short video about it.
+Spoken language: ${language}. Today is ${today}.
+
+The angle types to choose from:
+${types}
+
+Every angle must use a DIFFERENT type, and each must be a different video — not
+the same video with a different title. If two angles would end up filming the
+same thing, replace one of them.
+
+Rules the eventual script will have to follow:
+${rulesBlock()}
+${lessonBlock(lesson)}
+${jsonOnly(ANGLE_SHAPE, '{ "angles": [ SHAPE ] }')}`;
+}
+
+export function scriptPrompt({ topic, language = 'English', length = '30s', today, angle = null, lesson = null } = {}) {
+  // An angle chosen from the angles screen. The topic alone would produce the
+  // plainest possible treatment of it, which is the one everybody else made.
+  const angleBlock = angle && (angle.type || angle.title) ? `
+The creator has chosen this angle, and the script must take it:
+  type:  ${angle.type || 'not given'}
+  title: ${angle.title || 'not given'}
+  hook:  ${angle.hook || 'write your own'}
+  twist: ${angle.twist || 'not given'}
+Keep the angle's twist as the spine of the video. If the hook above works, use it.
+` : '';
+
   return `You write short-video scripts for a creator who demos free tools and useful websites.
 
 Write one complete ${length} vertical short-video script about: ${topic}
 Spoken language: ${language}. Today is ${today}.
-
+${angleBlock}
 Rules:
 ${rulesBlock()}
-
+${lessonBlock(lesson)}
 Beats must cover the whole ${length} with timecodes that add up to it (for example 0-3s, 3-10s, 10-22s, 22-30s).
 The spoken lines together must be readable aloud within ${length}.
 

@@ -319,6 +319,9 @@ shared/              runtime-agnostic cores — Node, Deno and the browser all u
   generate-core.mjs    ask an AI, fall back to the next, repair bad JSON
   prompts.mjs          prompt rules, output shapes, JSON extraction
   edit-plan.mjs        read and render the optional edit_plan on a script
+  learning.mjs         what logged results say, as something a prompt can lean
+                       on — with the thresholds that keep it quiet until there
+                       is enough to say
   radar.mjs            run every trend source, dedupe by URL (no writes)
   sources/*.mjs        youtube, hackernews, reddit, github
   stats.mjs            results analytics (runs in the browser in the cloud build)
@@ -370,7 +373,7 @@ public/              the whole frontend — no build step, no framework
 
 scripts/             build, sync-shared, inspect-db, test-rls, rls-plan,
                      db-url, make-icons
-test/                26 files, 379 tests
+test/                27 files, 396 tests
 ```
 
 **Why `_shared/core/` is a copy.** A deployed Edge Function only receives files
@@ -410,8 +413,8 @@ kept; the cloud version changes where the data comes from and adds the AI.
 
 | Screen | Today | Cloud version adds |
 |---|---|---|
-| **Radar** | trend cards by source, velocity score, Refresh now | "Write script" on any trend card |
-| **Ideas** | grouped by day, Picked / Skip, filters | **Generate ideas**, and "Write script" on an idea |
+| **Radar** | trend cards by source, velocity score, Refresh now | **Write script** and **Find angles** on any trend card |
+| **Ideas** | grouped by day, Picked / Skip, filters | **Generate ideas**, and **Write script** / **Find angles** on every idea |
 | **Scripts** | board: To shoot → Shot → Edited → Posted, drag or arrows; detail view with teleprompter and copy buttons | arrives live when generated or imported elsewhere; the **edit plan** below the teleprompter, and **Make edit plan** when a script has none |
 | **Projects** | *new* | a folder per video: notes, links and files that reach the other device in a second. **Open project** from any script, an **Inbox** for anything shared in from Android, a per-item note saying which device it came from, and **Send a video** — straight to the other device over WebRTC, with the copy checked byte for byte |
 | **Results** | totals, avg views, save rate, streak, bars by format/hook/len/CTA, top 5, full table | same numbers, computed in the browser |
@@ -546,7 +549,7 @@ its service worker picks up the Share Target.
 
 ## 10. Testing
 
-`npm test` — **379 tests**, no network, no database, no keys needed. One
+`npm test` — **396 tests**, no network, no database, no keys needed. One
 more is skipped unless `VR_SLOW_TESTS=1`: it hashes 512 MB to check the digest
 at the size where the bit-length high word stops being zero.
 
@@ -623,6 +626,44 @@ fixtures created inside the transaction that rolls back and before
 `SET LOCAL ROLE`, no `delete from storage.objects` anywhere, the users deleted
 first and in their own `try`, and a failed cleanup naming all three users rather
 than two.
+
+### Angles, and learning from results
+
+**Angles** are the step between "here is a trend" and "here is a script". A new
+`kind` on `vr-generate` returns five ways into one subject, each a different
+*type* (Discovery, Experiment, Challenge, Reaction/Skeptic, List, Comparison,
+Mistake), and the prompt insists every angle be a different video rather than
+the same video retitled. Picking one writes the script to that angle.
+
+They are **deliberately not stored**. An angle is a decision on the way to a
+script, and writing five of them to the database every time a trend was looked
+at would fill the Ideas screen with things nobody chose to make. They live in
+memory until dismissed.
+
+**Learning** closes the loop the Results screen left open. `shared/learning.mjs`
+turns logged results into a block the ideas, angles and script prompts all
+carry — best and weakest format, hook, length and CTA. Two thresholds, and both
+exist to stop it being confident about nothing:
+
+- **5 results** before it says anything. Below that there is no pattern, and a
+  generator told "your best hook is X" after two videos narrows on an accident
+  and keeps narrowing.
+- **2 videos per group**, and **2 qualifying groups per dimension**. One video is
+  an anecdote — and worse, it is simultaneously the best and the worst of its
+  kind, so the summary would contradict itself. One group is vacuous: "your best
+  format is demo" means nothing if demo is the only format ever tried, which is
+  exactly where a new channel starts.
+
+It also names the **weakest**, not just the best, because telling a model only
+what works makes every suggestion the same shape. And it asks for roughly **one
+suggestion in five** to be deliberately different, so the generator does not
+converge on the one thing that has worked and stop finding anything new.
+
+Below the thresholds the prompts are byte-for-byte what they were, which a test
+asserts — personalisation has to be invisible on a new channel rather than an
+empty heading the model has to interpret. The edit-plan prompt is deliberately
+left out: past results have nothing to say about how to film a script that
+already exists.
 
 ### Testing the half that cannot be tested
 

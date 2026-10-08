@@ -39,9 +39,11 @@ export const BROWSER_DIR = join(ROOT, 'public', 'shared');
 //             verified without ever being in memory in one piece
 //   transfer  the device-to-device protocol: every decision a transfer makes,
 //             kept away from the untestable WebRTC wiring
+//   learning  what past results say: the UI shows when a generation was
+//             personalised, and both ends agree on the thresholds
 export const BROWSER_SHARED = [
   'stats.mjs', 'defaults.mjs', 'time.mjs', 'tokens.mjs', 'edit-plan.mjs',
-  'projects.mjs', 'sha256.mjs', 'transfer.mjs',
+  'projects.mjs', 'sha256.mjs', 'transfer.mjs', 'learning.mjs',
 ];
 
 const BANNER = [

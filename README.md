@@ -21,9 +21,10 @@ installable on your phone's home screen like an app.
 
 - **Radar** — today's trends, fastest-growing first, refreshed automatically at
   **7:00 AM IST**. *Copy for Shorts Studio* copies a title, link and one-line
-  summary ready to paste.
+  summary ready to paste; *Write script* and *Find angles* turn one into a video.
 - **Ideas** — your ideas by day. Mark each **Picked** or **Skip**. *Write ideas
-  with AI* adds fresh ones for your niche.
+  with AI* adds fresh ones for your niche, and every card has *Write script* and
+  *Find angles*.
 - **Scripts** — a board running *To shoot → Shot → Edited → Posted*. Drag cards
   on the laptop, tap the arrow on the phone. Open one for the big-text
   **teleprompter**, one-tap copy for every caption and hashtag, and the **edit
@@ -148,8 +149,35 @@ devices have it. **Not the video.** That is the whole point.
 
 ## Writing with AI
 
-**Ideas**, **Scripts** and the **edit plan** can each be written for you, using
-your niche keywords, language and target length from Settings.
+**Ideas**, **angles**, **Scripts** and the **edit plan** can each be written for
+you, using your niche keywords, language and target length from Settings.
+
+### Angles, before the script
+
+On any trend or idea there is **🎯 Find angles**. Instead of one script, it
+gives five different *ways in* to the same subject — you tried it on something
+odd, you did not believe it worked, three more like it, this one against the
+obvious alternative. Pick one and **✍️ Write this angle** writes the script to
+that choice.
+
+This is the difference between making the video somebody else already made and
+making your own. Angles are not saved: an angle is a decision on the way to a
+script, not something to keep.
+
+### It learns from your own results
+
+Once you have **5 logged videos**, every generation reads your Results first and
+leans towards what has actually worked for you — your best and weakest format,
+hook, length and CTA. You will see *Personalised from your N logged videos* when
+that is on.
+
+Two deliberate limits. A group needs **2 videos** before it counts, because one
+video is an anecdote. And roughly **one suggestion in five** is still asked to
+be deliberately different, so the generator does not converge on the one shape
+that has worked and stop surprising you.
+
+Below 5 results it says nothing and changes nothing — which is the honest state
+of a new channel.
 
 It asks **Gemini** first and falls back to **OpenRouter** if Gemini is busy or
 over its daily limit — so a 429 from one provider is not a dead end. Both are
@@ -213,7 +241,7 @@ deploys and the phone. It assumes nothing and says why each step exists.
 
 ```
 npm install
-npm test            # 379 tests. No network, no database, no keys needed.
+npm test            # 396 tests. No network, no database, no keys needed.
 npm run build       # builds the site into dist/ (Netlify runs this)
 ```
 

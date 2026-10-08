@@ -2,7 +2,7 @@
 //
 //   POST /functions/v1/vr-generate
 //   Authorization: Bearer <user JWT>
-//   Body: { kind: "ideas" | "script" | "edit_plan" | "test", ... }
+//   Body: { kind: "ideas" | "angles" | "script" | "edit_plan" | "test", ... }
 //
 // This function exists only because of the API keys. They are read from its
 // environment and never leave it — not to the browser, not to the phone, not
@@ -16,7 +16,8 @@
 import { authenticate, AuthError } from '../_shared/auth.ts';
 import { corsHeaders, json, preflight } from '../_shared/cors.ts';
 import { generateJson, testProviders } from '../_shared/core/generate-core.mjs';
-import { ideasPrompt, scriptPrompt, editPlanPrompt } from '../_shared/core/prompts.mjs';
+import { ideasPrompt, anglesPrompt, scriptPrompt, editPlanPrompt } from '../_shared/core/prompts.mjs';
+import { resultsLesson } from '../_shared/core/learning.mjs';
 import { runImport } from '../_shared/core/import-core.mjs';
 import { istDay } from '../_shared/core/time.mjs';
 import {
@@ -24,7 +25,7 @@ import {
   DEFAULT_KEYWORDS, DEFAULT_LANGUAGE, DEFAULT_LENGTH,
 } from '../_shared/core/defaults.mjs';
 
-const KINDS = ['ideas', 'script', 'edit_plan', 'test'];
+const KINDS = ['ideas', 'angles', 'script', 'edit_plan', 'test'];
 
 const keys = () => ({
   gemini: Deno.env.get('GEMINI_API_KEY') ?? '',
@@ -68,6 +69,31 @@ function storeFor(client: { from: Function }, userId: string) {
       if (error) throw new Error(`Could not save your ${table}: ${error.message}`);
     },
   };
+}
+
+/**
+ * What the creator's own results say, for the prompt to lean on.
+ *
+ * Read here rather than sent from the browser: the page could be out of date,
+ * and a lesson is only as good as the rows it came from. RLS limits this to
+ * the caller's own results, so there is nothing to filter by hand.
+ *
+ * Never worth failing a generation over — a lesson is an improvement, not a
+ * requirement, and resultsLesson() returns an inactive one from an empty list.
+ */
+async function lessonFor(client: { from: Function }, userId: string) {
+  try {
+    const { data, error } = await client
+      .from('results').select('format, hook, len, cta, views, saves').eq('user_id', userId);
+    if (error) {
+      console.warn(`[vr-generate] could not read results for personalisation: ${error.message}`);
+      return resultsLesson([]);
+    }
+    return resultsLesson(data ?? []);
+  } catch (e) {
+    console.warn(`[vr-generate] personalisation skipped: ${(e as Error).message}`);
+    return resultsLesson([]);
+  }
 }
 
 /** Every AI call is counted, so Settings can show what has been used. */
@@ -145,7 +171,65 @@ Deno.serve(async (req: Request) => {
       return json(req, { ok: true, kind, provider: result.provider, model: result.model, script_id: scriptId, edit_plan: result.value });
     }
 
+    // Every remaining kind leans on what has already worked, when there is
+    // enough of it to lean on.
+    const lesson = await lessonFor(client, userId);
+    const topic = String(body.topic ?? '').trim();
+
+    // ---- angles: ways into a subject, before any script exists ----
+    //
+    // Deliberately not stored. An angle is a choice the creator makes on the
+    // way to a script, not an item to keep: writing five of them to the
+    // database every time a trend was looked at would fill the Ideas screen
+    // with things nobody decided to make.
+    if (kind === 'angles') {
+      if (!topic) return json(req, { ok: false, error: 'What subject? No topic was sent.' }, 400);
+
+      const result = await generateJson({
+        ...ask,
+        prompt: anglesPrompt({ topic, language, length, count: Math.min(Math.max(Number(body.count) || 5, 3), 7), today, lesson }),
+      });
+      await countCall(client, userId, result.provider);
+
+      const raw = Array.isArray(result.value?.angles) ? result.value.angles
+        : Array.isArray(result.value) ? result.value : [];
+      const angles = raw
+        .filter((a: Record<string, unknown>) => a && (a.title || a.hook))
+        .slice(0, 7)
+        .map((a: Record<string, unknown>) => ({
+          type: String(a.type ?? '').trim(),
+          title: String(a.title ?? '').trim(),
+          hook: String(a.hook ?? '').trim(),
+          twist: String(a.twist ?? '').trim(),
+        }));
+
+      if (!angles.length) {
+        return json(req, { ok: false, error: `${result.provider} replied, but with no usable angles in it. Try again.` }, 502);
+      }
+
+      console.log(`[vr-generate] angles for "${topic.slice(0, 60)}" by ${result.provider}: ${angles.length}`);
+      return json(req, {
+        ok: true,
+        kind,
+        provider: result.provider,
+        model: result.model,
+        topic,
+        angles,
+        personalised: lesson.active,
+        results_count: lesson.count,
+        message: `${angles.length} angles from ${result.provider}`,
+      });
+    }
+
     // ---- ideas, or a script ----
+    if (kind === 'script' && !topic) {
+      return json(req, { ok: false, error: 'What should the script be about? No topic was sent.' }, 400);
+    }
+
+    // An angle chosen on the angles screen, carried through so the script takes
+    // it rather than producing the plainest treatment of the topic.
+    const angle = body.angle && typeof body.angle === 'object' ? body.angle as Record<string, string> : null;
+
     const prompt = kind === 'ideas'
       ? ideasPrompt({
         keywords: Array.isArray(body.keywords) && body.keywords.length ? body.keywords : settings.keywords,
@@ -153,12 +237,9 @@ Deno.serve(async (req: Request) => {
         length,
         count: Math.min(Math.max(Number(body.count) || 6, 1), 12),
         today,
+        lesson,
       })
-      : scriptPrompt({ topic: String(body.topic ?? '').trim(), language, length, today });
-
-    if (kind === 'script' && !String(body.topic ?? '').trim()) {
-      return json(req, { ok: false, error: 'What should the script be about? No topic was sent.' }, 400);
-    }
+      : scriptPrompt({ topic, language, length, today, angle, lesson });
 
     const result = await generateJson({ ...ask, prompt });
     await countCall(client, userId, result.provider);
@@ -196,6 +277,8 @@ Deno.serve(async (req: Request) => {
       count: stamped.length,
       ids: stamped.map((i: { id: string }) => i.id),
       message: imported.message,
+      personalised: lesson.active,
+      results_count: lesson.count,
     });
   } catch (e) {
     const message = (e as Error).message ?? 'Something went wrong.';

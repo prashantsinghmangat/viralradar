@@ -73,7 +73,7 @@ test('the service worker caches the shell and nothing else', () => {
   }
   // Every shared module the browser imports has to be in there too, or the app
   // will not start with no connection.
-  for (const name of ['stats', 'defaults', 'time', 'tokens', 'edit-plan', 'projects', 'sha256', 'transfer']) {
+  for (const name of ['stats', 'defaults', 'time', 'tokens', 'edit-plan', 'projects', 'sha256', 'transfer', 'learning']) {
     assert.ok(shell.includes(`/shared/${name}.mjs`), `shared/${name}.mjs is imported but never cached`);
   }
   // app.js imports this one directly, so it is part of the shell too.

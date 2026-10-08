@@ -241,6 +241,15 @@ th { font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; color:
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 tr:last-child td { border-bottom: 0; }
 
+/* Angles: five ways into one subject, before any script exists */
+.angles-block { margin-bottom: 18px; padding: 12px; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--accent-soft); }
+.angle { display: grid; gap: 6px; }
+.angle h3 { margin: 0; font-size: .95rem; line-height: 1.3; overflow-wrap: anywhere; }
+/* The hook is the one line that decides whether the video is watched, so it
+   reads as the quote it is rather than as another field. */
+.angle-hook { font-size: .9rem; font-weight: 600; overflow-wrap: anywhere; }
+.angle .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+
 /* Projects: folder cards, and what is inside one */
 .project { cursor: pointer; display: grid; gap: 4px; }
 .project:hover { border-color: var(--accent); }

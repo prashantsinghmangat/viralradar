@@ -108,9 +108,11 @@ test('user text is escaped wherever it is put into HTML', () => {
   // Values that escape for themselves, or that cannot carry user text.
   // Builders that escape whatever they are given, so their output is markup on
   // purpose rather than by accident.
-  // devicesLine() is in here with the other builders because it escapes every
-  // value it interpolates — see the test below, which holds it to that.
-  const safe = /^(esc\(|fmt\(|compact\(|ago\(|when\(|copyBtn\(|hbars\(|format\(|renderEditPlan\(|PASTE_BUTTON\(|makeButton\(|devicesLine\(|GENERATING\[|KIND_ICON|SOURCE|LIVE_LABEL|STAGES|LENGTHS|DEFAULT_AI_ORDER)/;
+  // devicesLine(), renderAngles() and ANGLES_BUTTON() are in here with the
+  // other builders because they escape every value they interpolate — see the
+  // tests below, which hold them to that. renderAngles in particular puts
+  // model-written text on screen, so it is the one that matters most.
+  const safe = /^(esc\(|fmt\(|compact\(|ago\(|when\(|copyBtn\(|hbars\(|format\(|renderEditPlan\(|PASTE_BUTTON\(|makeButton\(|devicesLine\(|renderAngles\(|ANGLES_BUTTON\(|GENERATING\[|KIND_ICON|SOURCE|LIVE_LABEL|STAGES|LENGTHS|DEFAULT_AI_ORDER)/;
   const bad = [];
   for (const literal of htmlLiterals) {
     for (const m of literal.matchAll(/\$\{([^{}]*)\}/g)) {
@@ -249,6 +251,65 @@ test('files are never served from a public URL', () => {
   // A public bucket would mean a URL that works for anyone who has it, forever.
   assert.match(datajs, /createSignedUrl/);
   assert.ok(!/getPublicUrl/.test(datajs + appjs), 'a public URL would outlive every policy in the database');
+});
+
+// ---------- angles ----------
+
+test('every value an angle puts on screen is escaped', () => {
+  // These are the only strings in the app written by a model and rendered as
+  // markup. It is on the safe list above, which is only true while this holds.
+  const fn = appjs.slice(appjs.indexOf('function renderAngles'), appjs.indexOf('actions.closeAngles'));
+  const interpolations = [...fn.matchAll(/\$\{([^{}]*)\}/g)].map((m) => m[1].trim());
+  assert.ok(interpolations.length >= 5, 'expected to find the values it interpolates');
+  for (const expr of interpolations) {
+    // Escaping builders, assembled pieces that are themselves checked, and the
+    // loop index — a number cannot carry markup.
+    const ok = expr.startsWith('esc(') || expr.startsWith('copyBtn(') || expr === 'cards'
+      || /^i( \+ \d+)?$/.test(expr) || /\.map\(|\.join\(|\?/.test(expr);
+    assert.ok(ok, `renderAngles puts ${expr} into HTML without escaping it`);
+  }
+  for (const field of ['a.type', 'a.title', 'a.hook', 'a.twist', 'angles.topic']) {
+    assert.ok(fn.includes(`esc(${field}`) || new RegExp(`esc\\(${field.replace('.', '\\.')}`).test(fn),
+      `${field} comes from the model and must be escaped`);
+  }
+});
+
+test('angles are a step before the script, and are never stored', () => {
+  // Writing five angles to the database every time a trend was looked at would
+  // fill the Ideas screen with things nobody chose to make.
+  const block = appjs.slice(appjs.indexOf('// ================= ANGLES'), appjs.indexOf('// ================= IDEAS'));
+  assert.ok(!/data\.ideas\.|data\.scripts\.|upsert|insert/.test(block), 'an angle is a decision, not a row');
+  assert.match(block, /let angles = null/, 'they live in memory until dismissed');
+  assert.match(block, /actions\.closeAngles/, 'and there has to be a way to dismiss them');
+
+  // Picking one writes a script to that angle, carrying the topic with it.
+  const write = block.slice(block.indexOf('actions.writeAngle'));
+  assert.match(write, /kind: 'script'/);
+  assert.match(write, /topic: angles\.topic/, 'the topic says what, the angle says how');
+  assert.match(write, /angle\b/);
+});
+
+test('Find angles is offered on both a trend and an idea', () => {
+  // The two places a subject arrives from. Pressing "Write script" straight off
+  // a trend gives you the video somebody else already made.
+  for (const screen of ['async function renderRadar', 'async function renderIdeas']) {
+    const start = appjs.indexOf(screen);
+    assert.ok(start > 0, `${screen} not found`);
+    const body = appjs.slice(start, appjs.indexOf('\n}', start));
+    assert.match(body, /ANGLES_BUTTON\(/, `${screen} has no "Find angles"`);
+    assert.match(body, /renderAngles\(\)/, `${screen} never shows the angles it asked for`);
+  }
+  assert.ok(appjs.includes('actions.findAngles ='));
+  assert.ok(appjs.includes('data-action="findAngles"'));
+});
+
+test('a personalised generation says so, and an unpersonalised one stays quiet', () => {
+  // "Personalised from your N logged videos" must never appear on a channel
+  // with four results: it would be a claim about a pattern that does not exist.
+  assert.match(appjs, /lessonLabel\(/);
+  const askAi = appjs.slice(appjs.indexOf('async function askAi'), appjs.indexOf('actions.generateIdeas'));
+  assert.match(askAi, /result\.personalised \?/, 'the badge has to be conditional on the server saying so');
+  assert.match(askAi, /result\.results_count/);
 });
 
 // ---------- sending a video between devices ----------
