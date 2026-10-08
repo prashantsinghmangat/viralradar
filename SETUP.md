@@ -1,10 +1,19 @@
 # ViralRadar cloud setup — everything you do by hand
 
-This is the full list of manual steps, in order. Each step says whether you can
-do it **now** or whether it is **waiting on code I have not written yet**.
+This is the full list of manual steps, in order.
 
-Nothing here is urgent. The local app keeps working the whole time on the
-`local-sqlite` branch: `git switch local-sqlite` then `npm start`.
+**All of these are done.** The app is live at
+https://ytshortradar.netlify.app, signs you in, syncs between laptop and phone,
+imports, generates and refreshes trends on schedule. The one exception is
+Step 16, the folder watcher, which is optional and not built yet.
+
+So this document now does two jobs: it is the **record** of how the live setup
+was put together, and the **recipe** if it ever has to be done again — a new
+Supabase project, a new machine, or a rebuild from scratch. Steps you have
+already done are marked ✅.
+
+The local app also still works, untouched, on the `local-sqlite` branch:
+`git switch local-sqlite` then `npm start`.
 
 **One rule above all others:** this Supabase project is shared with your
 tracebug app. **Never run `supabase db reset`.** It erases the entire database,
@@ -29,9 +38,10 @@ You already have the Supabase project (tracebug) and the Supabase CLI
 
 ---
 
-# PART 1 — Do these now
+# PART 1 — The database and your account ✅
 
-These unblock me. After step 2 the database is real and I can stop guessing.
+Everything in this part is done. After Step 2 the database stopped being a
+guess and became something the tests could check against.
 
 ## Step 1. Point the tools at your database
 
@@ -71,9 +81,10 @@ npm run inspect:db
 
 This only reads. It runs ten `SELECT` statements and changes nothing.
 
-**Paste the output back to me.** It tells us whether tracebug's tables are
-managed by the Supabase CLI, which changes one thing in how we document
-migrations. It also shows how much of the 500 MB free limit is used.
+It is the quickest way to see the real state of things: which tables exist, how
+many rows are in each, whether the schema is exposed to the browser, and how
+much of the 500 MB free limit is used. Worth running any time something looks
+wrong, before guessing.
 
 ## Step 3. Create the tables
 
@@ -112,9 +123,12 @@ Your project ref is the random-looking part of your project URL
 `supabase/.temp`, which is gitignored) or press Enter to skip, in which case
 `db push` asks for it instead.
 
-`db push` will ask you to confirm the two migrations. It creates a new schema
-called `viralradar` and eight tables inside it: the seven the app uses, plus
-`allowed_users`, which controls who may use ViralRadar at all. It does not touch
+`db push` lists the migrations it is about to apply and asks you to confirm.
+There are five, and they are safe to run against a project that already has
+some of them: it applies only the ones missing. Between them they create a
+schema called `viralradar` and eight tables inside it — the seven the app uses,
+plus `allowed_users`, which controls who may use ViralRadar at all — then the
+security policies, the daily schedule, and the model defaults. Nothing touches
 `public`, where tracebug lives.
 
 Check it worked: **Table Editor** → the schema dropdown (top left, probably says
@@ -296,14 +310,15 @@ checking once: run `git status` and confirm `.env` is not listed.
 
 ---
 
-# PART 2 — After I finish the Edge Functions
+# PART 2 — Keys and the Edge Functions ✅
 
-I will tell you when this part is ready. The commands are listed so you can see
-what is coming; they will not work before the function files exist.
+All three functions are deployed and all the secrets are set. The commands are
+here so the same thing can be done again without working it out twice.
 
 ## Step 9. Give Supabase the API keys
 
-You can do this now; it does not depend on the functions existing yet.
+Secrets are independent of the functions — setting them before a function exists
+is fine, and changing one later needs no redeploy.
 
 ```powershell
 cd D:\Project\viralradar
@@ -385,7 +400,7 @@ keeps tracebug awake too.
 
 ---
 
-# PART 3 — After I finish the web app
+# PART 3 — The site and your phone ✅
 
 ## Step 12. Create the Netlify site
 
@@ -493,7 +508,13 @@ Your own login keeps working, because your account already exists.
 If tracebug does need open signups, leave this alone. Nothing about ViralRadar's
 security depends on it.
 
-## Step 16. Start the folder watcher (optional)
+## Step 16. Start the folder watcher (optional, NOT BUILT YET)
+
+> **`npm run watcher` does not exist yet.** This is the one piece of the plan
+> still unwritten, and it is a convenience rather than a requirement: *Paste
+> from Shorts Studio* on the Ideas, Scripts or Import screen does the same job
+> in one tap, and works on the phone, which the watcher never could. The steps
+> below are what it will take when it is built.
 
 Only needed if you want files from Shorts Studio to import themselves from your
 Downloads folder.
@@ -531,6 +552,10 @@ watcher is a convenience, not a requirement.
   number any time.
 - **Backups**: Settings → Download backup gives you one JSON file with
   everything. Worth doing occasionally; free Supabase keeps no backups of its own.
+- **Expect the free AI models to move.** In the few days this was built, one
+  Gemini model was retired outright and one OpenRouter model stopped being free.
+  Neither needs a code change: both are Settings fields, and **Test AI** names
+  the cause. This is the one part of the app that will need occasional attention.
 
 ---
 
@@ -560,6 +585,10 @@ watcher is a convenience, not a requirement.
 | Magic link email never arrives | Check spam, then **Authentication → URL Configuration** → Site URL and Redirect URLs must include your Netlify address. |
 | Netlify build fails on a missing variable | `SUPABASE_URL` or `SUPABASE_ANON_KEY` is not set in **Site configuration → Environment variables**. |
 | "Gemini daily limit reached" | Normal. It falls back to OpenRouter by itself. |
+| Generating fails on **both** providers | **Settings -> Test AI.** It tries each one and shows the real reason. A free model being retired or quietly becoming paid is the likeliest cause, and the fix is a different name in the model field - no deploy needed. |
+| `is unavailable for free` / `use this slug instead` | That OpenRouter model stopped being free. Pick another ending in `:free` from https://openrouter.ai/models and put it in Settings. Dropping the `:free` suffix as the message suggests would start charging you. |
+| `is not found for API version` / `no longer available` from Gemini | That Gemini model was retired. Try `gemini-3.5-flash`, then Test AI. |
+| `invalid input syntax for type date` on a generated item | Fixed, but if it ever comes back it means a model wrote something other than a date. Nothing is lost - nothing was saved. Tell me the exact text. |
 | Watcher says 401 | The import token was revoked or mistyped. Make a new one in Settings. |
 
 When in doubt, paste the exact message to me — I would rather see the real error

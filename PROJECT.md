@@ -35,7 +35,7 @@ and the source for the one-time data migration.
 ## 2. Shape of the cloud version
 
 ```
-   PHONE / LAPTOP BROWSER                     LAPTOP (optional)
+   PHONE / LAPTOP BROWSER                     LAPTOP (optional, NOT BUILT)
    ┌───────────────────────┐                  ┌──────────────────────┐
    │ Netlify static site   │                  │ Downloads watcher    │
    │ vanilla JS PWA        │                  │ npm run watcher      │
@@ -63,7 +63,8 @@ and the source for the one-time data migration.
 - **Edge Functions**: only the things that cannot be in a browser — holding API
   keys, and fetching from sites that would refuse a cross-origin request.
 - **Laptop**: only the Downloads folder watcher, because only the laptop can see
-  the Downloads folder. It needs no database and no server.
+  the Downloads folder. It needs no database and no server. Not built — the
+  clipboard button covers the same need from either device.
 
 ---
 
@@ -163,14 +164,20 @@ other app.
 
 ```
 shared/              runtime-agnostic cores — Node, Deno and the browser all use these
-  contract.mjs         the Shorts Studio export contract: validate + shape rows
+  contract.mjs         the Shorts Studio export contract: validate, shape rows,
+                       coerce dates so a model cannot sink an import
   import-core.mjs      Postgres mapping and added/updated counting
-  tokens.mjs           import tokens: generate, hash, read an Authorization header
-  prompts.mjs          AI prompt rules, output shapes, JSON repair
+  trends-core.mjs      a whole trend refresh: fetch, score, replace, prune
+  generate-core.mjs    ask an AI, fall back to the next, repair bad JSON
+  prompts.mjs          prompt rules, output shapes, JSON extraction
+  edit-plan.mjs        read and render the optional edit_plan on a script
   radar.mjs            run every trend source, dedupe by URL (no writes)
   sources/*.mjs        youtube, hackernews, reddit, github
   stats.mjs            results analytics (runs in the browser in the cloud build)
-  defaults.mjs, time.mjs, http.mjs
+  tokens.mjs           import tokens: generate, hash, read an Authorization header
+  keys.mjs             pick a usable API key out of a bare value, list or JSON
+  defaults.mjs         model names, language, length — matched to the DB defaults
+  time.mjs, http.mjs
 
 (no server/)         the local SQLite app lives on the `local-sqlite` branch,
                      not here. Nothing on this branch needs it, so this branch
@@ -180,17 +187,28 @@ shared/              runtime-agnostic cores — Node, Deno and the browser all u
                      to say the same words.
 
 supabase/
-  migrations/        the schema and the policies
+  migrations/        5 files: schema, policies, usage + schedule, model defaults
   tests/rls.sql      the isolation test, as one block for the dashboard
   functions/
     _shared/cors.ts    allow-list of origins, no wildcard
     _shared/auth.ts    JWT vs vr_ token, and the storage port
     _shared/core/      GENERATED copy of shared/*.mjs — see below
-    vr-import/         deployed. vr-generate and vr-refresh-trends
+    vr-import/         all three are deployed
+    vr-generate/
+    vr-refresh-trends/
 
-scripts/             sync-shared, inspect-db, test-rls, rls-plan, db-url
-public/              the frontend (still the local version)
-test/                116 tests
+public/              the whole frontend — no build step, no framework
+  index.html           every screen, as one page
+  app.js               screens, sign-in, Realtime, the AI buttons
+  data.js              every database call, with the client injected so it tests
+  styles.css           one stylesheet, dark, phone-first
+  sw.js                service worker: shell cached, config always fresh
+  manifest.webmanifest, icons/      what makes it installable
+  shared/              GENERATED copy of shared/*.mjs, imported as ES modules
+
+scripts/             build, sync-shared, inspect-db, test-rls, rls-plan,
+                     db-url, make-icons
+test/                22 files, 247 tests
 ```
 
 **Why `_shared/core/` is a copy.** A deployed Edge Function only receives files
@@ -232,15 +250,16 @@ kept; the cloud version changes where the data comes from and adds the AI.
 |---|---|---|
 | **Radar** | trend cards by source, velocity score, Refresh now | "Write script" on any trend card |
 | **Ideas** | grouped by day, Picked / Skip, filters | **Generate ideas**, and "Write script" on an idea |
-| **Scripts** | board: To shoot → Shot → Edited → Posted, drag or arrows; detail view with teleprompter and copy buttons | arrives live when generated or imported elsewhere |
+| **Scripts** | board: To shoot → Shot → Edited → Posted, drag or arrows; detail view with teleprompter and copy buttons | arrives live when generated or imported elsewhere; the **edit plan** below the teleprompter, and **Make edit plan** when a script has none |
 | **Results** | totals, avg views, save rate, streak, bars by format/hook/len/CTA, top 5, full table | same numbers, computed in the browser |
 | **Import** | paste box, file upload, recent imports log | **Paste from Shorts Studio** button (clipboard), same on Ideas and Scripts |
 | **Settings** | watch folder, keywords, YouTube quota, LAN URLs, backup/restore | niche keywords, language, default length, AI order and models, **Test AI**, import token management, backup/restore |
 
 **The everyday flow**
 
-1. Export from Shorts Studio → it lands in Downloads → the watcher uploads it,
-   or you paste it on the Import screen.
+1. Export from Shorts Studio → tap **Paste from Shorts Studio** on Ideas,
+   Scripts or Import. (Or upload the file; or, once the watcher exists, let it
+   import itself out of Downloads.)
 2. It appears on the phone within a second or two, with a toast (Realtime).
 3. Radar has fresh trends every morning at 07:00 IST.
 4. Pick an idea, or generate ideas, or write a script from a trend.
@@ -251,44 +270,64 @@ kept; the cloud version changes where the data comes from and adds the AI.
 
 ## 9. Status
 
+**The migration is done.** Everything in the plan is built, deployed and in use
+except the optional folder watcher.
+
 | Phase | State |
 |---|---|
 | 1. Branch and baseline | **done** |
 | 2. Shared cores extracted | **done** — local app still passes its original tests |
 | 3. Schema, RLS, isolation test | **done, verified against the real database** |
 | 4. `vr-import` | **done, deployed and probed live** |
-| 4. `vr-generate` | **done, deployed, run against real Gemini** |
+| 4. `vr-generate` | **done, deployed, both providers verified live** |
 | 4. `vr-refresh-trends` | **done, deployed, run live** |
 | 5. pg_cron daily refresh | **done** — 01:30 UTC, triggered and verified |
 | 6. Frontend on supabase-js + Realtime | **done, deployed** |
 | 7. Generate / Write script / Paste buttons | **done** |
-| 8. Netlify build and deploy, PWA | **done** — installable, shell cached offline |
-| 9. Watcher as a standalone script | not started |
-| 10. README rewrite | SETUP.md done; README still describes the local app |
+| 8. Netlify build and deploy, PWA | **done** — installed on the phone |
+| 9. Watcher as a standalone script | **not started** — optional, may be skipped |
+| 10. README rewrite | **done** |
+
+Phase 10 originally also contained a SQLite → Postgres migration. It was
+dropped, not skipped: no local database ever held any data, so there was
+nothing to move.
 
 ### What works today
 
 Open **https://ytshortradar.netlify.app**, sign in with an email and password,
-and Ideas, Scripts, Results, Import and Settings all read and write the real
-database. An import on one device shows up on the other within a second or two.
+and all six screens read and write the real database:
+
+- **Import** — paste, upload, or the clipboard button. A real export goes
+  through the deployed function and lands as proper rows.
+- **Realtime** — an import on the laptop appears on the phone a second or two
+  later, with a toast, no refresh.
+- **Radar** — Hacker News, Reddit and GitHub, refreshed by pg_cron at 07:00 IST
+  without anything being open.
+- **Ideas / Scripts / Results** — all the local app's screens, including the
+  teleprompter, the board, the analytics, and the edit plan below the script.
+- **AI** — ideas, scripts and edit plans, from Gemini, falling back to
+  OpenRouter. Verified live in both directions: with `gemini_model` pointed at a
+  model that does not exist, all three came back from OpenRouter and were
+  written with `source = 'openrouter'`. Test AI shows both answering
+  (Gemini ~2.0s, OpenRouter ~1.2s).
+- **Installed on the phone** from the home screen, offline shell included.
 
 ### What does not work yet
 
-- **YouTube is missing from the Radar.** Everything else works, but the
-  `YOUTUBE_API_KEY` secret is rejected: "API key not valid". Hacker News,
-  Reddit and GitHub all return results.
-- **No folder watcher** yet. Phase 9.
+- **YouTube is missing from the Radar.** The `YOUTUBE_API_KEY` secret is
+  rejected by Google: "API key not valid". This is a key problem in the Google
+  Cloud console, not a code problem — the YouTube source itself is written and
+  tested. Hacker News, Reddit and GitHub all return results, so the Radar is
+  useful without it.
+- **No folder watcher.** Phase 9, optional. *Paste from Shorts Studio* does the
+  same job in one tap and works on the phone, which a watcher never could.
 
-Generating works on both providers, and the fallback has now run for real:
-with `gemini_model` pointed at a model that does not exist, ideas, scripts and
-edit plans all came back from OpenRouter, written to the rows as
-`source = 'openrouter'`. Test AI in Settings shows both providers answering
-(Gemini ~2.0s, OpenRouter ~1.2s).
-
-**Done by hand so far:** migrations pushed, schema exposed to the Data API,
-account created with a password and on the allowlist, all three API keys in
-Supabase secrets, `ALLOWED_ORIGINS` set, code on GitHub, Netlify deploying from
-`main`, `vr-import` deployed.
+**Done by hand:** migrations pushed, schema exposed to the Data API, account
+created with a password and added to the allowlist, the three API keys
+(Gemini, OpenRouter, YouTube) in Supabase secrets, `ALLOWED_ORIGINS` and
+`CRON_SECRET` set, the cron secret also in Vault, code on GitHub,
+Netlify deploying from `main`, all three functions deployed, PWA installed on
+the phone.
 
 ---
 
@@ -389,15 +428,20 @@ introduced on purpose, the suite is confirmed to fail, and the file is restored.
 
 ## 12. Known gaps
 
-- **Deno is not installed on this machine**, so the functions cannot be
+- **Deno is not on PATH on this machine**, so the functions cannot be
   type-checked or executed locally. TypeScript parses them, the untestable layer
   is kept deliberately thin — all behaviour lives in `shared/*.mjs` — and the
   deployed function is probed over HTTP instead (see §10).
-- **The Gemini model is a moving target.** gemini-2.5-flash was retired
-  outright during this work. Sampling four calls each then gave
+- **The free models are a moving target, and this will need attention again.**
+  Inside a few days gemini-2.5-flash was retired outright and
+  meta-llama/llama-3.3-70b-instruct:free stopped being free. Both replacements
+  were chosen by measuring: four samples of each Gemini model gave
   gemini-flash-latest 1/4 (503 high demand), gemini-3.8-flash 2/4 (429) and
-  gemini-3.5-flash 4/4, so that is the default — but it is a Settings field
-  precisely because this will shift again.
+  gemini-3.5-flash 4/4; six free OpenRouter models tried through the deployed
+  function left nvidia/nemotron-3-super-120b-a12b:free as the one that answered.
+  Both are Settings fields, both column defaults are now pinned to the code by
+  test/defaults.test.js, and **Test AI** names the cause when one dies. There is
+  no durable answer here — only a short path to the fix.
 - **The import token path has not been exercised end to end.** The browser
   path has: a real export went through the deployed function and landed
   correctly. The token path is verified only as far as a refusal, because no
@@ -405,8 +449,9 @@ introduced on purpose, the suite is confirmed to fail, and the file is restored.
 - **The OpenRouter key is not in `.env`**, only in Supabase secrets, so the
   fallback can only be exercised through the deployed function and not from a
   local test. That is how it was verified; there is no offline equivalent.
-- **Realtime between two devices** has not been watched happening, and there is
-  no PWA to install yet.
+- **Realtime between two devices** is wired and works on one device; the
+  two-device case has not been sat and watched. The PWA is installed on the
+  phone, so this is now observable whenever you want to check it.
 - The **allowlist** has one entry. The other three accounts in this project can
   sign in and will see an empty app that saves nothing — by design, but it has
   not been confirmed by signing in as one of them.
@@ -424,7 +469,8 @@ Two things that were unknown until the first deploy, now settled: the
 | `npm test` | the whole offline suite | nothing |
 | `npm run test:rls` | isolation test against the real database | `DATABASE_URL` |
 | `npm run inspect:db` | read-only report plus a setup checklist | `DATABASE_URL`, optionally `SUPABASE_URL`/`SUPABASE_ANON_KEY` |
-| `npm run sync:shared` | refresh the copy under `supabase/functions/` | nothing |
+| `npm run sync:shared` | refresh the generated copies under `supabase/functions/` and `public/` | nothing |
+| `npm run icons` | regenerate the PWA icons from scratch | nothing |
 | `npm run build` | build the site into dist/, as Netlify does | `SUPABASE_URL`, `SUPABASE_ANON_KEY` |
 | `npm start` | the old local app — **on the `local-sqlite` branch only** | nothing |
 | `npx supabase db push` | apply migrations | logged in, linked |
