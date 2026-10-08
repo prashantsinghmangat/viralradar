@@ -257,11 +257,11 @@ kept; the cloud version changes where the data comes from and adds the AI.
 | 2. Shared cores extracted | **done** — local app still passes its original tests |
 | 3. Schema, RLS, isolation test | **done, verified against the real database** |
 | 4. `vr-import` | **done, deployed and probed live** |
-| 4. `vr-generate` | not started |
+| 4. `vr-generate` | **done, deployed, run against real Gemini** |
 | 4. `vr-refresh-trends` | **done, deployed, run live** |
 | 5. pg_cron daily refresh | **done** — 01:30 UTC, triggered and verified |
 | 6. Frontend on supabase-js + Realtime | **done, deployed** |
-| 7. Paste buttons | **done** — Generate / Write script wait on vr-generate |
+| 7. Generate / Write script / Paste buttons | **done** |
 | 8. Netlify build and deploy, PWA | **done** — installable, shell cached offline |
 | 9. Watcher as a standalone script | not started |
 | 10. README rewrite | SETUP.md done; README still describes the local app |
@@ -277,8 +277,10 @@ database. An import on one device shows up on the other within a second or two.
 - **YouTube is missing from the Radar.** Everything else works, but the
   `YOUTUBE_API_KEY` secret is rejected: "API key not valid". Hacker News,
   Reddit and GitHub all return results.
-- **"Generate ideas", "Write script" and "Test AI" fail** — `vr-generate` is not
-  written. Phase 4/7.
+- **OpenRouter is not working.** Its key is set in Supabase secrets but the
+  service answers "Missing Authentication header", so the fallback has never
+  run for real. Gemini works, and everything falls back correctly when asked
+  to — tested with a stub — but not yet between two live providers.
 - **No folder watcher** yet. Phase 9.
 
 **Done by hand so far:** migrations pushed, schema exposed to the Data API,
@@ -290,7 +292,7 @@ Supabase secrets, `ALLOWED_ORIGINS` set, code on GitHub, Netlify deploying from
 
 ## 10. Testing
 
-`npm test` — **205 tests**, no network, no database, no keys needed.
+`npm test` — **229 tests**, no network, no database, no keys needed.
 
 `npm run test:rls` — **193 assertions and 4 proofs** against the real Supabase
 database. It connects as `postgres`, which owns the tables and therefore
@@ -375,6 +377,11 @@ introduced on purpose, the suite is confirmed to fail, and the file is restored.
   type-checked or executed locally. TypeScript parses them, the untestable layer
   is kept deliberately thin — all behaviour lives in `shared/*.mjs` — and the
   deployed function is probed over HTTP instead (see §10).
+- **The Gemini model is a moving target.** gemini-2.5-flash was retired
+  outright during this work. Sampling four calls each then gave
+  gemini-flash-latest 1/4 (503 high demand), gemini-3.8-flash 2/4 (429) and
+  gemini-3.5-flash 4/4, so that is the default — but it is a Settings field
+  precisely because this will shift again.
 - **The import token path has not been exercised end to end.** The browser
   path has: a real export went through the deployed function and landed
   correctly. The token path is verified only as far as a refusal, because no

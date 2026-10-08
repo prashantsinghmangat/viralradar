@@ -106,7 +106,9 @@ test('user text is escaped wherever it is put into HTML', () => {
   assert.ok(htmlLiterals.length > 10, `expected to find the screens, found ${htmlLiterals.length} HTML templates`);
 
   // Values that escape for themselves, or that cannot carry user text.
-  const safe = /^(esc\(|fmt\(|compact\(|ago\(|when\(|copyBtn\(|hbars\(|format\(|renderEditPlan\(|PASTE_BUTTON\(|KIND_ICON|SOURCE|LIVE_LABEL|STAGES|LENGTHS|DEFAULT_AI_ORDER)/;
+  // Builders that escape whatever they are given, so their output is markup on
+  // purpose rather than by accident.
+  const safe = /^(esc\(|fmt\(|compact\(|ago\(|when\(|copyBtn\(|hbars\(|format\(|renderEditPlan\(|PASTE_BUTTON\(|makeButton\(|GENERATING\[|KIND_ICON|SOURCE|LIVE_LABEL|STAGES|LENGTHS|DEFAULT_AI_ORDER)/;
   const bad = [];
   for (const literal of htmlLiterals) {
     for (const m of literal.matchAll(/\$\{([^{}]*)\}/g)) {
@@ -180,4 +182,36 @@ test('the paste button copes with a browser that will not allow it', () => {
   assert.match(fn, /paste box/i, 'the fallback has to be named, not just implied');
   assert.match(fn, /#\/import/, 'and the person should be taken there');
   assert.match(fn, /nothing on the clipboard/i, 'an empty clipboard is its own case');
+});
+
+test('every way of asking the AI is reachable from a screen', () => {
+  // These are the buttons the whole vr-generate function exists for. A missing
+  // one is a feature that silently is not there.
+  const wanted = {
+    generateIdeas: 'renderIdeas',
+    writeScript: 'renderIdeas',
+    writeScriptFromBox: 'renderScripts',
+    makeEditPlan: 'renderEditPlan',
+  };
+  for (const [action, screen] of Object.entries(wanted)) {
+    assert.ok(appjs.includes(`actions.${action} =`), `actions.${action} is not defined`);
+    assert.ok(appjs.includes(`data-action="${action}"`), `nothing on screen calls ${action}`);
+    assert.ok(appjs.includes(`function ${screen}`), `${screen} is missing`);
+  }
+  // Write script also hangs off a trend, which is the point of having a radar.
+  const radar = appjs.slice(appjs.indexOf('async function renderRadar'), appjs.indexOf('actions.radarSource'));
+  assert.match(radar, /data-action="writeScript"/, 'a trend should be turnable into a script');
+});
+
+test('a slow AI call says what it is doing and roughly how long', () => {
+  // Forty seconds of a dead-looking button reads as broken.
+  const block = appjs.slice(appjs.indexOf('const GENERATING'), appjs.indexOf('actions.generateIdeas'));
+  for (const kind of ['ideas', 'script', 'edit_plan']) {
+    assert.match(block, new RegExp(`${kind}:`), `no loading text for ${kind}`);
+  }
+  assert.match(block, /up to \d+ sec/, 'say roughly how long, so waiting feels finite');
+  assert.match(block, /spin/, 'and show something moving');
+  assert.match(block, /btn\.disabled = true/, 'a second click would start a second call');
+  // On failure the button has to come back, or the screen is stuck.
+  assert.match(block, /btn\.disabled = false/);
 });

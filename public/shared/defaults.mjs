@@ -12,7 +12,15 @@ export const DEFAULT_LENGTH = '30s';
 export const LENGTHS = ['20s', '30s', '45s', '60s'];
 // Providers are tried in this order unless Settings says otherwise.
 export const DEFAULT_AI_ORDER = ['gemini', 'openrouter'];
-export const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
+// Measured rather than assumed. gemini-2.5-flash was retired outright, and
+// the newest free models are heavily loaded: sampling four calls each gave
+// gemini-flash-latest 1/4 (503 high demand), gemini-3.8-flash 2/4 (429), and
+// gemini-3.5-flash 4/4. An alias sounds safer than a pinned version and in
+// practice was the least reliable of the three.
+//
+// This is a Settings field, so it can be changed without a deploy when the
+// balance shifts again — which it will.
+export const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash';
 export const DEFAULT_OPENROUTER_MODEL = 'meta-llama/llama-3.3-70b-instruct:free';
 
 export const IDEA_STATUS = ['new', 'picked', 'skipped'];

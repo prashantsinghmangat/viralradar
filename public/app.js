@@ -297,7 +297,8 @@ async function renderRadar() {
         <div class="summary">${esc(t.summary || '')}</div>
         <div class="actions">
           <a class="btn sm" href="${esc(t.url)}" target="_blank" rel="noopener noreferrer">Open ↗</a>
-          ${copyBtn(copy, 'Copy for Shorts Studio', 'sm primary')}
+          <button type="button" class="btn sm primary" data-action="writeScript" data-topic="${esc([t.title, t.summary].filter(Boolean).join(' — ').slice(0, 300))}">✍️ Write script</button>
+          ${copyBtn(copy, 'Copy', 'sm')}
         </div>
       </div>
     </article>`;
@@ -364,7 +365,7 @@ async function renderIdeas() {
     </section>`).join('');
 
   return `
-    <div class="page-head"><h1>Ideas</h1>${PASTE_BUTTON()}</div>
+    <div class="page-head"><h1>Ideas</h1><button type="button" class="primary" data-action="generateIdeas">✨ Generate ideas</button>${PASTE_BUTTON()}</div>
     <div class="chips" style="margin-bottom:14px">
       ${[['all', 'All'], ['new', 'New'], ['picked', 'Picked'], ['skipped', 'Skipped']].map(([k, l]) =>
         `<button type="button" class="chip ${ideaFilter === k ? 'on' : ''}" data-action="ideaFilter" data-v="${k}">${l} · ${counts[k] || 0}</button>`).join('')}
@@ -402,7 +403,11 @@ async function renderScripts(params) {
   }).join('');
   return `
     <div class="page-head"><h1>Scripts</h1><span class="muted small">${canDrag ? 'Drag cards between columns, or use the arrows.' : 'Tap the arrow to move a script.'}</span>${PASTE_BUTTON()}</div>
-    ${scripts.length ? `<div class="board">${cols}</div>` : '<div class="empty"><span class="big">🎬</span>No scripts yet. Export a script from Shorts Studio and it lands in “To shoot”.</div>'}`;
+    <div class="card row" style="margin-bottom:14px;gap:8px">
+      <input type="text" id="scriptTopic" placeholder="Write a script about…  e.g. a free site that removes image backgrounds" style="flex:1">
+      <button type="button" class="primary" data-action="writeScriptFromBox">✍️ Write script</button>
+    </div>
+    ${scripts.length ? `<div class="board">${cols}</div>` : '<div class="empty"><span class="big">🎬</span>No scripts yet. Write one above, paste an export, or generate an idea first.</div>'}`;
 }
 actions.openScript = (card) => { location.hash = `#/scripts/${encodeURIComponent(card.dataset.id)}`; };
 async function moveScript(id, stage) {
@@ -504,7 +509,21 @@ async function renderScriptDetail(id) {
 // first import. Scripts without one show nothing at all, which is most of them.
 function renderEditPlan(script) {
   const plan = readEditPlan(script);
-  if (!plan) return '';
+  const makeButton = (label) =>
+    `<button type="button" class="sm" data-action="makeEditPlan" data-id="${esc(script.id)}">${esc(label)}</button>`;
+
+  // No plan yet: offer to write one rather than showing nothing and leaving
+  // people to wonder whether the feature exists.
+  if (!plan) {
+    return `
+      <section class="edit-plan">
+        <div class="page-head" style="margin-top:22px">
+          <h2 style="margin:0">Edit plan</h2>
+          ${makeButton('✨ Make edit plan')}
+        </div>
+        <p class="muted small">A shot-by-shot plan for filming and editing this one: timeline, captions, music, cover and a checklist.</p>
+      </section>`;
+  }
 
   const step = (s) => {
     const head = [s.at, s.clip, s.action].filter(Boolean).map(esc).join('<span class="sep">·</span>');
@@ -533,7 +552,10 @@ function renderEditPlan(script) {
     <section class="edit-plan">
       <div class="page-head" style="margin-top:22px">
         <h2 style="margin:0">Edit plan${plan.total_sec ? ` <span class="muted small">${plan.total_sec}s</span>` : ''}</h2>
-        ${copyBtn(editPlanText(plan), 'Copy edit plan', 'sm primary')}
+        <div class="row" style="gap:6px">
+          ${copyBtn(editPlanText(plan), 'Copy edit plan', 'sm primary')}
+          ${makeButton('↻ Redo')}
+        </div>
       </div>
       ${plan.timeline.length ? `<section class="card"><ol class="timeline">${plan.timeline.map(step).join('')}</ol></section>` : ''}
       <div class="grid">
@@ -716,6 +738,53 @@ async function renderImport() {
       </li>`).join('')}</ul>` : '<p class="muted">Nothing imported yet.</p>'}
     </div>`;
 }
+
+// ---- asking the AI for something ----
+//
+// Every one of these takes long enough that a button with no feedback looks
+// broken, so they all say what is happening and roughly how long it takes.
+// Failures come back as whole sentences from the function — "Gemini has hit its
+// limit for now", "No AI key is set" — and are shown as they are.
+const GENERATING = {
+  ideas: 'Writing ideas… up to 40 sec',
+  script: 'Writing script… up to 40 sec',
+  edit_plan: 'Planning the edit… up to 40 sec',
+};
+
+async function askAi(btn, body) {
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spin"></span> ${esc(GENERATING[body.kind] || 'Working…')}`;
+  try {
+    const result = await data.ai.generate(body);
+    const by = result.provider ? ` (by ${result.provider})` : '';
+    toast((result.message || 'Done') + by);
+    render();
+    return result;
+  } catch (e) {
+    toast(e.message, true, 9000);
+    btn.disabled = false;
+    btn.innerHTML = original;
+    return null;
+  }
+}
+
+actions.generateIdeas = (btn) => askAi(btn, { kind: 'ideas', count: 6 });
+
+actions.writeScript = (btn) => askAi(btn, { kind: 'script', topic: btn.dataset.topic });
+
+actions.writeScriptFromBox = (btn) => {
+  const input = $('#scriptTopic');
+  const topic = input.value.trim();
+  if (!topic) {
+    toast('What should the script be about? Type a line first.', true);
+    input.focus();
+    return;
+  }
+  return askAi(btn, { kind: 'script', topic });
+};
+
+actions.makeEditPlan = (btn) => askAi(btn, { kind: 'edit_plan', script_id: btn.dataset.id });
 
 // ---- paste from Shorts Studio ----
 //

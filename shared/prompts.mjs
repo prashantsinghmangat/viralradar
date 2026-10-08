@@ -76,6 +76,50 @@ The spoken lines together must be readable aloud within ${length}.
 ${jsonOnly(SCRIPT_SHAPE, '{ "items": [ SHAPE ] }')}`;
 }
 
+// The edit plan a script can carry. Same shape Shorts Studio writes, so a plan
+// written here and one written there are read by exactly the same code.
+const EDIT_PLAN_SHAPE = `{
+  "total_sec": 30,
+  "timeline": [{
+    "at": "0-3s",
+    "clip": "what to film or screen-record",
+    "action": "what happens in this moment",
+    "text": "words on screen, if any",
+    "sfx": "a sound effect, if any",
+    "tip": "one thing that makes this shot work, if any"
+  }],
+  "captions": "how the subtitles should look",
+  "music": { "mood": "the feel", "search": "what to search for in a free music library", "volume": "how loud under the voice" },
+  "cover": { "frame": "which moment to use as the thumbnail", "text": "3 to 5 words, ALL CAPS" },
+  "checklist": ["one thing to check before posting"]
+}`;
+
+export function editPlanPrompt({ script, language = 'English', length = '30s', today } = {}) {
+  const beats = (script?.beats || [])
+    .map((b) => [b.t, b.say, b.screen && `(on screen: ${b.screen})`].filter(Boolean).join(' — '))
+    .join('\n');
+
+  return `You are editing a short vertical video that has already been written.
+Make the plan for shooting and editing it. Today is ${today}.
+
+Title: ${script?.title || script?.yt_title || 'untitled'}
+Topic: ${script?.topic || 'not given'}
+Spoken language: ${language}. Target length: ${length}.
+
+The script, beat by beat:
+${beats || '(no beats; work from the title and topic)'}
+
+Rules:
+${rulesBlock()}
+
+The timecodes in the timeline must cover the whole video and add up to roughly
+${length}. Every entry needs at least "at" and "action"; "text", "sfx" and "tip"
+are only for when they actually help. Keep the checklist to things that are
+quick to check and easy to get wrong.
+
+${jsonOnly(EDIT_PLAN_SHAPE, 'SHAPE')}`;
+}
+
 export const fixJsonPrompt = (bad) =>
   `The text below was supposed to be valid JSON but it cannot be parsed. Fix it.
 Return ONLY the corrected JSON: no code fences, no explanation, no extra keys.
