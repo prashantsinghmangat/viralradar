@@ -277,11 +277,13 @@ database. An import on one device shows up on the other within a second or two.
 - **YouTube is missing from the Radar.** Everything else works, but the
   `YOUTUBE_API_KEY` secret is rejected: "API key not valid". Hacker News,
   Reddit and GitHub all return results.
-- **OpenRouter is not working.** Its key is set in Supabase secrets but the
-  service answers "Missing Authentication header", so the fallback has never
-  run for real. Gemini works, and everything falls back correctly when asked
-  to — tested with a stub — but not yet between two live providers.
 - **No folder watcher** yet. Phase 9.
+
+Generating works on both providers, and the fallback has now run for real:
+with `gemini_model` pointed at a model that does not exist, ideas, scripts and
+edit plans all came back from OpenRouter, written to the rows as
+`source = 'openrouter'`. Test AI in Settings shows both providers answering
+(Gemini ~2.0s, OpenRouter ~1.2s).
 
 **Done by hand so far:** migrations pushed, schema exposed to the Data API,
 account created with a password and on the allowlist, all three API keys in
@@ -292,7 +294,7 @@ Supabase secrets, `ALLOWED_ORIGINS` set, code on GitHub, Netlify deploying from
 
 ## 10. Testing
 
-`npm test` — **229 tests**, no network, no database, no keys needed.
+`npm test` — **247 tests**, no network, no database, no keys needed.
 
 `npm run test:rls` — **193 assertions and 4 proofs** against the real Supabase
 database. It connects as `postgres`, which owns the tables and therefore
@@ -368,6 +370,20 @@ introduced on purpose, the suite is confirmed to fail, and the file is restored.
   as one.
 - *`decodeURIComponent` throws on a stray `%`* — exactly the password that sends
   someone looking for help would have crashed the helper meant to help them.
+- *A placeholder in a prompt is a value in the answer.* The ideas shape said
+  `"date": "YYYY-MM-DD (today)"`. Gemini filled it in sensibly; the OpenRouter
+  model copied the parenthetical, and because `date` is a real date column
+  Postgres refused the whole statement: `invalid input syntax for type date:
+  "2026-10-08 (today)"`. Found the first time the fallback ran against a second
+  live provider, and invisible until then. Fixed at both ends — the prompt now
+  carries the real date, and `dateOnly()` means nothing reaches a date column
+  without being one. Two lessons: a second model is a test the first cannot
+  perform, and a prompt is input validation.
+- *JavaScript rolls impossible dates forward.* `new Date('2026-02-31')` is
+  3 March, where Postgres rejects it. The first version of `dateOnly()` would
+  have written a date nobody typed; the test caught it on its first run, which
+  is why it checks the digits survive the round trip rather than only that
+  parsing succeeded.
 
 ---
 
@@ -386,9 +402,9 @@ introduced on purpose, the suite is confirmed to fail, and the file is restored.
   path has: a real export went through the deployed function and landed
   correctly. The token path is verified only as far as a refusal, because no
   token has been created yet and the watcher does not exist.
-- **OpenRouter key is not set locally**, so provider *fallback* cannot be tested
-  against two real providers. Gemini is in both `.env` and Supabase secrets;
-  OpenRouter and YouTube are in Supabase secrets only.
+- **The OpenRouter key is not in `.env`**, only in Supabase secrets, so the
+  fallback can only be exercised through the deployed function and not from a
+  local test. That is how it was verified; there is no offline equivalent.
 - **Realtime between two devices** has not been watched happening, and there is
   no PWA to install yet.
 - The **allowlist** has one entry. The other three accounts in this project can

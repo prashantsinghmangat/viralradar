@@ -18,7 +18,11 @@ export const DEFAULT_AI_ORDER = ['gemini', 'openrouter'];
 // This is a Settings field, so it can be changed without a deploy when the
 // balance shifts again — which it will.
 export const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash';
-export const DEFAULT_OPENROUTER_MODEL = 'meta-llama/llama-3.3-70b-instruct:free';
+// Also measured. meta-llama/llama-3.3-70b-instruct:free stopped being free
+// ("the paid version is available now"), and several of the current free
+// models answer "Provider returned error" or are restricted. Of the ones
+// tried through the deployed function, this answered in under a second.
+export const DEFAULT_OPENROUTER_MODEL = 'nvidia/nemotron-3-super-120b-a12b:free';
 
 export const IDEA_STATUS = ['new', 'picked', 'skipped'];
 export const SCRIPT_STAGES = ['to_shoot', 'shot', 'edited', 'posted'];

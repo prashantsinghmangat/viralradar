@@ -31,6 +31,32 @@ export function ts(v) {
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
+/**
+ * Just the date part, or null.
+ *
+ * `date` and `posted_on` are real date columns, so anything that is not a date
+ * makes Postgres reject the whole import. A tool exporting a date gets this
+ * right; a language model writing one does not always — one returned
+ * "2026-10-08 (today)", having copied the placeholder from the prompt, and the
+ * import failed with "invalid input syntax for type date". A value that cannot
+ * be a date is dropped rather than being allowed to sink everything with it.
+ */
+export function dateOnly(v) {
+  if (v === undefined || v === null || v === '') return null;
+  const text = String(v).trim();
+  // Take a leading YYYY-MM-DD if there is one, so trailing noise is survivable.
+  const leading = text.match(/^\d{4}-\d{2}-\d{2}\b/);
+  const parsed = ts(leading ? leading[0] : text);
+  if (!parsed) return null;
+  const day = parsed.slice(0, 10);
+  // JavaScript rolls an impossible date forward — new Date('2026-02-31') is
+  // 3 March — where Postgres rejects it. Keeping the silent shift would put a
+  // date nobody wrote into the row, so a value that did not survive the round
+  // trip is dropped instead.
+  if (leading && day !== leading[0]) return null;
+  return day;
+}
+
 // origin_at: when the item came into being according to the export, so the UI
 // can sort by it. Falls back to import time when the export carries no date.
 const origin = (...candidates) => {
@@ -90,7 +116,7 @@ export function validate(data) {
 // Each storage adapter picks the columns its own table has.
 export const ROW = {
   idea: (it) => ({
-    id: str(it.id), date: str(it.date), title: str(it.title), hook: str(it.hook), tool: str(it.tool),
+    id: str(it.id), date: dateOnly(it.date), title: str(it.title), hook: str(it.hook), tool: str(it.tool),
     show: str(it.show), why: str(it.why), format: str(it.format),
     source: source(it), origin_at: origin(it.date, it.created_at),
   }),
@@ -102,7 +128,7 @@ export const ROW = {
     source: source(it), origin_at: origin(it.created_at, it.date),
   }),
   result: (it) => ({
-    id: str(it.id), logged_at: str(it.logged_at), title: str(it.title), posted_on: str(it.posted_on),
+    id: str(it.id), logged_at: str(it.logged_at), title: str(it.title), posted_on: dateOnly(it.posted_on),
     platforms: list(it.platforms), format: str(it.format), hook: str(it.hook), len: str(it.len), cta: str(it.cta),
     views: int(it.views), likes: int(it.likes), comments: int(it.comments), shares: int(it.shares),
     saves: int(it.saves), follows: int(it.follows), script_id: str(it.script_id),

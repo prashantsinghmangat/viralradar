@@ -17,10 +17,13 @@ export const RULES = [
 
 const rulesBlock = () => RULES.map((r, i) => `${i + 1}. ${r}`).join('\n');
 
+// A shape carries the real date rather than a "YYYY-MM-DD (today)" placeholder:
+// a smaller model copied that parenthetical straight into its answer and the
+// import died on "invalid input syntax for type date".
 // Shapes mirror shared/contract.mjs exactly, minus "id": the function assigns
 // ids itself so a model can never cause a collision or overwrite a real row.
-const IDEA_SHAPE = `{
-  "date": "YYYY-MM-DD (today)",
+const ideaShape = (today) => `{
+  "date": "${today}",
   "title": "short idea name",
   "hook": "the exact first spoken line, under 12 words",
   "tool": "the one free tool or website used",
@@ -48,7 +51,9 @@ const jsonOnly = (shape, wrapper) =>
 Return exactly this shape:
 ${wrapper.replace('SHAPE', shape)}`;
 
-export function ideasPrompt({ keywords = [], language = 'English', length = '30s', count = 6, today } = {}) {
+export function ideasPrompt(
+  { keywords = [], language = 'English', length = '30s', count = 6, today = new Date().toISOString().slice(0, 10) } = {},
+) {
   const niche = keywords.length ? keywords.join(', ') : 'free AI tools and useful websites';
   return `You write short-video ideas for a creator whose niche is: ${niche}.
 
@@ -58,7 +63,7 @@ Today is ${today}.
 Rules:
 ${rulesBlock()}
 
-${jsonOnly(IDEA_SHAPE, '{ "items": [ SHAPE ] }')}`;
+${jsonOnly(ideaShape(today), '{ "items": [ SHAPE ] }')}`;
 }
 
 export function scriptPrompt({ topic, language = 'English', length = '30s', today } = {}) {
