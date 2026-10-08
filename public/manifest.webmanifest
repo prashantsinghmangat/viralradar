@@ -18,6 +18,20 @@
   ],
   "shortcuts": [
     { "name": "Radar", "url": "/#/radar", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Projects", "url": "/#/projects", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
     { "name": "Import", "url": "/#/import", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] }
-  ]
+  ],
+  "share_target": {
+    "action": "/share-target",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": [
+        { "name": "file", "accept": ["image/*", "text/plain", ".txt", ".md", ".srt", ".json"] }
+      ]
+    }
+  }
 }

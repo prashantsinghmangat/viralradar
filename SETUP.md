@@ -124,16 +124,51 @@ Your project ref is the random-looking part of your project URL
 `db push` asks for it instead.
 
 `db push` lists the migrations it is about to apply and asks you to confirm.
-There are five, and they are safe to run against a project that already has
+There are six, and they are safe to run against a project that already has
 some of them: it applies only the ones missing. Between them they create a
-schema called `viralradar` and eight tables inside it — the seven the app uses,
+schema called `viralradar` and ten tables inside it — the nine the app uses,
 plus `allowed_users`, which controls who may use ViralRadar at all — then the
-security policies, the daily schedule, and the model defaults. Nothing touches
-`public`, where tracebug lives.
+security policies, the daily schedule, the model defaults, and the project
+folders with their file storage. Nothing touches `public`, where tracebug lives.
+
+The last migration is the only one that reaches outside the `viralradar` schema,
+and it is worth knowing what it does there, because **Storage is shared with
+tracebug** the same way `auth.users` is:
+
+- it adds **one row** to `storage.buckets`, for a private bucket called
+  `vr-project-files` with a 25 MB per-file limit
+- it adds **four policies** to `storage.objects`, all named `vr_project_files_*`
+  and all scoped to that bucket in their very first condition
+
+It never alters or removes anything that was already there — a policy on
+`storage.objects` may well be tracebug's.
 
 Check it worked: **Table Editor** → the schema dropdown (top left, probably says
 "public") → you should now be able to pick **viralradar** and see `ideas`,
-`scripts`, `results`, `trends`, `settings`, `usage`, `import_tokens`.
+`scripts`, `results`, `trends`, `settings`, `usage`, `import_tokens`,
+`projects`, `project_items`. Then **Storage** in the left sidebar should list a
+bucket called `vr-project-files` with a padlock (private).
+
+### If `db push` fails on the storage part
+
+`storage.objects` belongs to the Storage extension rather than to you, so
+depending on how your project is set up the CLI may be refused when it tries to
+add a policy to it. The error says something about permission or ownership.
+
+Everything before that point has still been applied. Do the storage half from
+the dashboard, which runs as an owner and will be allowed:
+
+1. **Storage → New bucket.** Name it exactly `vr-project-files`. Leave
+   **Public** off. Under *Additional configuration*, set the file size limit to
+   **25 MB**.
+2. **SQL Editor → New query.** Open
+   `supabase/migrations/20261008000400_projects.sql`, copy the part from
+   `-- ---------- storage policies ----------` to the end of the last
+   `create policy` block, paste it, and run it.
+
+Then carry on. `npm run test:rls` checks the result either way — it reads the
+policies back out of the database rather than out of the files — so you do not
+have to take anyone's word for whether it worked.
 
 ## Step 4. Let the browser see the new schema
 
@@ -164,17 +199,25 @@ if it is wrong the app just looks empty with no error.
 npm run test:rls
 ```
 
-This creates three throwaway users and tries 193 ways to get at data that is not
+This creates three throwaway users and tries 292 ways to get at data that is not
 theirs, then deletes them. Two of the three are ViralRadar users; the third is
 signed in but not on the allowlist, standing in for a tracebug account. It also
-breaks four security rules on purpose inside a transaction, checks the test
+breaks seven security rules on purpose inside a transaction, checks the test
 notices, and rolls back so the rules come straight back.
+
+It covers the files as well as the rows, which are protected by a different set
+of policies on a table shared with tracebug. To test the 300 MB cap without
+uploading 300 MB, one of the throwaway users is given a storage row that *claims*
+to be 320 MB with no bytes behind it. The run then proves that user's next
+upload is refused, that the other user — in the same bucket — is unaffected, and
+that being full still lets you delete, or there would be no way back. All of it
+is rolled back or deleted at the end.
 
 What you want to see at the end:
 
 ```
-assertions: 193 passed, 0 failed
-proofs:     4 passed, 0 failed
+assertions: 292 passed, 0 failed
+proofs:     7 passed, 0 failed
 
 PASS - a user can only reach their own rows, and the test can detect it when that breaks.
 ```
@@ -372,12 +415,13 @@ any name starting with `SUPABASE_` anyway.
   the whole reason the AI calls happen in an Edge Function instead of in the
   app.
 
-## Step 10. Deploy the three functions
+## Step 10. Deploy the four functions
 
 ```powershell
 npx supabase functions deploy vr-import --use-api
 npx supabase functions deploy vr-generate --use-api
 npx supabase functions deploy vr-refresh-trends --use-api
+npx supabase functions deploy vr-purge-project-files --use-api
 ```
 
 `--use-api` builds them on Supabase's side, so you do not need Docker. (I
@@ -397,6 +441,35 @@ belonging to tracebug.
 The daily run has a useful side effect: free Supabase projects are paused after
 about a week with no activity, and this keeps the project awake — which now
 keeps tracebug awake too.
+
+## Step 11b. Turn on the nightly file cleanup
+
+The migration already scheduled this job for 02:00 UTC (7:30 AM IST), half an
+hour after the trend refresh so the two never overlap. It needs one more thing:
+where to call. Until that is filled in the job runs, finds nothing configured,
+and does nothing — which is the right behaviour, but it also means the cleanup
+is not happening.
+
+**SQL Editor → New query**, with your project ref in place of the placeholder:
+
+```sql
+update viralradar.cron_config
+   set purge_function_url = 'https://<your-project-ref>.supabase.co/functions/v1/vr-purge-project-files';
+```
+
+That table has exactly one row, created in Step 11. It reuses the same Vault
+secret and the same `user_id`, so there is nothing else to set.
+
+**Why a function at all, rather than SQL?** Deleting a row from
+`storage.objects` does not delete the bytes behind it. They stay in the bucket,
+still counted against this project's ~1 GB, and now with nothing left to find
+them by. Only the Storage API really removes a file, and SQL cannot call it.
+
+**Check it without waiting two weeks.** Open **Settings** in the app and tap
+**Clean up now**. It runs the same function against the same rule and tells you
+how many files went and how much space came back. With nothing due it says
+"Nothing to clean up", which is also a pass — it means the function is deployed,
+reachable and allowed.
 
 ---
 
@@ -484,6 +557,36 @@ cannot reach the database, which is the honest answer.
 
 When a new version is deployed you get a message saying so; reload to take it.
 
+### Step 14b. Check ViralRadar is in the Share menu
+
+Installing the app is also what puts ViralRadar in **Android's Share sheet**, so
+you can send a screenshot or a link into it from any app.
+
+It does not appear immediately. Android reads the share entry from the
+manifest when the app is installed, and the service worker that receives the
+share has to have activated. So:
+
+1. Install it (above). If it was already installed before this feature existed,
+   open it, wait for the "a new version is ready" message, and reload.
+2. Open any photo → **Share** → scroll the app list. **ViralRadar** should be
+   there.
+3. Share a screenshot into it. The app opens, says it is adding it, and the
+   image appears in your **Inbox** folder on the Projects screen — and on your
+   laptop a second later.
+
+If it is not in the list, force-close the app and reopen it once; the worker
+activates on the next launch. On iPhone this does not work at all — Safari does
+not support share targets — so from an iPhone use the **Add files or images**
+button inside a folder instead.
+
+Two things worth knowing:
+
+- A share made with **no signal** is not lost. The worker parks it on the device
+  and it is uploaded the next time you open the app with a connection.
+- Only images and text are offered, not video. A video is far bigger than the
+  25 MB per-file limit, and appearing in the Share sheet for something that
+  would then be refused would be worse than not appearing at all.
+
 ## Step 15. Close the door (optional)
 
 **ViralRadar is already closed** without this step. The allowlist from Step 6b
@@ -550,6 +653,13 @@ watcher is a convenience, not a requirement.
 - **Supabase free tier**: 500 MB database, shared with tracebug. ViralRadar's
   share is a few thousand small rows — `npm run inspect:db` shows the real
   number any time.
+- **File storage is about 1 GB for the whole project**, also shared with
+  tracebug. ViralRadar takes a fixed **300 MB** of it and refuses uploads past
+  that, so tracebug cannot be starved by a stack of screenshots. **Settings →
+  Project files** shows how full that slice is. Two things keep it from filling
+  up on its own: one file can be at most 25 MB, and files in a project marked
+  **Posted** are deleted fourteen days later by the nightly job. Raw video is
+  never uploaded at all.
 - **Backups**: Settings → Download backup gives you one JSON file with
   everything. Worth doing occasionally; free Supabase keeps no backups of its own.
 - **Expect the free AI models to move.** In the few days this was built, one
@@ -567,6 +677,14 @@ watcher is a convenience, not a requirement.
 - **Committing `.env`.** It is gitignored; keep it that way.
 - **Pasting an API key into the app itself.** Keys only ever go into Supabase
   secrets, by command line.
+- **Making the `vr-project-files` bucket public**, or raising its size limit.
+  Public means a URL that works for anyone who has it, forever, with no policy in
+  the way. The app never needs one: it asks for a short-lived signed URL each
+  time it shows you a file.
+- **Touching a storage policy that is not named `vr_...`.** `storage.objects` is
+  one table shared with tracebug, and the others are tracebug's.
+- **Uploading raw video.** It does not fit, and that is the point: Part 2 sends
+  video from one device straight to the other without it being stored anywhere.
 
 ---
 
@@ -590,6 +708,14 @@ watcher is a convenience, not a requirement.
 | `is not found for API version` / `no longer available` from Gemini | That Gemini model was retired. Try `gemini-3.5-flash`, then Test AI. |
 | `invalid input syntax for type date` on a generated item | Fixed, but if it ever comes back it means a model wrote something other than a date. Nothing is lost - nothing was saved. Tell me the exact text. |
 | Watcher says 401 | The import token was revoked or mistyped. Make a new one in Settings. |
+| `db push` fails on `create policy ... on storage.objects` | `storage.objects` is not yours to change from the CLI in every project. Everything before it was applied; do the bucket and its policies from the dashboard — Step 3 → "If `db push` fails on the storage part". |
+| Uploading a file says "That upload was refused" | Either ViralRadar has used its 300 MB (**Settings → Project files** shows it) or the storage policies did not get applied. `npm run test:rls` tells you which. |
+| An upload says the file is bigger than 25 MB and it clearly is not | The bucket's `file_size_limit` was not set. **Storage → vr-project-files → Configuration** → 25 MB. |
+| A project file shows "this file is no longer stored" | The nightly cleanup removed it because its project was marked Posted more than fourteen days ago. Expected. Delete the item, or copy it back in. |
+| ViralRadar is not in Android's Share menu | The installed app has not picked up the new service worker. Open it, reload, force-close and reopen. See Step 14b. On iPhone this is never available. |
+| A shared screenshot never appears in the Inbox | Open the app directly — a share waits on the device until the app next opens with a connection, and that is when it is uploaded. |
+| **Settings → Project files** says it cannot read how much is used | `storage_used()` was not created, or `viralradar` is missing from Exposed schemas. `npm run inspect:db` distinguishes the two. |
+| **Clean up now** says the function is not deployed | `npx supabase functions deploy vr-purge-project-files --use-api` (Step 10). |
 
 When in doubt, paste the exact message to me — I would rather see the real error
 than guess from a description.

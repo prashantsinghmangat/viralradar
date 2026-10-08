@@ -124,6 +124,21 @@ test('the migrations touch nothing outside the viralradar schema', () => {
         `${f}: only auth.users and auth.uid() may be referenced, found ${m}`);
     }
     assert.ok(!/\balter table auth\.|\binsert into auth\./i.test(code), `${f}: must not write to auth`);
+
+    // Storage is shared the same way auth is: one storage.objects table and
+    // one set of policies for every app in the project. Files need three
+    // things from it and nothing else — the objects (for policies and for
+    // totalling bytes), the bucket row, and the function that splits a path.
+    for (const m of code.match(/storage\.\w+/g) || []) {
+      assert.ok(['storage.objects', 'storage.buckets', 'storage.foldername'].includes(m),
+        `${f}: only storage.objects, storage.buckets and storage.foldername() may be referenced, found ${m}`);
+    }
+    // The schema and the table are the Storage extension's. Adding a policy is
+    // additive and safe; changing the table is not.
+    assert.ok(!/\balter table storage\.|\bcreate schema storage\b/i.test(code),
+      `${f}: must not alter Storage's own tables`);
+    assert.ok(!/\b(alter|drop) policy\b/i.test(code),
+      `${f}: must not change or remove a policy, which in storage.objects may belong to the other app`);
   }
 });
 
@@ -190,7 +205,13 @@ test('every table created in the schema is locked down in the RLS migration', ()
   }
 
   // Every policy must be scoped to the signed-in user, with nothing left open.
-  const policies = [...rls.matchAll(/create policy (\w+)[\s\S]*?;/g)].map((m) => m[0]);
+  //
+  // Policies on storage.objects are checked separately, below: that table has
+  // no user_id column, so ownership is the first folder of the path instead.
+  // Lumping the two together would mean either weakening this check or
+  // exempting the storage ones, and both of those lose a real guarantee.
+  const allPolicies = [...rls.matchAll(/create policy (\w+)[\s\S]*?;/g)].map((m) => m[0]);
+  const policies = allPolicies.filter((p) => /on viralradar\./.test(p));
   for (const p of policies) {
     const name = p.match(/create policy (\w+)/)[1];
     assert.match(p, /to authenticated/, `${name}: must be limited to the authenticated role`);
@@ -211,7 +232,7 @@ test('every table created in the schema is locked down in the RLS migration', ()
     }
   }
   // Updates need both halves: USING to find the row, WITH CHECK to stop it being given away.
-  for (const p of policies.filter((x) => /for update/.test(x))) {
+  for (const p of allPolicies.filter((x) => /for update/.test(x))) {
     const name = p.match(/create policy (\w+)/)[1];
     const using = p.indexOf('using (');
     const check = p.indexOf('with check (');
@@ -219,17 +240,27 @@ test('every table created in the schema is locked down in the RLS migration', ()
     assert.ok(check !== -1, `${name}: an update policy needs WITH CHECK, or a row can be given away`);
     assert.ok(using < check, `${name}: USING must come before WITH CHECK`);
   }
+
+  // Nothing may have a policy except the viralradar tables and the one storage
+  // table the file feature needs. This is the line that stops a future
+  // migration quietly attaching a policy to something the other app owns.
+  for (const p of allPolicies) {
+    const target = p.match(/create policy \w+ on ([\w.]+)/);
+    assert.ok(target, `could not read what this policy is on: ${p.slice(0, 60)}`);
+    assert.ok(['storage.objects'].includes(target[1]) || target[1].startsWith('viralradar.'),
+      `a policy is attached to ${target[1]}, which is not ViralRadar's to change`);
+  }
 });
 
 test('every user-owned table defaults user_id to auth.uid() and refuses a null owner', () => {
-  const dir = path.join(ROOT, 'supabase', 'migrations');
-  const schema = fs.readdirSync(dir).filter((f) => f.includes('init'))
-    .map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
+  // Every migration, not just the first: a table added later is exactly the
+  // one most likely to miss a rule the earlier ones all follow.
+  const schema = allMigrations();
 
   // Split the file into one chunk per CREATE TABLE so each is checked on its own.
   const chunks = schema.split(/create table viralradar\./).slice(1)
     .filter((c) => !CONTROL_TABLES.includes(c.match(/^(\w+)/)[1]));
-  assert.ok(chunks.length >= 7);
+  assert.ok(chunks.length >= 9, `expected every user table, found ${chunks.length}`);
   for (const chunk of chunks) {
     const table = chunk.match(/^(\w+)/)[1];
     const body = chunk.slice(0, chunk.indexOf(');'));
@@ -372,10 +403,28 @@ test('ideas, scripts and results upsert on (user_id, id) so imports never duplic
   assert.match(trends.slice(0, trends.indexOf(');')), /primary key \(user_id, url\)/);
 });
 
-test('realtime only publishes the three tables the app subscribes to', () => {
-  const dir = path.join(ROOT, 'supabase', 'migrations');
-  const rls = fs.readdirSync(dir).filter((f) => f.includes('rls'))
-    .map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
-  const published = [...rls.matchAll(/alter publication supabase_realtime add table viralradar\.(\w+)/g)].map((m) => m[1]);
-  assert.deepEqual(published.sort(), ['ideas', 'results', 'scripts']);
+test('realtime only publishes the tables the app subscribes to', () => {
+  // Every migration: a later one adding a table to the publication is exactly
+  // how something nobody subscribes to would start being broadcast.
+  const sql = allMigrations();
+  const published = [...sql.matchAll(/alter publication supabase_realtime add table viralradar\.(\w+)/g)].map((m) => m[1]);
+  assert.deepEqual(published.sort(), ['ideas', 'project_items', 'projects', 'results', 'scripts']);
+
+  // What the browser actually listens to has to be the same list, or either
+  // rows are broadcast for nothing or an update never arrives.
+  const datajs = fs.readFileSync(path.join(ROOT, 'public', 'data.js'), 'utf8');
+  const names = (match) => (datajs.match(match) || [, ''])[1]
+    .split(',').map((s) => s.trim().replace(/['"]/g, '')).filter(Boolean);
+  const subscribed = [
+    ...names(/export const LIVE_TABLES = \[([^\]]*)\]/),
+    ...names(/export const PROJECT_LIVE_TABLES = \[([^\]]*)\]/),
+  ];
+  assert.deepEqual(subscribed.sort(), published.sort(),
+    'the publication and what the browser subscribes to have drifted apart');
+
+  // The allowlist and the schedule config must never be published, whatever
+  // else is: one says who may use the app, the other where the schedule calls.
+  for (const table of CONTROL_TABLES) {
+    assert.ok(!published.includes(table), `${table} must never be broadcast over realtime`);
+  }
 });

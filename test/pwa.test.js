@@ -73,9 +73,109 @@ test('the service worker caches the shell and nothing else', () => {
   }
   // Every shared module the browser imports has to be in there too, or the app
   // will not start with no connection.
-  for (const name of ['stats', 'defaults', 'time', 'tokens', 'edit-plan']) {
+  for (const name of ['stats', 'defaults', 'time', 'tokens', 'edit-plan', 'projects']) {
     assert.ok(shell.includes(`/shared/${name}.mjs`), `shared/${name}.mjs is imported but never cached`);
   }
+});
+
+// ---------- Web Share Target ----------
+//
+// This is the only part of the app that depends on the service worker for
+// something other than speed: without it there is nothing to answer the POST
+// Android makes, because the site is static and has no server.
+
+test('the manifest puts ViralRadar in Android\'s Share menu', () => {
+  const target = manifest.share_target;
+  assert.ok(target, 'without share_target the app never appears in the Share sheet');
+  assert.equal(target.method, 'POST', 'GET cannot carry a shared image');
+  assert.equal(target.enctype, 'multipart/form-data', 'files need a multipart body');
+  assert.match(target.action, /^\//, 'the action has to be a path on this origin');
+
+  // Different apps put a shared link in different fields, so all three text
+  // fields are asked for and the page decides which it got.
+  for (const field of ['title', 'text', 'url']) {
+    assert.equal(target.params[field], field, `a share may arrive in "${field}"`);
+  }
+  const files = target.params.files;
+  assert.ok(Array.isArray(files) && files.length >= 1, 'images are the main thing worth sharing in');
+  assert.ok(files[0].accept.some((a) => /^image\//.test(a)), 'images must be accepted');
+  // Video is deliberately absent: it is far bigger than the 25 MB limit, and
+  // accepting it would put ViralRadar in the Share sheet for something it then
+  // refuses.
+  assert.ok(!files.some((f) => f.accept.some((a) => /^video\//.test(a))),
+    'raw video is never uploaded, so it must not be offered in the Share sheet');
+});
+
+test('the worker is what answers the share, since there is no server', () => {
+  // Netlify answers a POST to a static site with a 405. If the worker did not
+  // intercept it, choosing ViralRadar from the Share sheet would simply fail.
+  assert.match(sw, /request\.method === 'POST'/, 'the worker has to handle a POST, which it otherwise ignores');
+  const action = manifest.share_target.action;
+  assert.ok(sw.includes(`'${action}'`), `the worker must handle ${action}, the path the manifest names`);
+  assert.match(sw, /request\.formData\(\)/, 'a multipart body is read as form data');
+  // 303 is what turns the POST into a GET, so a reload does not re-share.
+  assert.match(sw, /Response\.redirect\([^)]*303\)/, 'the share has to end as a redirect, or the browser shows a blank POST response');
+});
+
+test('a share waits in its own cache, which a deploy does not clear', () => {
+  // The session lives in the page, not in the worker, so the worker cannot
+  // write to Supabase. It parks the payload instead, which also means a share
+  // made with no signal is delivered the next time the app opens.
+  assert.match(sw, /const SHARE_CACHE = 'viralradar-shared'/);
+  assert.match(sw, /caches\.open\(SHARE_CACHE\)/);
+
+  // The activate handler deletes old shell caches. If it matched the share
+  // cache too, a share made moments before a deploy would be thrown away.
+  // The activate handler alone, ending at its own closing brace rather than at
+  // the next listener — the share-handling function sits between the two.
+  const activateStart = sw.indexOf("addEventListener('activate'");
+  const activate = sw.slice(activateStart, sw.indexOf('\n});', activateStart))
+    // Comments stripped, so this is about what the worker does rather than
+    // about what it says it does.
+    .split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+  assert.match(activate, /viralradar-shell-/, 'only the shell caches are versioned');
+  assert.ok(!/SHARE_CACHE/.test(activate), 'a deploy must not throw away a share that has not been delivered yet');
+
+  // The page and the worker have to agree on where it is parked.
+  const app = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  for (const name of ['SHARE_CACHE', 'SHARE_PREFIX']) {
+    const inSw = sw.match(new RegExp(`const ${name} = '([^']+)'`));
+    const inApp = app.match(new RegExp(`const ${name} = '([^']+)'`));
+    assert.ok(inSw && inApp, `${name} has to be defined in both the worker and the page`);
+    assert.equal(inApp[1], inSw[1], `${name} differs between the worker and the page, so a share is parked where nothing looks`);
+  }
+});
+
+test('a share that brought nothing, or failed, still says so', () => {
+  // Android gives no feedback beyond closing the Share sheet, so a share that
+  // failed looks exactly like one that worked unless the app says otherwise.
+  assert.match(sw, /shared=empty/, 'a share with no content is its own case');
+  assert.match(sw, /shared=failed/, 'a share that could not be read must not look like success');
+  assert.match(sw, /catch/, 'a malformed body must not leave the Share sheet hanging');
+
+  const app = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const report = app.slice(app.indexOf('function reportShare'), app.indexOf('// ================= IMPORT'));
+  for (const outcome of ['empty', 'failed']) {
+    assert.ok(report.includes(`'${outcome}'`), `the page never tells anyone about shared=${outcome}`);
+  }
+  assert.match(report, /replaceState/, 'a reload must not report the same share again');
+});
+
+test('a shared file is checked against the 25 MB limit like any other', () => {
+  const app = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const drain = app.slice(app.indexOf('async function drainShares'), app.indexOf('function reportShare'));
+  assert.match(drain, /checkUpload\(/, 'a share is an upload, and the same limits apply');
+  assert.match(drain, /inbox/i, 'a share with no folder chosen goes to the Inbox');
+  // One failed item must not stop the rest, and nothing may be left in the
+  // cache to be delivered twice.
+  assert.match(drain, /cache\.delete\(/, 'a delivered share has to be cleared, or it arrives again on every boot');
+  assert.match(drain, /catch/);
+});
+
+test('the Projects screen is reachable from the app and from the home screen', () => {
+  assert.match(html, /href="#\/projects" data-route="projects"/, 'there has to be a way in from the nav');
+  assert.ok(manifest.shortcuts.some((s) => s.url.includes('/projects')),
+    'a long-press on the icon should reach the folders, which is where a phone share lands');
 });
 
 test('configuration is never served from the cache without trying the network', () => {

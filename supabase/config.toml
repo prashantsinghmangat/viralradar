@@ -439,3 +439,10 @@ verify_jwt = false
 # constant-time compare, and checks the allowlist, before doing anything.
 [functions.vr-refresh-trends]
 verify_jwt = false
+
+# The nightly file cleanup, called the same way by the same schedule, with the
+# same secret and the same checks. It also takes a user's JWT, from "Clean up
+# now" in Settings, and then Row Level Security is what limits it to that
+# person's own files.
+[functions.vr-purge-project-files]
+verify_jwt = false

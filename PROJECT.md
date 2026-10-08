@@ -46,13 +46,16 @@ and the source for the one-time data migration.
    ┌───────────▼─────────────────────────────────────────▼───────────┐
    │ SUPABASE  (project "tracebug", shared with another app)         │
    │                                                                 │
-   │  Postgres — schema "viralradar", 8 tables, RLS on every one     │
+   │  Postgres — schema "viralradar", 10 tables, RLS on every one    │
    │  Auth     — email + password (auth.users is shared)             │
    │  Edge Functions (Deno):                                         │
    │     vr-import          JWT or vr_ token                         │
    │     vr-generate        holds GEMINI / OPENROUTER keys           │
    │     vr-refresh-trends  holds YOUTUBE / GITHUB keys              │
+   │     vr-purge-project-files  deletes files posted 14 days ago    │
+   │  Storage  — private bucket "vr-project-files", 300 MB of ~1 GB  │
    │  pg_cron — 01:30 UTC (07:00 IST) → vr-refresh-trends            │
+   │            02:00 UTC (07:30 IST) → vr-purge-project-files       │
    └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -77,8 +80,13 @@ decisions:
 - **Its own schema.** Everything is in `viralradar.*`, never `public`, so no
   table name can collide. The Data API has `viralradar` added to *Exposed
   schemas*, and the frontend uses `createClient(url, key, { db: { schema: 'viralradar' } })`.
-- **Prefixed function names** — `vr-import`, `vr-generate`, `vr-refresh-trends` —
-  because function names are global to a project.
+- **Prefixed function names** — `vr-import`, `vr-generate`, `vr-refresh-trends`,
+  `vr-purge-project-files` — because function names are global to a project.
+  Storage policy names are prefixed `vr_` for the same reason: they all live on
+  one shared `storage.objects`.
+- **A fixed slice of the file quota.** The whole project gets about 1 GB of
+  Storage. ViralRadar takes 300 MB and refuses uploads past it, so tracebug is
+  never starved. Raw video is never stored there at all.
 - **No trigger on `auth.users`.** One would fire for the other app's signups too.
   The `settings` row is created by the app on first use instead.
 - **An allowlist.** `auth.users` already held 3 accounts belonging to the other
@@ -102,6 +110,8 @@ maintained by a trigger.
 | `settings` | `user_id` | `niche_keywords[]`, language, default_length, `ai_order[]`, gemini_model, openrouter_model |
 | `usage` | `(user_id, date, provider)` | units, requests — YouTube quota and AI call counts |
 | `import_tokens` | `id` | `token_hash` (SHA-256 only), label, last_used_at |
+| `projects` | `(user_id, id)` | title, `script_id`, `status` active/posted/archived, `is_inbox`, `posted_at` |
+| `project_items` | `(user_id, id)` | `project_id`, `kind` text/link/image/file, content, storage_path, file_name, mime, size_bytes, sha256, from_device, `preview` (generated) |
 | `allowed_users` | `user_id` | who may use ViralRadar at all |
 
 Notes that matter:
@@ -117,6 +127,61 @@ Notes that matter:
   script cannot drag it back from "posted" to "to shoot".
 - **`results.script_id` is not a foreign key** on purpose: a bundle export can
   list a result before its script, and import must not depend on item order.
+  `projects.script_id` is not one either, for the same reason plus one more:
+  deleting a script must not take its folder of screenshots with it.
+- **`project_items` has a composite foreign key** on `(user_id, project_id)`
+  rather than just `project_id`. `projects`' primary key is the same pair, so an
+  item and its folder always have the same owner. RLS stops a user reaching
+  another user's rows; this stops the rows themselves being wrong.
+- **`project_items.preview`** is a generated column holding one short line of
+  whatever the item is. The Projects screen draws a preview on each folder card,
+  and without it the folder list would have to read every note in full — a note
+  can be 20,000 characters.
+- **One Inbox per user**, enforced by a partial unique index
+  (`where is_inbox`). Two devices racing to create it end up with one folder,
+  because the loser's insert is refused and it reads the winner's.
+- **`projects.posted_at` is maintained by a trigger**, not by the app. It is the
+  clock the 14-day file cleanup reads, and un-posting a folder clears it — a
+  stale date would have files deleted from a folder back in use.
+
+### Files
+
+Files live in a private Storage bucket, `vr-project-files`, keyed
+`<user_id>/<project_id>/<stamp>-<name>`. The user id comes first because that is
+what the storage policies match on.
+
+Two limits, both because this Supabase project is shared with another app
+(`tracebug`) whose free tier gives the whole project about 1 GB of file storage:
+
+| Limit | Value | Enforced by |
+|---|---|---|
+| One file | 25 MB | the browser, a `CHECK` on `size_bytes`, and the bucket's `file_size_limit` |
+| Everything ViralRadar holds | 300 MB | the browser, and `storage_under_cap()` in the insert policy |
+
+Each of the three places catches a different mistake: the browser refuses before
+spending mobile data and can explain itself, the `CHECK` catches a row that
+claims a size the upload never had, and `file_size_limit` is the only one that
+can refuse before the bytes are transferred. `shared/projects.mjs` holds the
+numbers for the browser; the SQL restates them as literals because a policy
+cannot import anything, and `test/projects.test.js` fails if they ever disagree.
+
+**Raw video is never uploaded.** It is far bigger than either limit. Part 2 sends
+it device to device; a video only ever appears here as a row saying it exists.
+
+The 300 MB figure is measured from `storage.objects`, not by summing
+`project_items.size_bytes` — an upload that succeeded while its row insert failed
+still occupies the shared quota, and a total that cannot see those bytes would
+let the cap be walked past. It is checked as the row is created, so the new file
+is not yet counted: the promise is "no upload may *start* once 300 MB is held",
+which can overshoot by at most one file.
+
+Files in a project marked **posted** are deleted 14 days later by a pg_cron job.
+The job does not delete anything itself: removing a row from `storage.objects`
+leaves the bytes in the bucket, still counted against the quota and now with
+nothing pointing at them. Only the Storage API really removes a file, so the job
+asks `vr-purge-project-files` to do it — files first, rows second, so a failure
+half way leaves rows pointing at files that are gone rather than files nothing
+points at.
 
 ---
 
@@ -139,7 +204,27 @@ and `anon`/`authenticated` revoked, so only the service role can read or change
 it. `is_allowed()` is `SECURITY DEFINER` with an empty `search_path` so it can
 read a table its caller cannot.
 
-`anon` — a browser before sign-in — has no privileges on anything.
+`anon` — a browser before sign-in — has no privileges on anything in the
+`viralradar` schema.
+
+**Storage is the one exception to all of the above shape.** `storage.objects` is
+one table belonging to the Storage extension, shared with the other app in this
+project, holding every app's files. It has no `user_id` column, so the four
+`vr_project_files_*` policies compare the **first folder of the path** with
+`auth.uid()` instead, plus the same `is_allowed()` gate. Each one also pins
+`bucket_id = 'vr-project-files'` as its first condition and
+`array_length(storage.foldername(name), 1) = 2`, so nothing can reach the other
+app's files, land at the top of the bucket, or invent a deeper tree. Only the
+insert policy carries the 300 MB cap: being full must not stop you reading or
+deleting, or there would be no way back. Every policy name is prefixed `vr_`
+because two policies on one shared table cannot have the same name, and no
+migration here ever alters or drops a policy — it might be the other app's.
+
+`anon` is deliberately **not** revoked from `storage.objects`: that table is
+shared, and the other app may serve public files from it. The policies are
+scoped to `authenticated`, so a browser with no session matches nothing and gets
+an empty result rather than a refusal. The RLS suite states that explicitly, so
+a future change cannot quietly turn it into a leak.
 
 **Where the service role is used, the gates must be re-implemented by hand.** The
 import function's token path runs as the service role, which bypasses RLS
@@ -147,7 +232,20 @@ entirely, so it:
 1. sets `user_id` explicitly on every row, and
 2. checks the allowlist itself.
 
-Miss either and an import token becomes a way around every policy.
+Miss either and an import token becomes a way around every policy. The nightly
+file cleanup runs the same way and does the same two things, and additionally
+refuses to delete any path that is not under the user's own prefix — for a JWT
+caller the storage policies would refuse it, but for the schedule nothing else
+would.
+
+`storage_used()` is the other place privilege is elevated. It has to be
+`SECURITY DEFINER`, because it is called from inside a policy *on*
+`storage.objects` and a `SECURITY INVOKER` function would re-enter that table's
+policies to answer. That makes the filter in its body the only thing keeping it
+honest, so it is written in: own prefix, own bucket, and only for someone on the
+allowlist. The RLS suite checks that a user over the cap and a user under it get
+their own figures, and that a non-allowlisted account reads zero whatever is in
+the bucket.
 
 **Secrets.** API keys live only in Supabase secrets, read by Edge Functions. They
 never reach the browser, the phone or the database. Import tokens are stored only
@@ -175,6 +273,8 @@ shared/              runtime-agnostic cores — Node, Deno and the browser all u
   sources/*.mjs        youtube, hackernews, reddit, github
   stats.mjs            results analytics (runs in the browser in the cloud build)
   tokens.mjs           import tokens: generate, hash, read an Authorization header
+  projects.mjs         project folders: the two storage limits, the path layout,
+                       the device naming and the upload rules
   keys.mjs             pick a usable API key out of a bare value, list or JSON
   defaults.mjs         model names, language, length — matched to the DB defaults
   time.mjs, http.mjs
@@ -187,28 +287,32 @@ shared/              runtime-agnostic cores — Node, Deno and the browser all u
                      to say the same words.
 
 supabase/
-  migrations/        5 files: schema, policies, usage + schedule, model defaults
+  migrations/        6 files: schema, policies, usage + schedule, model defaults,
+                     project folders + the storage bucket and its policies
   tests/rls.sql      the isolation test, as one block for the dashboard
   functions/
     _shared/cors.ts    allow-list of origins, no wildcard
     _shared/auth.ts    JWT vs vr_ token, and the storage port
     _shared/core/      GENERATED copy of shared/*.mjs — see below
-    vr-import/         all three are deployed
+    vr-import/         all four are deployed
     vr-generate/
     vr-refresh-trends/
+    vr-purge-project-files/   deletes files from projects posted 14 days ago
 
 public/              the whole frontend — no build step, no framework
   index.html           every screen, as one page
-  app.js               screens, sign-in, Realtime, the AI buttons
+  app.js               screens, sign-in, Realtime, the AI buttons, project folders
   data.js              every database call, with the client injected so it tests
   styles.css           one stylesheet, dark, phone-first
-  sw.js                service worker: shell cached, config always fresh
+  sw.js                service worker: shell cached, config always fresh, and the
+                       one thing it is load-bearing for — answering the POST from
+                       Android's Share menu, since this site has no server
   manifest.webmanifest, icons/      what makes it installable
   shared/              GENERATED copy of shared/*.mjs, imported as ES modules
 
 scripts/             build, sync-shared, inspect-db, test-rls, rls-plan,
                      db-url, make-icons
-test/                22 files, 247 tests
+test/                24 files, 316 tests
 ```
 
 **Why `_shared/core/` is a copy.** A deployed Edge Function only receives files
@@ -243,7 +347,7 @@ messages, counts and errors** — that is the test for "reuse, do not rewrite".
 
 ## 8. The screens, and what the cloud version adds
 
-Six screens, hash-routed, no build step. All existing markup and behaviour is
+Seven screens, hash-routed, no build step. All existing markup and behaviour is
 kept; the cloud version changes where the data comes from and adds the AI.
 
 | Screen | Today | Cloud version adds |
@@ -251,9 +355,10 @@ kept; the cloud version changes where the data comes from and adds the AI.
 | **Radar** | trend cards by source, velocity score, Refresh now | "Write script" on any trend card |
 | **Ideas** | grouped by day, Picked / Skip, filters | **Generate ideas**, and "Write script" on an idea |
 | **Scripts** | board: To shoot → Shot → Edited → Posted, drag or arrows; detail view with teleprompter and copy buttons | arrives live when generated or imported elsewhere; the **edit plan** below the teleprompter, and **Make edit plan** when a script has none |
+| **Projects** | *new* | a folder per video: notes, links and files that reach the other device in a second. **Open project** from any script, an **Inbox** for anything shared in from Android, and a per-item note saying which device it came from |
 | **Results** | totals, avg views, save rate, streak, bars by format/hook/len/CTA, top 5, full table | same numbers, computed in the browser |
 | **Import** | paste box, file upload, recent imports log | **Paste from Shorts Studio** button (clipboard), same on Ideas and Scripts |
-| **Settings** | watch folder, keywords, YouTube quota, LAN URLs, backup/restore | niche keywords, language, default length, AI order and models, **Test AI**, import token management, backup/restore |
+| **Settings** | watch folder, keywords, YouTube quota, LAN URLs, backup/restore | niche keywords, language, default length, AI order and models, **Test AI**, import token management, backup/restore, **this device's name**, and how much of the 300 MB of project files is used |
 
 **The everyday flow**
 
@@ -265,6 +370,17 @@ kept; the cloud version changes where the data comes from and adds the AI.
 4. Pick an idea, or generate ideas, or write a script from a trend.
 5. Move the script across the board as you shoot and edit.
 6. Log results in Shorts Studio, export, and the Results screen updates.
+
+**The folder flow**
+
+1. On a script, tap **Open project**. The folder is made the first time and
+   reused afterwards.
+2. On the phone, share a reference screenshot or a link into ViralRadar from any
+   app's Share menu. It lands in the **Inbox**.
+3. On the laptop, paste the tool's URL into the folder's Send box. The phone
+   says *New from Laptop: …* a second later.
+4. Once the video is up, mark the folder **Posted**. Its files are deleted
+   fourteen days later, by itself. The notes and links stay.
 
 ---
 
@@ -321,21 +437,23 @@ and all six screens read and write the real database:
   useful without it.
 - **No folder watcher.** Phase 9, optional. *Paste from Shorts Studio* does the
   same job in one tap and works on the phone, which a watcher never could.
+- **Device-to-device video transfer is Part 2**, not built. Project folders hold
+  everything except the video itself; the video still has to be moved by hand.
 
 **Done by hand:** migrations pushed, schema exposed to the Data API, account
 created with a password and added to the allowlist, the three API keys
 (Gemini, OpenRouter, YouTube) in Supabase secrets, `ALLOWED_ORIGINS` and
 `CRON_SECRET` set, the cron secret also in Vault, code on GitHub,
-Netlify deploying from `main`, all three functions deployed, PWA installed on
+Netlify deploying from `main`, all four functions deployed, PWA installed on
 the phone.
 
 ---
 
 ## 10. Testing
 
-`npm test` — **247 tests**, no network, no database, no keys needed.
+`npm test` — **316 tests**, no network, no database, no keys needed.
 
-`npm run test:rls` — **193 assertions and 4 proofs** against the real Supabase
+`npm run test:rls` — **292 assertions and 7 proofs** against the real Supabase
 database. It connects as `postgres`, which owns the tables and therefore
 bypasses RLS, so every assertion runs in its own transaction that first becomes
 a real signed-in user (`SET LOCAL ROLE authenticated` plus `request.jwt.claims`)
@@ -347,11 +465,32 @@ demands that a named assertion now *fails*, and rolls back. A proof that does no
 produce a failure is itself reported as a failure. This caught two assertions
 that were passing for the wrong reason (see §11).
 
-Other things the suite checks that are easy to get wrong:
-- every SQL file parses under the **real PostgreSQL grammar** (libpg-query)
-- migrations never touch `public` or `auth`, never drop, never delete rows
-- the cloud and local importers produce identical messages
-- the generated copies under `supabase/functions/` match their originals
+The suite also covers **files**, which are a different table with different
+policies and no `user_id` column:
+
+- a user can read, rename and delete only files whose path starts with their own
+  id, in ViralRadar's own bucket, in both directions between the two test users
+- a file cannot be renamed out of its owner's prefix, which is the storage
+  equivalent of handing a row away
+- nothing can land at the top of the bucket or in a deeper tree
+- an account that is signed in but not on the allowlist sees no files, can
+  upload none, and totals up zero bytes whatever is in the bucket
+- **the 300 MB cap**: one test user is given a 320 MB file in the fixtures, so
+  the same run proves the cap refuses that user's next upload, that the other
+  user — in the same bucket — is unaffected, and that being full still allows
+  deleting, or there would be no way back
+- **the 25 MB limit**, in both places that can refuse it: the `CHECK` on
+  `size_bytes`, and the bucket's `file_size_limit`
+- **the 14-day cleanup**: one folder posted 30 days ago and one posted 3 days
+  ago, with a file in each. Exactly one being due is what says the fortnight is
+  applied rather than "posted" alone; asking for 60 days returns nothing, which
+  says the period is really a parameter; and one user cannot see which of the
+  other's files are due
+- **rows that belong to you and are still wrong** — an item in someone else's
+  folder, a path pointing outside the folder it claims, a file over 25 MB, a
+  second Inbox. RLS decides which rows you may write and says nothing about
+  whether their contents are true, so these are constraints, and they are tested
+  as such
 
 A deployed Edge Function cannot be run here, so it is **probed over HTTP**
 instead: a pre-flight from the real site gets CORS headers and one from any
@@ -402,27 +541,6 @@ introduced on purpose, the suite is confirmed to fail, and the file is restored.
   privileges and every query came back "permission denied for schema
   viralradar", which reads like a database problem and is not. Now in
   shared/keys.mjs with its own tests.
-- *A build-time check reported success without looking* — it treated any 401
-  as "schema exposed, anon refused", when the 401 was the project rejecting
-  the key. It said step 4 was done when it had not been.
-- *A bare `Bearer` header* was classified as a JWT and would have been forwarded
-  as one.
-- *`decodeURIComponent` throws on a stray `%`* — exactly the password that sends
-  someone looking for help would have crashed the helper meant to help them.
-- *A placeholder in a prompt is a value in the answer.* The ideas shape said
-  `"date": "YYYY-MM-DD (today)"`. Gemini filled it in sensibly; the OpenRouter
-  model copied the parenthetical, and because `date` is a real date column
-  Postgres refused the whole statement: `invalid input syntax for type date:
-  "2026-10-08 (today)"`. Found the first time the fallback ran against a second
-  live provider, and invisible until then. Fixed at both ends — the prompt now
-  carries the real date, and `dateOnly()` means nothing reaches a date column
-  without being one. Two lessons: a second model is a test the first cannot
-  perform, and a prompt is input validation.
-- *JavaScript rolls impossible dates forward.* `new Date('2026-02-31')` is
-  3 March, where Postgres rejects it. The first version of `dateOnly()` would
-  have written a date nobody typed; the test caught it on its first run, which
-  is why it checks the digits survive the round trip rather than only that
-  parsing succeeded.
 
 ---
 
@@ -455,6 +573,21 @@ introduced on purpose, the suite is confirmed to fail, and the file is restored.
 - The **allowlist** has one entry. The other three accounts in this project can
   sign in and will see an empty app that saves nothing — by design, but it has
   not been confirmed by signing in as one of them.
+- **Project folders have not been used across two real devices yet.** Everything
+  is built and tested, but the thing it exists for — share a screenshot in on the
+  phone, see it on the laptop a second later — is observable and has not been
+  sat and watched. The same is true of the Android Share menu entry, which only
+  appears once the installed PWA has updated its service worker.
+- **The nightly file cleanup has not fired yet.** The rule is tested against
+  real dates in the RLS suite and the function is written, but it needs
+  `cron_config.purge_function_url` filled in, and nothing has been posted for
+  fourteen days. **Clean up now** in Settings runs it on demand, which is how to
+  check it without waiting.
+- **The 300 MB cap can overshoot by one file.** It is checked as the row is
+  created, so the file being uploaded is not yet counted — 325 MB worst case out
+  of a ~1 GB shared quota. Counting the new row would need its size, which
+  `storage.objects` does not have at that point. The browser refuses at 300 MB
+  long before the policy does.
 
 Two things that were unknown until the first deploy, now settled: the
 `jsr:@supabase/supabase-js@2` import resolves, and `--use-api` does bundle the
@@ -476,6 +609,7 @@ Two things that were unknown until the first deploy, now settled: the
 | `npx supabase db push` | apply migrations | logged in, linked |
 | `npx supabase secrets list` | names and hashes of the secrets | logged in, linked |
 | `npx supabase functions deploy vr-import --use-api` | deploy a function without Docker | logged in, linked |
+
 
 Environment: Node 24, Supabase CLI 2.120.0, PostgreSQL 17.6, project
 `tracebug` (shared with another app), region `ap-south-1`.

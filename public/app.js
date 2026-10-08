@@ -9,6 +9,10 @@ import { data, readable } from './data.js';
 import { newToken, hashToken } from './shared/tokens.mjs';
 import { LENGTHS, DEFAULT_AI_ORDER } from './shared/defaults.mjs';
 import { readEditPlan, editPlanText } from './shared/edit-plan.mjs';
+import {
+  MAX_FILE_BYTES, POSTED_RETENTION_DAYS, TOTAL_BYTES_CAP,
+  checkUpload, cleanDeviceName, downloadUrl, formatBytes, guessDeviceName, itemPreview, usageSummary,
+} from './shared/projects.mjs';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -97,8 +101,31 @@ $('#themeBtn').addEventListener('click', () => {
 });
 
 // ---------- who is signed in ----------
-const state = { session: null, settings: null, stopLive: null };
+const state = { session: null, settings: null, stopLive: null, stopProjectLive: null };
 const userId = () => state.session?.user?.id ?? null;
+
+// ---------- which device this is ----------
+//
+// "New from Laptop" only means something if this device knows what it is
+// called. The name is per device, so it belongs in localStorage rather than in
+// the settings row that every device shares. It is only ever a label — nothing
+// is decided by it — so a browser in private mode falling back to a guess
+// costs nothing.
+const DEVICE_KEY = 'vr-device-name';
+
+function deviceName() {
+  try {
+    const saved = localStorage.getItem(DEVICE_KEY);
+    if (saved) return cleanDeviceName(saved);
+  } catch { /* private mode */ }
+  return guessDeviceName(navigator.userAgent);
+}
+
+function setDeviceName(name) {
+  const clean = cleanDeviceName(name, guessDeviceName(navigator.userAgent));
+  try { localStorage.setItem(DEVICE_KEY, clean); } catch { /* private mode */ }
+  return clean;
+}
 
 // ---------- live updates ----------
 //
@@ -128,23 +155,63 @@ function startLive() {
 function stopLive() {
   if (state.stopLive) state.stopLive();
   state.stopLive = null;
+  if (state.stopProjectLive) state.stopProjectLive();
+  state.stopProjectLive = null;
   clearTimeout(liveTimer);
 }
 
+// ---------- project folders, arriving from the other device ----------
+//
+// This is the point of the whole feature: paste a link on the laptop, and the
+// phone says so a second later without being touched. So it gets its own
+// message naming the device and showing a preview, rather than being counted
+// into the generic "updated from another device" one.
+//
+// An item this device just added comes back over Realtime too. Saying "New
+// from Phone" on the phone that sent it would be nonsense, so items whose
+// from_device matches this one are redrawn silently.
+function startProjectLive() {
+  if (state.stopProjectLive) return;
+  state.stopProjectLive = data.liveProjects(({ table, event, row }) => {
+    const onProjectScreen = currentRoute() === 'projects';
+    if (event === 'DELETE') {
+      if (onProjectScreen) render();
+      return;
+    }
+    if (table === 'project_items' && event === 'INSERT') {
+      const from = row && row.from_device;
+      if (from && from !== deviceName()) {
+        toast(`New from ${from}: ${itemPreview(row)}`, false, 6000);
+      }
+    }
+    if (onProjectScreen) render();
+  });
+}
+
 // ---------- router ----------
-const currentRoute = () => (location.hash.replace(/^#\/?/, '').split('/')[0] || 'radar');
-const routes = { radar: renderRadar, ideas: renderIdeas, scripts: renderScripts, results: renderResults, import: renderImport, settings: renderSettings };
+//
+// The hash can carry a query — "#/projects?shared=1" is how the service worker
+// reports back after a share — so it is split off before anything else. Without
+// that, the route name would be "projects?shared=1", match nothing, and quietly
+// land on the radar.
+function parseHash(hash = location.hash) {
+  const [path] = hash.replace(/^#\/?/, '').split('?');
+  const [name, ...rest] = path.split('/');
+  return { name, params: rest.map(decodeURIComponent) };
+}
+const currentRoute = () => parseHash().name || 'radar';
+const routes = { radar: renderRadar, ideas: renderIdeas, scripts: renderScripts, projects: renderProjects, results: renderResults, import: renderImport, settings: renderSettings };
 let renderToken = 0;
 
 async function render() {
   if (!state.session) return renderLogin();
   const token = ++renderToken;
-  const [name, ...rest] = location.hash.replace(/^#\/?/, '').split('/');
+  const { name, params } = parseHash();
   const route = routes[name] ? name : 'radar';
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.route === route));
   stopPrompter();
   try {
-    const html = await routes[route](rest.map(decodeURIComponent));
+    const html = await routes[route](params);
     if (token !== renderToken) return; // a newer navigation won
     copyStore = copyStore.slice(-500);
     view.innerHTML = html;
@@ -466,6 +533,7 @@ async function renderScriptDetail(id) {
     </div>
     <div class="row" style="margin-bottom:14px">
       <div class="seg">${STAGES.map(([k, l], i) => `<button type="button" class="${i === idx ? 'on' : ''}" data-action="setStage" data-id="${esc(s.id)}" data-v="${k}">${l}</button>`).join('')}</div>
+      <button type="button" class="sm" data-action="openScriptProject" data-id="${esc(s.id)}">📁 Open project</button>
       ${s.topic ? `<span class="muted small">Topic: ${esc(s.topic)}</span>` : ''}
       ${created ? `<span class="muted small">Created ${esc(when(created))}</span>` : ''}
       ${s.source && s.source !== 'shorts-studio' ? `<span class="badge accent">Written by ${esc(s.source)}</span>` : ''}
@@ -571,6 +639,27 @@ function renderEditPlan(script) {
 actions.setStage = async (btn) => {
   try { await data.scripts.setStage(btn.dataset.id, btn.dataset.v); render(); }
   catch (e) { toast(e.message, true); }
+};
+
+/**
+ * The folder for this script, made the first time it is asked for.
+ *
+ * One button for "open" and "create" on purpose: from here they are the same
+ * intention, and being asked to name a folder you are already looking at the
+ * script for is a question with only one sensible answer.
+ */
+actions.openScriptProject = async (btn) => {
+  btn.disabled = true;
+  btn.textContent = 'Opening…';
+  try {
+    const script = await data.scripts.get(btn.dataset.id);
+    const project = await data.projects.forScript(script);
+    location.hash = `#/projects/${encodeURIComponent(project.id)}`;
+  } catch (e) {
+    toast(e.message, true);
+    btn.disabled = false;
+    btn.textContent = '📁 Open project';
+  }
 };
 actions.deleteScript = async (btn) => {
   if (btn.dataset.armed !== '1') { btn.dataset.armed = '1'; btn.textContent = 'Tap again to delete'; btn.classList.add('copied'); return; }
@@ -707,6 +796,397 @@ async function renderResults() {
     </table></div>`;
 }
 actions.resultDim = (btn) => { resultDim = btn.dataset.v; render(); };
+
+// ================= PROJECTS =================
+//
+// A folder per video, and the one place the phone and the laptop meet. Notes,
+// links, screenshots and a thumbnail draft go in; raw video never does — it is
+// far bigger than the 300 MB this app allows itself out of a shared Supabase
+// project, and Part 2 sends it device to device instead.
+
+const PROJECT_STATUSES = [['active', 'Active'], ['posted', 'Posted'], ['archived', 'Archived']];
+const ITEM_ICON = { text: '📝', link: '🔗', image: '🖼️', file: '📎' };
+
+async function renderProjects(params) {
+  if (params[0]) return renderProjectDetail(params[0]);
+
+  const [list, usage] = await Promise.all([data.projects.list(), data.storage.usage()]);
+  const cards = list.map((p) => {
+    const latest = p.latest
+      ? `<div class="muted small">${esc(itemPreview(p.latest, 70))}${p.latest.from_device ? ` · from ${esc(p.latest.from_device)}` : ''} · ${esc(ago(p.latest.created_at))}</div>`
+      : '<div class="muted small">Empty. Open it and send something.</div>';
+    return `<article class="card project" data-id="${esc(p.id)}" data-action="openProject">
+      <div class="row" style="justify-content:space-between;align-items:flex-start">
+        <h3 style="margin:0">${p.is_inbox ? '📥 ' : '📁 '}${esc(p.title)}</h3>
+        ${p.status !== 'active' ? `<span class="badge ${p.status === 'posted' ? 'good' : ''}">${esc(p.status === 'posted' ? 'Posted' : 'Archived')}</span>` : ''}
+      </div>
+      <div class="muted small">${p.item_count} item${p.item_count === 1 ? '' : 's'}${p.bytes ? ` · ${esc(formatBytes(p.bytes))}` : ''}</div>
+      ${latest}
+    </article>`;
+  }).join('');
+
+  return `
+    <div class="page-head">
+      <h1>Projects</h1>
+      <span class="muted small">${esc(usage.text)}</span>
+    </div>
+    <div class="card row" style="margin-bottom:14px;gap:8px">
+      <input type="text" id="newProject" placeholder="New project…  e.g. Background remover demo" style="flex:1">
+      <button type="button" class="primary" data-action="createProject">📁 Create</button>
+      <button type="button" data-action="openInbox">📥 Inbox</button>
+    </div>
+    ${list.length ? `<div class="grid">${cards}</div>`
+      : '<div class="empty"><span class="big">📁</span>No projects yet.<br>Create one above, or open one from a script.</div>'}
+    <p class="muted small">Files in a project marked <b>Posted</b> are deleted after ${POSTED_RETENTION_DAYS} days, so this
+      shared Supabase project is never filled up. Notes and links are kept.</p>`;
+}
+
+actions.openProject = (card) => { location.hash = `#/projects/${encodeURIComponent(card.dataset.id)}`; };
+
+actions.openInbox = async (btn) => {
+  btn.disabled = true;
+  try {
+    const inbox = await data.projects.inbox();
+    location.hash = `#/projects/${encodeURIComponent(inbox.id)}`;
+  } catch (e) { toast(e.message, true); }
+  finally { btn.disabled = false; }
+};
+
+actions.createProject = async (btn) => {
+  const input = $('#newProject');
+  const title = input.value.trim();
+  if (!title) { toast('What is the project called?', true); input.focus(); return; }
+  btn.disabled = true;
+  try {
+    const project = await data.projects.create({ title });
+    location.hash = `#/projects/${encodeURIComponent(project.id)}`;
+  } catch (e) {
+    toast(e.message, true);
+    btn.disabled = false;
+  }
+};
+
+async function renderProjectDetail(id) {
+  const [project, list, usage] = await Promise.all([
+    data.projects.get(id),
+    data.projects.items(id),
+    data.storage.usage(),
+  ]);
+
+  // Signed URLs, because nothing in this bucket is public. They last five
+  // minutes, which is longer than anyone looks at a screen before reloading,
+  // and they are only made for the items actually on screen.
+  const stored = list.filter((i) => i.storage_path).slice(0, 60);
+  const urls = new Map();
+  await Promise.all(stored.map(async (item) => {
+    try {
+      urls.set(item.id, await data.items.fileUrl(item.storage_path));
+    } catch {
+      // A file that has been cleaned up, or a transient failure. The item
+      // still shows; it just says the file is gone rather than offering a
+      // button that would do nothing.
+    }
+  }));
+
+  const idx = PROJECT_STATUSES.findIndex(([k]) => k === project.status);
+  const rows = list.map((item) => {
+    const icon = ITEM_ICON[item.kind] || '📎';
+    const url = urls.get(item.id) || '';
+    const meta = [item.from_device && `from ${item.from_device}`, ago(item.created_at),
+      item.size_bytes && formatBytes(item.size_bytes)].filter(Boolean).join(' · ');
+
+    let body = '';
+    let buttons = '';
+    if (item.kind === 'text') {
+      body = `<div class="item-text">${esc(item.content)}</div>`;
+      buttons = copyBtn(item.content, 'Copy');
+    } else if (item.kind === 'link') {
+      body = `<a class="item-link" href="${esc(item.content)}" target="_blank" rel="noopener noreferrer">${esc(item.content)}</a>`;
+      buttons = copyBtn(item.content, 'Copy');
+    } else if (!url) {
+      body = `<div class="muted small">${esc(item.file_name)} — this file is no longer stored.</div>`;
+    } else {
+      body = item.kind === 'image'
+        ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer"><img class="item-image" src="${esc(url)}" alt="${esc(item.file_name)}" loading="lazy"></a>`
+        : `<div class="item-text">${esc(item.file_name)}</div>`;
+      // A cross-origin `download` attribute is ignored, so the saving is asked
+      // for in the URL instead — see downloadUrl() in shared/projects.mjs.
+      buttons = `<a class="btn sm primary" href="${esc(downloadUrl(url, item.file_name))}" target="_blank" rel="noopener noreferrer">⬇ Download</a>`;
+    }
+
+    return `<li class="item">
+      <div class="item-head">
+        <span class="muted small">${icon} ${esc(meta)}</span>
+        <div class="row" style="gap:6px">
+          ${buttons}
+          <button type="button" class="sm ghost" data-action="deleteItem" data-id="${esc(item.id)}">Delete</button>
+        </div>
+      </div>
+      ${body}
+    </li>`;
+  }).join('');
+
+  return `
+    <div class="detail-head">
+      <a class="btn sm ghost" href="#/projects">← Projects</a>
+      <h1>${project.is_inbox ? '📥 ' : '📁 '}${esc(project.title)}</h1>
+    </div>
+    <div class="row" style="margin-bottom:14px">
+      <div class="seg">${PROJECT_STATUSES.map(([k, l], i) =>
+        `<button type="button" class="${i === idx ? 'on' : ''}" data-action="setProjectStatus" data-id="${esc(project.id)}" data-v="${k}">${l}</button>`).join('')}</div>
+      ${project.script_id ? `<a class="btn sm" href="#/scripts/${encodeURIComponent(project.script_id)}">🎬 Its script</a>` : ''}
+      <span class="muted small">Sending as <b>${esc(deviceName())}</b></span>
+    </div>
+    ${project.status === 'posted' ? `<div class="notice">Posted${project.posted_at ? ` ${esc(ago(project.posted_at))}` : ''}.
+      Its files are deleted ${POSTED_RETENTION_DAYS} days after that; notes and links stay.</div>` : ''}
+
+    <div class="card stack" style="margin-bottom:16px">
+      <div>
+        <label class="field" for="sendBox">Send a note or a link</label>
+        <textarea id="sendBox" rows="3" placeholder="Paste a link, or type a line you thought of…" spellcheck="false"></textarea>
+      </div>
+      <div class="row">
+        <button type="button" class="primary" data-action="sendText" data-id="${esc(project.id)}">➤ Send</button>
+        <label class="btn" for="projectFile">📎 Add files or images…</label>
+        <input type="file" id="projectFile" multiple hidden>
+        <span class="muted small">Up to ${esc(formatBytes(MAX_FILE_BYTES))} each · ${esc(usage.text)}</span>
+      </div>
+      <div id="projectResult"></div>
+    </div>
+
+      <p class="muted small" style="margin:0">Raw video is never uploaded — it would not fit in this app's share of a
+        shared Supabase project. Part 2 sends video straight from one device to the other.</p>
+
+    ${list.length ? `<ul class="items">${rows}</ul>`
+      : '<div class="empty"><span class="big">📥</span>Nothing here yet.<br>Send a note from this device, or share something into ViralRadar from your phone.</div>'}`;
+}
+
+actions.setProjectStatus = async (btn) => {
+  try {
+    await data.projects.setStatus(btn.dataset.id, btn.dataset.v);
+    toast(btn.dataset.v === 'posted'
+      ? `Marked posted. Its files are deleted in ${POSTED_RETENTION_DAYS} days.`
+      : 'Saved');
+    render();
+  } catch (e) { toast(e.message, true); }
+};
+
+actions.sendText = async (btn) => {
+  const box = $('#sendBox');
+  const text = box.value.trim();
+  if (!text) { toast('Type or paste something first.', true); box.focus(); return; }
+  btn.disabled = true;
+  btn.textContent = 'Sending…';
+  try {
+    await data.items.addText(btn.dataset.id, text, deviceName());
+    box.value = '';
+    toast('Sent');
+    render();
+  } catch (e) {
+    toast(e.message, true);
+    btn.disabled = false;
+    btn.textContent = '➤ Send';
+  }
+};
+
+actions.deleteItem = async (btn) => {
+  if (btn.dataset.armed !== '1') {
+    btn.dataset.armed = '1';
+    btn.textContent = 'Tap again';
+    btn.classList.add('copied');
+    return;
+  }
+  const projectId = parseHash().params[0];
+  try {
+    const list = await data.projects.items(projectId);
+    const item = list.find((i) => i.id === btn.dataset.id);
+    if (!item) throw new Error('That item is already gone.');
+    await data.items.remove(item);
+    toast('Deleted');
+    render();
+  } catch (e) { toast(e.message, true); }
+};
+
+/**
+ * Upload the chosen files, one at a time, saying where it has got to.
+ *
+ * One at a time rather than all at once: on a phone, three 20 MB uploads in
+ * parallel on mobile data is how you get three timeouts instead of one
+ * success. The running total of what has been used is kept here so the cap is
+ * applied across the whole batch, instead of each file being checked against
+ * the figure from before any of them started.
+ */
+async function uploadFiles(projectId, files) {
+  if (!files.length) return;
+  const box = $('#projectResult');
+  const say = (message, bad = false) => {
+    if (box) box.innerHTML = `<div class="badge ${bad ? 'bad' : 'good'}" style="display:block;border-radius:10px;padding:10px 12px;white-space:normal">${esc(message)}</div>`;
+  };
+
+  let used;
+  try {
+    used = await data.storage.used();
+  } catch (e) {
+    say(e.message, true);
+    return;
+  }
+
+  let done = 0;
+  const failed = [];
+  for (const [n, file] of files.entries()) {
+    say(`Uploading ${n + 1} of ${files.length}: ${file.name} (${formatBytes(file.size)})…`);
+    // Checked here as well as inside the data layer, so the batch stops being
+    // uploaded the moment the cap is reached rather than failing file by file.
+    const verdict = checkUpload({ size: file.size, usedBytes: used, fileName: file.name });
+    if (!verdict.ok) {
+      failed.push(verdict.message);
+      continue;
+    }
+    try {
+      await data.items.addFile(projectId, file, { userId: userId(), fromDevice: deviceName(), usedBytes: used });
+      used += file.size;
+      done += 1;
+    } catch (e) {
+      failed.push(`${file.name}: ${e.message}`);
+    }
+  }
+
+  if (done) toast(`${done} file${done === 1 ? '' : 's'} added`);
+  // Redraw first, then write the message: the redraw replaces the whole screen,
+  // so saying it beforehand would wipe the one explanation of what went wrong.
+  await render();
+  if (failed.length) {
+    say(failed.join('\n'), true);
+    toast(failed[0], true, 9000);
+  } else {
+    say(`Added ${done} file${done === 1 ? '' : 's'}. ${usageSummary(used).text}.`);
+  }
+}
+
+afterRender.projects = () => {
+  const input = $('#projectFile');
+  if (input) {
+    input.addEventListener('change', async (e) => {
+      const projectId = parseHash().params[0];
+      const files = [...e.target.files];
+      e.target.value = '';
+      if (projectId) await uploadFiles(projectId, files);
+    });
+  }
+  // Ctrl/Cmd+Enter sends, because a note worth sending is often several lines.
+  const box = $('#sendBox');
+  if (box) {
+    box.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        actions.sendText($('[data-action=sendText]'));
+      }
+    });
+  }
+};
+
+// ---------- things shared into ViralRadar from Android ----------
+//
+// The service worker takes the POST from Android's Share menu and parks it in a
+// cache, because writing to Supabase needs the signed-in session and that lives
+// here, not in the worker. This drains that cache into the Inbox.
+//
+// It runs on every boot, not only when the app was opened by a share: a share
+// that arrived while the phone had no signal is still sitting there, and this
+// is what finally delivers it.
+const SHARE_CACHE = 'viralradar-shared';
+const SHARE_PREFIX = '/shared-inbox/';
+
+async function drainShares() {
+  if (!('caches' in window)) return;
+  let cache;
+  try {
+    cache = await caches.open(SHARE_CACHE);
+  } catch {
+    return; // private mode, or storage refused
+  }
+
+  const keys = await cache.keys();
+  const metaKeys = keys.filter((r) => new URL(r.url).pathname.endsWith('/meta'));
+  if (!metaKeys.length) return;
+
+  let inbox;
+  try {
+    inbox = await data.projects.inbox();
+  } catch (e) {
+    toast(`Something was shared to ViralRadar, but its Inbox could not be opened: ${e.message}`, true, 9000);
+    return;
+  }
+
+  let notes = 0;
+  let files = 0;
+  const failed = [];
+
+  // Oldest first, so several shares arrive in the order they were made.
+  for (const metaKey of metaKeys.sort((a, b) => a.url.localeCompare(b.url))) {
+    let meta;
+    try {
+      meta = await (await cache.match(metaKey)).json();
+    } catch {
+      await cache.delete(metaKey);
+      continue;
+    }
+
+    const used = await data.storage.used().catch(() => 0);
+    let spent = 0;
+
+    for (const text of meta.text || []) {
+      try {
+        await data.items.addText(inbox.id, text, deviceName());
+        notes += 1;
+      } catch (e) { failed.push(e.message); }
+    }
+
+    for (const file of meta.files || []) {
+      const response = await cache.match(file.key);
+      if (!response) continue;
+      try {
+        const blob = await response.blob();
+        // A Blob has no name; the worker kept it in a header.
+        const named = new File([blob], file.name || 'shared', { type: file.type || blob.type });
+        const verdict = checkUpload({ size: named.size, usedBytes: used + spent, fileName: named.name });
+        if (!verdict.ok) throw new Error(verdict.message);
+        await data.items.addFile(inbox.id, named, {
+          userId: userId(), fromDevice: deviceName(), usedBytes: used + spent,
+        });
+        spent += named.size;
+        files += 1;
+      } catch (e) {
+        failed.push(`${file.name}: ${e.message}`);
+      }
+      await cache.delete(file.key);
+    }
+    await cache.delete(metaKey);
+  }
+
+  const parts = [notes && `${notes} note${notes === 1 ? '' : 's'}`, files && `${files} file${files === 1 ? '' : 's'}`].filter(Boolean);
+  if (parts.length) toast(`Added to your Inbox: ${parts.join(' and ')}`, false, 6000);
+  if (failed.length) toast(failed[0], true, 9000);
+  if (parts.length || failed.length) {
+    if (currentRoute() === 'projects') render();
+  }
+}
+
+/**
+ * The confirmation after a share, and the three ways it can go.
+ *
+ * Android gives no feedback of its own beyond closing the share sheet, so
+ * without this a share that failed looks exactly like one that worked.
+ */
+function reportShare() {
+  const shared = new URLSearchParams(location.hash.split('?')[1] || '').get('shared');
+  if (!shared) return;
+  // Take it off the URL, so a reload does not say it again.
+  history.replaceState(null, '', location.pathname + '#/projects');
+  if (shared === 'empty') toast('Nothing came through from that share.', true);
+  else if (shared === 'failed') toast('That share could not be read. Try sharing it again.', true, 7000);
+  else toast('Shared to ViralRadar. Adding it to your Inbox…');
+}
 
 // ================= IMPORT =================
 const KIND_ICON = { idea: '💡', script: '🎬', result: '📈' };
@@ -888,10 +1368,13 @@ afterRender.import = () => {
 
 // ================= SETTINGS =================
 async function renderSettings() {
-  const [s, tokens, usage] = await Promise.all([
+  const [s, tokens, usage, storage] = await Promise.all([
     data.settings.get(userId()),
     data.tokens.list(),
     data.usage.today(),
+    // Never worth failing the whole screen over: this is one card out of seven,
+    // and its figure comes from an extra round trip that can time out.
+    data.storage.usage().catch(() => null),
   ]);
   state.settings = s;
   const yt = usage.youtube || { units: 0, requests: 0 };
@@ -948,6 +1431,33 @@ async function renderSettings() {
           <button type="button" class="primary" data-action="createToken">Create token</button>
         </div>
         <div id="tokenResult"></div>
+      </section>
+
+      <section class="card stack">
+        <h2>This device</h2>
+        <label class="field" for="deviceName">What to call this device</label>
+        <input type="text" id="deviceName" value="${esc(deviceName())}" maxlength="24" placeholder="Laptop">
+        <p class="muted small">Used when you send something to a project, so the other device can say
+          “New from ${esc(deviceName())}”. Stored on this device only, never in the database.</p>
+        <div><button type="button" class="primary" data-action="saveDevice">Save name</button></div>
+      </section>
+
+      <section class="card stack">
+        <h2>Project files</h2>
+        ${storage ? `
+          <p class="small"><b>${esc(storage.text)}</b></p>
+          <div class="meter" role="img" aria-label="${esc(storage.text)}"><div class="fill ${storage.percent > 85 ? 'hot' : ''}" style="width:${storage.percent}%"></div></div>
+          <p class="muted small">This Supabase project is shared with another app and has about 1 GB of file storage in
+            total, so ViralRadar keeps to ${esc(formatBytes(TOTAL_BYTES_CAP))} of it and refuses uploads past that.
+            One file can be at most ${esc(formatBytes(MAX_FILE_BYTES))}. Raw video is never uploaded.</p>
+          <p class="muted small">Files in a project marked <b>Posted</b> are deleted ${POSTED_RETENTION_DAYS} days
+            later, by itself, every night. Notes and links are kept.</p>
+          <div class="row">
+            <button type="button" data-action="purgeFiles">Clean up now</button>
+            <a class="btn sm ghost" href="#/projects">Open Projects</a>
+          </div>
+          <div id="purgeResult"></div>
+        ` : '<p class="muted small">Could not read how much storage is used. Reload to try again.</p>'}
       </section>
 
       <section class="card stack">
@@ -1011,6 +1521,39 @@ actions.testAi = async (btn) => {
   } finally {
     btn.disabled = false;
     btn.textContent = 'Test AI';
+  }
+};
+
+actions.saveDevice = () => {
+  const saved = setDeviceName($('#deviceName').value);
+  toast(`This device is “${saved}”`);
+  // The redraw is what makes the name the screen quotes back the new one.
+  render();
+};
+
+actions.purgeFiles = async (btn) => {
+  btn.disabled = true;
+  btn.textContent = 'Cleaning up…';
+  // Both branches redraw before writing their message, because the redraw
+  // replaces the whole screen — and here it also refreshes the usage figure,
+  // which is the thing a clean-up was run to change.
+  const say = (message, bad = false) => {
+    const box = $('#purgeResult');
+    if (!box) return;
+    box.innerHTML = bad
+      ? `<div class="badge bad" style="display:block;border-radius:10px;padding:10px 12px;white-space:normal">${esc(message)}</div>`
+      : `<p class="muted small">${esc(message)}</p>`;
+  };
+  try {
+    const r = await data.storage.purge();
+    toast(r.message || 'Done');
+    await render();
+    say(r.message || 'Done');
+  } catch (e) {
+    toast(e.message, true, 9000);
+    say(e.message, true);
+    btn.disabled = false;
+    btn.textContent = 'Clean up now';
   }
 };
 
@@ -1104,11 +1647,19 @@ async function signedIn(session) {
     history.replaceState(null, '', location.pathname + '#/radar');
   }
   startLive();
+  startProjectLive();
+  // Say what happened before the drain starts, so a share is acknowledged
+  // immediately rather than after an upload.
+  reportShare();
   await render();
   // Make sure the settings row exists, but never block the first paint on it.
   // The data layer has already turned this into a sentence; wrapping it again
   // produced "Could not read your settings: Could not read your settings: ...".
   data.settings.get(session.user.id).catch((e) => toast(e.message, true));
+  // Anything shared from Android's Share menu, including while there was no
+  // signal. Deliberately after the first paint: an upload must not be what
+  // stands between someone and their own screen.
+  drainShares().catch((e) => toast(`Could not add what was shared: ${e.message}`, true, 9000));
 }
 
 // ---------- installing ----------

@@ -13,9 +13,17 @@
 import { resultStats } from './shared/stats.mjs';
 import { IDEA_STATUS, SCRIPT_STAGES } from './shared/defaults.mjs';
 import { istDay } from './shared/time.mjs';
+import {
+  BUCKET, INBOX_TITLE, PROJECT_STATUS,
+  checkUpload, kindForFile, kindForText, safeFileName, sha256Hex, storagePath, titleForScript, usageSummary,
+} from './shared/projects.mjs';
 
 export const TABLES = { ideas: 'ideas', scripts: 'scripts', results: 'results', trends: 'trends' };
 export const LIVE_TABLES = ['ideas', 'scripts', 'results'];
+// Project folders live on their own channel: an item arriving from the other
+// device gets its own toast naming the device, rather than the generic
+// "updated from another device" the three tables above share.
+export const PROJECT_LIVE_TABLES = ['projects', 'project_items'];
 
 /** Turn a Supabase error into something worth showing a person. */
 export function readable(error, doing) {
@@ -241,6 +249,301 @@ export function createData(client) {
     revoke: (id) => run(client.from('import_tokens').delete().eq('id', id), 'revoke that token'),
   };
 
+  // ---------- project folders ----------
+  //
+  // One folder per video, holding notes, links and files. Raw video is never
+  // uploaded: this Supabase project is shared and its whole file quota is
+  // about 1 GB, so ViralRadar keeps to a 300 MB slice and sends video device
+  // to device instead.
+  //
+  // Every limit checked here is also enforced by the database and by the
+  // bucket's own settings. This layer exists to refuse before spending
+  // someone's mobile data, and to say which limit it was.
+
+  const projects = {
+    /** Folder cards, newest first, each with what is inside it. */
+    async list() {
+      const [rows, items] = await Promise.all([
+        run(
+          client.from('projects').select('*').order('origin_at', { ascending: false }),
+          'load your projects',
+        ),
+        // Only the columns a card needs. "preview" is a generated column
+        // holding a short line of whatever the item is, so drawing the folder
+        // list never reads a note in full — one can be 20,000 characters, and
+        // a few hundred of them is megabytes to draw a list of folders.
+        run(
+          client.from('project_items').select('id, project_id, kind, preview, file_name, size_bytes, from_device, created_at')
+            .order('created_at', { ascending: false }),
+          'load what is in your projects',
+        ),
+      ]);
+      const byProject = new Map();
+      for (const item of items || []) {
+        if (!byProject.has(item.project_id)) byProject.set(item.project_id, []);
+        byProject.get(item.project_id).push(item);
+      }
+      return (rows || []).map((p) => {
+        const own = byProject.get(p.id) || [];
+        return {
+          ...p,
+          item_count: own.length,
+          bytes: own.reduce((n, i) => n + (Number(i.size_bytes) || 0), 0),
+          // Already newest-first from the query above.
+          latest: own[0] || null,
+        };
+      });
+    },
+
+    async get(id) {
+      const rows = await run(client.from('projects').select('*').eq('id', id).limit(1), 'open that project');
+      if (!rows || !rows.length) throw new Error('That project is no longer there.');
+      return rows[0];
+    },
+
+    items: (projectId) => run(
+      client.from('project_items').select('*').eq('project_id', projectId)
+        .order('created_at', { ascending: false }),
+      'load what is in that project',
+    ),
+
+    async create({ title, scriptId = null } = {}) {
+      const name = String(title ?? '').replace(/\s+/g, ' ').trim().slice(0, 120);
+      if (!name) throw new Error('Give the project a name.');
+      const rows = await run(
+        client.from('projects').insert({ title: name, script_id: scriptId }).select('*'),
+        'create that project',
+      );
+      return rows && rows[0];
+    },
+
+    /**
+     * The one folder a share with no particular destination lands in.
+     *
+     * Created on first use, the same way the settings row is and for the same
+     * reason: this Supabase project is shared with another app, so a trigger on
+     * auth.users would fire for its signups too. The partial unique index on
+     * is_inbox means two devices racing to create it end up with one folder,
+     * not two — the loser's insert is refused and it reads the winner's.
+     */
+    async inbox() {
+      const existing = await run(
+        client.from('projects').select('*').eq('is_inbox', true).limit(1),
+        'find your Inbox',
+      );
+      if (existing && existing.length) return existing[0];
+      try {
+        const rows = await run(
+          client.from('projects').insert({ title: INBOX_TITLE, is_inbox: true }).select('*'),
+          'create your Inbox',
+        );
+        if (rows && rows.length) return rows[0];
+      } catch (e) {
+        // Lost the race, or the index refused a second Inbox. Either way the
+        // other one is the right answer.
+        if (!/duplicate|unique|23505/i.test(e.message)) throw e;
+      }
+      const created = await run(
+        client.from('projects').select('*').eq('is_inbox', true).limit(1),
+        'find your Inbox',
+      );
+      if (!created || !created.length) throw new Error('Could not open your Inbox.');
+      return created[0];
+    },
+
+    /** Open the folder for a script, making it the first time. */
+    async forScript(script) {
+      const scriptId = String(script?.id ?? '');
+      if (!scriptId) throw new Error('That script has no id.');
+      const existing = await run(
+        client.from('projects').select('*').eq('script_id', scriptId).limit(1),
+        'find that script\'s project',
+      );
+      if (existing && existing.length) return existing[0];
+      return projects.create({ title: titleForScript(script), scriptId });
+    },
+
+    async setStatus(id, status) {
+      if (!PROJECT_STATUS.includes(status)) throw new Error(`Unknown status: ${status}`);
+      const rows = await run(
+        client.from('projects').update({ status }).eq('id', id).select('id, status, posted_at'),
+        'change that project',
+      );
+      if (!rows || !rows.length) throw new Error('That project is no longer there.');
+      return rows[0];
+    },
+
+    async rename(id, title) {
+      const name = String(title ?? '').replace(/\s+/g, ' ').trim().slice(0, 120);
+      if (!name) throw new Error('Give the project a name.');
+      const rows = await run(
+        client.from('projects').update({ title: name }).eq('id', id).select('id, title'),
+        'rename that project',
+      );
+      if (!rows || !rows.length) throw new Error('That project is no longer there.');
+      return rows[0];
+    },
+
+    /**
+     * Delete a folder and everything in it.
+     *
+     * The files go first. Deleting the rows first would work and look fine,
+     * and leave the bytes in the bucket with nothing left pointing at them —
+     * still counted against the quota this whole feature is careful about.
+     */
+    async remove(id) {
+      const items = await projects.items(id);
+      const paths = (items || []).map((i) => i.storage_path).filter(Boolean);
+      if (paths.length) {
+        const { error } = await client.storage.from(BUCKET).remove(paths);
+        if (error) throw new Error(readable(error, 'delete that project\'s files'));
+      }
+      // project_items cascades from the folder, so one delete is enough.
+      return run(client.from('projects').delete().eq('id', id), 'delete that project');
+    },
+  };
+
+  const items = {
+    /** A note, or a link if that is what it looks like. */
+    async addText(projectId, text, fromDevice) {
+      const content = String(text ?? '').trim();
+      if (!content) throw new Error('Type something first.');
+      if (content.length > 20000) throw new Error('That is too long to send as a note. Save it as a file instead.');
+      const rows = await run(
+        client.from('project_items').insert({
+          project_id: projectId,
+          kind: kindForText(content),
+          content,
+          from_device: fromDevice || null,
+        }).select('*'),
+        'send that',
+      );
+      return rows && rows[0];
+    },
+
+    /**
+     * Upload a file into a folder.
+     *
+     * The order matters: bytes first, row second. A row written first would
+     * describe a file that might never arrive, and the folder would show a
+     * download button for nothing. This way a failed upload leaves no trace,
+     * and a failed row insert leaves bytes that the next usage reading counts
+     * honestly — so the cap stays truthful either way.
+     */
+    async addFile(projectId, file, { userId, fromDevice, usedBytes } = {}) {
+      if (!file) throw new Error('No file was chosen.');
+      if (!userId) throw new Error('Sign in again before uploading.');
+
+      const used = usedBytes === undefined ? await storage.used() : usedBytes;
+      const verdict = checkUpload({ size: file.size, usedBytes: used, fileName: file.name });
+      if (!verdict.ok) throw new Error(verdict.message);
+
+      const name = safeFileName(file.name);
+      const path = storagePath(userId, projectId, name);
+      const mime = file.type || 'application/octet-stream';
+
+      const { error } = await client.storage.from(BUCKET).upload(path, file, {
+        contentType: mime,
+        upsert: false,
+      });
+      if (error) throw new Error(uploadFailed(error, verdict));
+
+      // Computed from the bytes the browser holds, so it describes what was
+      // sent rather than what the server says it received. Part 2 compares
+      // these to prove a device-to-device transfer changed nothing.
+      let sha256 = null;
+      try {
+        sha256 = await sha256Hex(await file.arrayBuffer());
+      } catch {
+        // A digest is worth having, never worth failing an upload over.
+      }
+
+      try {
+        const rows = await run(
+          client.from('project_items').insert({
+            project_id: projectId,
+            kind: kindForFile(mime, name),
+            storage_path: path,
+            file_name: name,
+            mime,
+            size_bytes: file.size,
+            sha256,
+            from_device: fromDevice || null,
+          }).select('*'),
+          'save that file',
+        );
+        return rows && rows[0];
+      } catch (e) {
+        // The bytes are up but nothing points at them. Take them back out, or
+        // they sit in a shared quota forever with no way to find them.
+        await client.storage.from(BUCKET).remove([path]).catch(() => {});
+        throw e;
+      }
+    },
+
+    /** A short-lived URL for one file. Nothing in this bucket is public. */
+    async fileUrl(storagePathValue, seconds = 300) {
+      const { data, error } = await client.storage.from(BUCKET).createSignedUrl(storagePathValue, seconds);
+      if (error) throw new Error(readable(error, 'open that file'));
+      return data?.signedUrl ?? null;
+    },
+
+    /** Files first, then the row, for the same reason as everywhere else here. */
+    async remove(item) {
+      if (item?.storage_path) {
+        const { error } = await client.storage.from(BUCKET).remove([item.storage_path]);
+        // A file that is already gone is not a reason to keep the row.
+        if (error && !/not found|404/i.test(error.message || '')) {
+          throw new Error(readable(error, 'delete that file'));
+        }
+      }
+      return run(client.from('project_items').delete().eq('id', item.id), 'delete that item');
+    },
+  };
+
+  /**
+   * A failed upload, explained.
+   *
+   * The Storage API refuses an oversized file with its own wording, and the
+   * insert policy refuses one over the 300 MB cap with a bare "row-level
+   * security" message. Neither tells anyone what to do, and the second is
+   * especially misleading: nothing is wrong with the account.
+   */
+  function uploadFailed(error, verdict) {
+    const message = error?.message || String(error);
+    if (/exceeded the maximum allowed size|payload too large|413/i.test(message)) {
+      return `That file is bigger than the 25 MB limit for one file.${verdict?.message ? ` ${verdict.message}` : ''}`;
+    }
+    if (/row-level security|permission denied|42501|Unauthorized/i.test(message)) {
+      return 'That upload was refused. Either ViralRadar has used up its 300 MB of this shared project'
+        + ' — Settings shows how much — or this account is not allowed to use ViralRadar.';
+    }
+    if (/already exists|Duplicate/i.test(message)) {
+      return 'A file with that exact name and timestamp is already there. Try again.';
+    }
+    return readable(error, 'upload that file');
+  }
+
+  const storage = {
+    /**
+     * How many bytes ViralRadar is holding, from the bucket itself.
+     *
+     * Deliberately not a sum of project_items.size_bytes: an upload whose row
+     * insert failed still occupies the shared quota, and a usage figure that
+     * cannot see those bytes would let the cap be walked past.
+     */
+    async used() {
+      const { data, error } = await client.rpc('storage_used');
+      if (error) throw new Error(readable(error, 'check how much storage is used'));
+      return Number(data) || 0;
+    },
+    async usage() {
+      return usageSummary(await storage.used());
+    },
+    /** Delete files from projects posted more than a fortnight ago, now rather than tonight. */
+    purge: () => callFunction('vr-purge-project-files', {}, 'clean up old project files'),
+  };
+
   // ---------- Edge Functions ----------
 
   async function callFunction(name, body, doing) {
@@ -315,23 +618,50 @@ export function createData(client) {
     return () => client.removeChannel(channel);
   }
 
+  /**
+   * Project folders, on their own channel.
+   *
+   * Separate from live() because the interesting thing about a project item is
+   * which device it came from — "New from Laptop: …" is the whole point of the
+   * feature — and that deserves its own message rather than being counted into
+   * the generic "updated from another device" one.
+   */
+  function liveProjects(onChange) {
+    const channel = client.channel('viralradar-projects');
+    for (const table of PROJECT_LIVE_TABLES) {
+      channel.on('postgres_changes', { event: '*', schema: 'viralradar', table }, (payload) => {
+        onChange({ table, event: payload.eventType, row: payload.new || payload.old });
+      });
+    }
+    channel.subscribe();
+    return () => client.removeChannel(channel);
+  }
+
   // ---------- backup ----------
 
   const backup = {
     async download() {
-      const [i, s, r, t, st, u] = await Promise.all([
+      const [i, s, r, t, st, u, p, pi] = await Promise.all([
         run(client.from('ideas').select('*'), 'export your ideas'),
         run(client.from('scripts').select('*'), 'export your scripts'),
         run(client.from('results').select('*'), 'export your results'),
         run(client.from('trends').select('*'), 'export your trends'),
         run(client.from('settings').select('*'), 'export your settings'),
         run(client.from('usage').select('*'), 'export your usage'),
+        run(client.from('projects').select('*'), 'export your projects'),
+        // Notes and links only. A backup is one JSON file, so it cannot carry
+        // the bytes of a file — and a row describing a file that is not in the
+        // backup would restore as a download button pointing at nothing.
+        // Files are in Storage, which is not what this feature is for keeping.
+        run(client.from('project_items').select('*').in('kind', ['text', 'link']), 'export your project notes'),
       ]);
       return {
         app: 'viralradar',
-        backup_version: 2,
+        backup_version: 3,
         exported_at: new Date().toISOString(),
-        tables: { ideas: i, scripts: s, results: r, trends: t, settings: st, usage: u },
+        // What is deliberately not here, so a restore is not a surprise.
+        excludes: ['project files (they live in Storage, not in this file)'],
+        tables: { ideas: i, scripts: s, results: r, trends: t, settings: st, usage: u, projects: p, project_items: pi },
       };
     },
     /** Restore adds and updates; it never deletes, so a restore cannot lose work. */
@@ -340,9 +670,24 @@ export function createData(client) {
         throw new Error('That is not a ViralRadar backup file (expected "app": "viralradar").');
       }
       const counts = {};
-      for (const table of ['ideas', 'scripts', 'results', 'trends', 'settings', 'usage']) {
-        const rows = file.tables[table];
+      // projects before project_items: an item's foreign key is the pair
+      // (user_id, project_id), so its folder has to exist first.
+      for (const table of ['ideas', 'scripts', 'results', 'trends', 'settings', 'usage', 'projects', 'project_items']) {
+        let rows = file.tables[table];
         if (!Array.isArray(rows) || !rows.length) { counts[table] = 0; continue; }
+        if (table === 'project_items') {
+          // A file item's storage_path starts with the user id it was uploaded
+          // under, and the database checks that. Re-owning one would write a
+          // path that no longer matches, so files are skipped here as well as
+          // in the download — and an older backup might still contain some.
+          rows = rows.filter((row) => !row.storage_path);
+        }
+        if (table === 'projects') {
+          // Two Inboxes cannot exist, and the one already here is the one the
+          // share menu is pointed at. A restored folder becomes an ordinary one.
+          rows = rows.map((row) => ({ ...row, is_inbox: false }));
+        }
+        if (!rows.length) { counts[table] = 0; continue; }
         // Every row is re-owned by whoever is restoring: a backup from another
         // account must not try to write rows that are not theirs.
         const owned = rows.map((row) => ({ ...row, user_id: userId }));
@@ -355,7 +700,7 @@ export function createData(client) {
     },
   };
 
-  return { auth, settings, ideas, scripts, results, trends, usage, tokens, imports, ai, backup, live, callFunction };
+  return { auth, settings, ideas, scripts, results, trends, usage, tokens, imports, ai, backup, projects, items, storage, live, liveProjects, callFunction };
 }
 
 // ---------- the real client ----------

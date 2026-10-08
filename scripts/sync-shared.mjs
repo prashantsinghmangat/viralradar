@@ -33,7 +33,9 @@ export const BROWSER_DIR = join(ROOT, 'public', 'shared');
 //   tokens    an import token is made and hashed in the browser, so the token
 //             itself never travels anywhere it does not have to
 //   edit-plan the shooting plan a script can carry, read out of raw
-export const BROWSER_SHARED = ['stats.mjs', 'defaults.mjs', 'time.mjs', 'tokens.mjs', 'edit-plan.mjs'];
+//   projects  the two storage limits, the path layout and the device naming —
+//             the browser enforces the same numbers the database does
+export const BROWSER_SHARED = ['stats.mjs', 'defaults.mjs', 'time.mjs', 'tokens.mjs', 'edit-plan.mjs', 'projects.mjs'];
 
 const BANNER = [
   '// GENERATED FILE - DO NOT EDIT.',

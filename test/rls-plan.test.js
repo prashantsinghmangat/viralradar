@@ -11,7 +11,10 @@
 // assertion's `sim` label, so a wrong expectation in the plan fails here.
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildPlan, buildProofs, runPlan, runProofs, matches, TABLES } = require('../scripts/rls-plan.mjs');
+const {
+  buildPlan, buildProofs, runPlan, runProofs, matches,
+  TABLES, PROJECT_ID, BUCKET, A_USED, objectPath,
+} = require('../scripts/rls-plan.mjs');
 
 const A = '11111111-1111-4111-8111-111111111111';
 const B = '22222222-2222-4222-8222-222222222222';
@@ -33,11 +36,48 @@ const affected = (n) => ({ rows: [], rowCount: n, errorCode: null, errorMessage:
  */
 function simulate(check, leak = 'none') {
   const { sim, as, owner } = check;
+
+  // ---- configuration, read as the owner ----
+  // Not an isolation check at all: the bucket's own settings, which no policy
+  // governs. The 25 MB per-file limit lives there and nowhere else in SQL.
+  if (as === 'owner') {
+    if (sim === 'bucket-config') return rows([{ is_public: false, limit_bytes: 26214400 }]);
+    throw new Error(`the model does not know the owner-role sim "${sim}"`);
+  }
+
+  // ---- files in Storage ----
+  // Checked before the anon and noclaims shortcuts below, because
+  // storage.objects is shared with the other app and is NOT revoked from anon:
+  // a browser with no session gets an empty result there rather than a refusal.
+  if (sim.startsWith('storage-') || sim.startsWith('cap-') || sim.startsWith('used-')) {
+    return simulateStorage(check, leak);
+  }
+
   if (as === 'anon') return err('42501'); // privileges revoked from anon
   if (as === 'noclaims') return err('23502'); // auth.uid() is null, so the owner default is null
 
   // The allowlist is not readable or writable from any session.
   if (sim === 'allowlist-denied') return err('42501');
+
+  // ---- constraints, not policies ----
+  // These rows belong to the right person and are still wrong: an item in
+  // someone else's folder, a path that points outside the folder it claims, a
+  // file over 25 MB, a second Inbox. RLS has nothing to say about any of them,
+  // so neither does the leak model — breaking a policy must not change these.
+  if (sim === 'item-foreign-folder') return err('23503');
+  if (sim === 'item-too-big' || sim === 'item-bad-path' || sim === 'item-bad-digest') return err('23514');
+  if (sim === 'second-inbox') return err('23505');
+
+  // ---- the 14-day cleanup ----
+  if (sim === 'cleanup-due') {
+    if (as === 'C') return rows([]);
+    return rows(canSeeAs(as, 'A', leak)
+      ? [{ storage_path: objectPath(uid.A, PROJECT_ID.A_POSTED_OLD, 'old.png') }] : []);
+  }
+  // Nothing is 60 days old, so this is empty however wide the policies are.
+  if (sim === 'cleanup-retention') return rows([]);
+  if (sim === 'cleanup-other') return rows(canSeeAs(as, 'B', leak) ? [{ storage_path: 'leaked' }] : []);
+  if (sim === 'cleanup-not-allowed') return rows([]);
 
   // C is signed in but not on the allowlist, so is_allowed() is false and every
   // policy fails its second gate: reads return nothing, writes are refused.
@@ -91,6 +131,87 @@ function simulate(check, leak = 'none') {
   }
 }
 
+/** Can `me` see rows owned by `rowOwner`, given the injected mistake? */
+function canSeeAs(me, rowOwner, leak) {
+  if (me === 'C') return false; // signed in, but not on the allowlist
+  if (leak === 'no-select') return false;
+  if (leak === 'select') return true;
+  return rowOwner === me;
+}
+
+/**
+ * A model of what the storage policies do.
+ *
+ * storage.objects has no user_id: ownership is the first folder of the path.
+ * The fixtures put A under the 300 MB cap and B over it, which is why B's
+ * uploads are refused here and A's are not.
+ */
+function simulateStorage(check, leak) {
+  const { sim, as, owner } = check;
+  const overCap = { A: false, B: true, C: false };
+
+  // Not revoked from anon, because the table is shared with the other app.
+  // The policies are scoped to authenticated, so anon simply matches nothing
+  // rather than being refused outright the way the viralradar tables are.
+  if (as === 'anon') {
+    return sim === 'storage-anon' || sim.startsWith('storage-select') ? rows([]) : err('42501');
+  }
+
+  const canSee = (rowOwner) => (leak === 'no-storage-select' ? false : leak === 'storage-select' ? true : canSeeAs(as, rowOwner, 'none'));
+  // Only the INSERT policy carries the cap, so only uploading is affected.
+  const canWrite = (rowOwner) => as !== 'C' && rowOwner === as;
+  const canUpload = (rowOwner) => canWrite(rowOwner) && (leak === 'no-cap' || !overCap[as]);
+
+  switch (sim) {
+    case 'storage-select-own':
+    case 'storage-select-other':
+      return rows(canSee(owner) ? [{ name: 'fixture' }] : []);
+    case 'storage-select-unfiltered':
+      return rows([{ n: canSee(owner) ? 1 : 0 }]);
+    case 'storage-delete-own':
+    case 'storage-delete-other':
+    case 'storage-update-other':
+      // USING decides which rows an UPDATE or DELETE can even find, and that
+      // is the same clause a SELECT uses.
+      return rows(canSee(owner) ? [{ name: 'fixture' }] : []);
+    case 'storage-move-away':
+      // Renaming into someone else's prefix fails the update policy's WITH
+      // CHECK, which is the storage equivalent of handing a row away.
+      return err('42501');
+    case 'storage-insert-own':
+      return canUpload(owner) ? rows([{ name: 'fresh' }]) : err('42501');
+    case 'storage-insert-other':
+      // With RETURNING the SELECT policy gates it too, so widening the INSERT
+      // policy alone could never let this through.
+      return err('42501');
+    case 'storage-insert-other-silent':
+      return err('42501');
+    case 'storage-bad-shape':
+      // Nothing to do with who you are: the path is not <user>/<project>/<file>.
+      return err('42501');
+    case 'storage-not-allowed-select':
+      return rows([]);
+    case 'storage-not-allowed-insert':
+      return err('42501');
+    case 'storage-anon':
+      return rows([]);
+    case 'used-own':
+      return rows([{ used: A_USED }]);
+    case 'used-not-allowed':
+      return rows([{ used: 0 }]);
+    // storage_under_cap() reads the bucket, not the policy, so breaking the
+    // policy does not change what it answers. That is the point of asking it
+    // separately: the proof below has to rest on the upload being refused.
+    case 'cap-under':
+    case 'cap-over':
+      return rows([{ under: !overCap[as] }]);
+    case 'cap-refuses-upload':
+      return canUpload(owner) ? rows([{ name: 'fresh' }]) : err('42501');
+    default:
+      throw new Error(`the storage model does not know the sim "${sim}"`);
+  }
+}
+
 const execWith = (leak) => async (check) => simulate(check, leak);
 
 test('every assertion in the plan is well formed and uniquely named', () => {
@@ -101,7 +222,14 @@ test('every assertion in the plan is well formed and uniquely named', () => {
     assert.ok(c.name, 'every assertion needs a name');
     assert.ok(!names.has(c.name), `duplicate assertion name: ${c.name}`);
     names.add(c.name);
-    assert.ok(['A', 'B', 'C', 'anon', 'noclaims'].includes(c.as), `${c.name}: bad "as" value ${c.as}`);
+    // 'owner' is the postgres role, which bypasses RLS. It is only ever used
+    // for reading configuration — the bucket's own settings — never to prove
+    // anything about isolation, which it could not do.
+    assert.ok(['A', 'B', 'C', 'anon', 'noclaims', 'owner'].includes(c.as), `${c.name}: bad "as" value ${c.as}`);
+    if (c.as === 'owner') {
+      assert.match(c.sql.trim(), /^select /i, 'the owner role bypasses RLS, so it may only ever read');
+      assert.equal(c.sim, 'bucket-config', `${c.name}: the owner role is only for reading the bucket settings`);
+    }
     assert.ok(c.sql && /^(select|insert|update|delete)/i.test(c.sql.trim()), `${c.name}: missing or odd sql`);
     assert.ok(Array.isArray(c.params), `${c.name}: params must be an array`);
     assert.ok(c.sim, `${c.name}: missing sim label`);
@@ -156,6 +284,93 @@ test('the plan covers select, insert, update and delete in both directions for e
   }
   assert.ok(allowlist.some((c) => c.as === 'A'), 'even an allowed user must not read the allowlist');
   assert.ok(allowlist.some((c) => c.as === 'C'));
+});
+
+test('the plan covers the files in Storage, not only the rows in the schema', () => {
+  // A folder's files live in storage.objects, which is a different table with
+  // different policies and no user_id column. Covering the two new tables and
+  // stopping there would leave the files themselves untested.
+  const plan = buildPlan({ A, B, C });
+  const storage = plan.filter((c) => c.table === 'storage.objects');
+  assert.ok(storage.length >= 20, `expected the storage policies to be covered, found ${storage.length} assertions`);
+
+  for (const sim of ['storage-select-own', 'storage-select-other', 'storage-select-unfiltered',
+    'storage-insert-own', 'storage-insert-other', 'storage-insert-other-silent',
+    'storage-update-other', 'storage-move-away', 'storage-delete-own', 'storage-delete-other',
+    'storage-bad-shape', 'storage-not-allowed-select', 'storage-not-allowed-insert', 'storage-anon']) {
+    assert.ok(storage.some((c) => c.sim === sim), `storage: missing "${sim}"`);
+  }
+
+  // Both directions, like every other table.
+  for (const [me, them] of [['A', 'B'], ['B', 'A']]) {
+    const other = storage.find((c) => c.as === me && c.sim === 'storage-select-other');
+    assert.ok(other, `storage: ${me} never tries to read ${them}'s files`);
+    assert.ok(other.params.includes(`${uid[them]}/%`), `storage: the cross-user read must use ${them}'s prefix`);
+  }
+
+  // Every storage assertion must name the bucket, or it could be passing
+  // because of something the other app in this project happens to have done.
+  for (const c of storage) {
+    assert.ok(c.params.includes(BUCKET) || /storage_use|under_cap/.test(c.sql),
+      `${c.name}: must be scoped to ViralRadar's own bucket`);
+  }
+});
+
+test('the plan covers the 300 MB cap, the 25 MB limit and the 14-day cleanup', () => {
+  const plan = buildPlan({ A, B, C });
+  const sims = new Set(plan.map((c) => c.sim));
+
+  // The cap: that it is measured per user, that it reads true for the user
+  // under it and false for the one over, and that it actually refuses.
+  for (const sim of ['used-own', 'used-not-allowed', 'cap-under', 'cap-over', 'cap-refuses-upload']) {
+    assert.ok(sims.has(sim), `the 300 MB cap is not covered: missing "${sim}"`);
+  }
+  // Being full must not mean being stuck.
+  assert.ok(plan.some((c) => c.as === 'B' && c.sim === 'storage-delete-own'),
+    'a user over the cap must still be able to delete, or there is no way back');
+
+  // The 25 MB limit, in both the places that can refuse it.
+  assert.ok(sims.has('item-too-big'), 'nothing checks the 25 MB limit in the database');
+  assert.ok(sims.has('bucket-config'), 'nothing checks the 25 MB limit in the bucket settings');
+
+  // The cleanup: that it fires at a fortnight, that the period is a real
+  // parameter, and that it cannot be used to see or clear someone else's.
+  for (const sim of ['cleanup-due', 'cleanup-retention', 'cleanup-other', 'cleanup-not-allowed']) {
+    assert.ok(sims.has(sim), `the 14-day cleanup is not covered: missing "${sim}"`);
+  }
+
+  // The row-shape constraints, which RLS says nothing about.
+  for (const sim of ['item-foreign-folder', 'item-bad-path', 'item-bad-digest', 'second-inbox']) {
+    assert.ok(sims.has(sim), `missing "${sim}": a row can belong to you and still be wrong`);
+  }
+});
+
+test('breaking a storage policy is noticed, and does not look like a schema leak', async () => {
+  const plan = buildPlan({ A, B, C });
+
+  // A policy scoped to the bucket but not to the prefix: every ViralRadar user
+  // would see every other one's files, inside one bucket.
+  const leaked = await runPlan(plan, execWith('storage-select'));
+  const leakedNames = leaked.results.filter((r) => !r.ok).map((r) => r.name);
+  assert.ok(leakedNames.includes("storage: A cannot see B's files"));
+  assert.ok(leakedNames.includes("storage: B cannot see A's files"));
+  assert.ok(leakedNames.includes("storage: an unfiltered select by A returns only A's files"));
+  // The rows in the schema are governed by different policies entirely, so
+  // this must not be confused with a leak there.
+  assert.ok(!leakedNames.some((n) => n.startsWith('ideas: ')), 'a storage leak is not a leak in the schema');
+
+  // No select policy for the bucket at all: even the owner of a file is denied.
+  const closed = await runPlan(plan, execWith('no-storage-select'));
+  const closedNames = closed.results.filter((r) => !r.ok).map((r) => r.name);
+  assert.ok(closedNames.includes('storage: A can see their own files'));
+
+  // The cap gone from the insert policy: the one user over it can upload again.
+  const uncapped = await runPlan(plan, execWith('no-cap'));
+  const uncappedNames = uncapped.results.filter((r) => !r.ok).map((r) => r.name);
+  assert.ok(uncappedNames.includes('storage: B cannot upload while over the cap, even into their own folder'),
+    'a missing cap must be reported as a failure, or 300 MB means nothing');
+  // And nothing else: removing the cap is not a leak between users.
+  assert.ok(!uncappedNames.some((n) => /cannot see/.test(n)), 'a missing cap is not a leak between users');
 });
 
 test('if the allowlist gate were missing, the "not allowed" assertions fail', async () => {
@@ -243,7 +458,7 @@ test('matches() reads each kind of expectation correctly', () => {
 
 test('a proof passes only when breaking the policy makes the assertion fail', async () => {
   const proofs = buildProofs({ A, B, C });
-  assert.equal(proofs.length, 4);
+  assert.ok(proofs.length >= 7, `expected a proof per policy family, got ${proofs.length}`);
 
   // Each proof names the policy it breaks and the assertion that must then fail.
   for (const p of proofs) {
@@ -256,7 +471,7 @@ test('a proof passes only when breaking the policy makes the assertion fail', as
   const honest = async (proof) => simulate(proof.check, proof.modelLeak);
   const good = await runProofs(proofs, honest);
   assert.equal(good.failed, 0, JSON.stringify(good.results));
-  assert.equal(good.passed, 4);
+  assert.equal(good.passed, proofs.length);
   for (const r of good.results) assert.match(r.detail, /failed as it must/);
 
   // A database where breaking the policy changes nothing: the proofs must fail,
@@ -264,14 +479,15 @@ test('a proof passes only when breaking the policy makes the assertion fail', as
   const useless = async (proof) => simulate(proof.check, 'none');
   const bad = await runProofs(proofs, useless);
   assert.equal(bad.passed, 0);
-  assert.equal(bad.failed, 4);
+  assert.equal(bad.failed, proofs.length);
   for (const r of bad.results) assert.match(r.detail, /still passed/);
 });
 
 test('a proof that cannot run at all is a failure, not a pass', async () => {
   const boom = async () => { throw new Error('permission denied to drop policy'); };
-  const { passed, failed, results } = await runProofs(buildProofs({ A, B, C }), boom);
+  const proofs = buildProofs({ A, B, C });
+  const { passed, failed, results } = await runProofs(proofs, boom);
   assert.equal(passed, 0);
-  assert.equal(failed, 4);
+  assert.equal(failed, proofs.length);
   assert.match(results[0].detail, /could not run the proof: permission denied/);
 });

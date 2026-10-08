@@ -184,6 +184,71 @@ test('the paste button copes with a browser that will not allow it', () => {
   assert.match(fn, /nothing on the clipboard/i, 'an empty clipboard is its own case');
 });
 
+// ---------- project folders ----------
+
+test('the Projects screen is a route, and the hash query does not break it', () => {
+  // The service worker reports a share back as "#/projects?shared=1". Splitting
+  // the hash on "/" without taking the query off first would make the route
+  // name "projects?shared=1", match nothing, and quietly land on the radar.
+  assert.match(appjs, /const routes = \{[^}]*projects: renderProjects/);
+  const parse = appjs.slice(appjs.indexOf('function parseHash'), appjs.indexOf('const currentRoute'));
+  assert.match(parse, /split\('\?'\)/, 'the query has to come off before the path is split');
+  // And nothing may go back to reading the hash by hand, or the two disagree.
+  assert.ok(!/location\.hash\.split\('\/'\)/.test(appjs), 'the hash should only be read through parseHash()');
+});
+
+test('a note or a file says which device it came from', () => {
+  // "New from Laptop" is the point of the whole feature; without a device name
+  // it reads as "New from null".
+  assert.match(appjs, /deviceName\(\)/);
+  const live = appjs.slice(appjs.indexOf('function startProjectLive'), appjs.indexOf('// ---------- router'));
+  assert.match(live, /New from \$\{from\}/, 'the toast has to name the device');
+  // An item this device just added comes back over Realtime too. Announcing it
+  // on the device that sent it would be nonsense.
+  assert.match(live, /from !== deviceName\(\)/, 'an item must not be announced on the device that sent it');
+  assert.match(live, /itemPreview\(/, 'the toast should show what arrived, not just that something did');
+});
+
+test('the device name stays on the device and never reaches the database', () => {
+  // It is per device, so it cannot live in the settings row, which every
+  // device shares.
+  const block = appjs.slice(appjs.indexOf('const DEVICE_KEY'), appjs.indexOf('// ---------- live updates'));
+  assert.match(block, /localStorage/);
+  assert.match(block, /catch/, 'private mode throws on localStorage, and a label is not worth a crash');
+  assert.match(block, /guessDeviceName/, 'there has to be a sensible name before anyone sets one');
+  // The settings table has no column for it, so sending one would simply fail.
+  assert.ok(!/device/i.test(datajs.slice(datajs.indexOf('const settings ='), datajs.indexOf('const ideas ='))),
+    'the device name must not be written to the shared settings row');
+});
+
+test('the browser refuses an upload itself rather than finding out from the server', () => {
+  // The database and the storage policies enforce the same limits, but their
+  // refusals arrive after the bytes have been sent, which on mobile data is
+  // someone's money.
+  const upload = appjs.slice(appjs.indexOf('async function uploadFiles'), appjs.indexOf('afterRender.projects'));
+  assert.match(upload, /checkUpload\(/, 'the limits are checked before uploading, not after');
+  assert.match(upload, /used \+= file\.size/, 'the running total must grow, or the cap is checked against a stale figure');
+  // One at a time: three 20 MB uploads in parallel on mobile data is how you
+  // get three timeouts instead of one success.
+  assert.match(upload, /for \(const \[n, file\] of files\.entries\(\)\)/);
+  assert.match(upload, /Uploading \$\{n \+ 1\} of \$\{files\.length\}/, 'a long upload has to say where it has got to');
+  assert.match(upload, /failed\.push/, 'one bad file must not stop the others');
+});
+
+test('the screens say that raw video is never uploaded', () => {
+  // Otherwise the first thing anyone tries is a video, and a refusal with no
+  // explanation reads as a bug rather than as a deliberate limit.
+  const screen = appjs.slice(appjs.indexOf('async function renderProjectDetail'), appjs.indexOf('actions.setProjectStatus'));
+  assert.match(screen, /device to the other|device to device/i, 'say where video does go, not only that it cannot go here');
+  assert.match(screen, /POSTED_RETENTION_DAYS/, 'a folder marked posted loses its files, and should say so before it does');
+});
+
+test('files are never served from a public URL', () => {
+  // A public bucket would mean a URL that works for anyone who has it, forever.
+  assert.match(datajs, /createSignedUrl/);
+  assert.ok(!/getPublicUrl/.test(datajs + appjs), 'a public URL would outlive every policy in the database');
+});
+
 test('every way of asking the AI is reachable from a screen', () => {
   // These are the buttons the whole vr-generate function exists for. A missing
   // one is a feature that silently is not there.

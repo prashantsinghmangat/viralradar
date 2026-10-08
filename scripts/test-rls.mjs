@@ -21,7 +21,10 @@ import 'dotenv/config';
 import postgres from 'postgres';
 import { randomUUID } from 'node:crypto';
 import { describe, explain, WHERE_TO_FIND } from './db-url.mjs';
-import { buildPlan, buildProofs, runPlan, runProofs } from './rls-plan.mjs';
+import {
+  buildPlan, buildProofs, runPlan, runProofs,
+  BUCKET, FIXTURE_BYTES, ITEM_ID, PROJECT_ID, objectPath,
+} from './rls-plan.mjs';
 
 const HELP = `
 Run the Row Level Security isolation test against your Supabase database.
@@ -89,6 +92,11 @@ const host = (() => {
 })();
 
 async function becomeUser(tx, as) {
+  // The connection is already the owner, which BYPASSES Row Level Security.
+  // Used only for reading configuration — the bucket's own settings — where
+  // there is no policy to test and the question is simply "is it set right?".
+  // rls-plan.test.js refuses to let this be used for anything else.
+  if (as === 'owner') return;
   if (as === 'anon') {
     await tx.unsafe('set local role anon');
     return;
@@ -180,6 +188,18 @@ const FIXTURES = [
     'settings',
     (u) => db`insert into viralradar.settings (user_id) values (${u}) on conflict (user_id) do nothing`,
   ],
+  // A's folder is the Inbox, because every user has exactly one and that makes
+  // "a second Inbox is refused" something the suite can actually try.
+  [
+    'projects',
+    (u, key) => db`insert into viralradar.projects (user_id, id, title, is_inbox)
+                   values (${u}, ${key}, 'Fixture folder', ${key === PROJECT_ID.A})`,
+  ],
+  [
+    'project_items',
+    (u, key) => db`insert into viralradar.project_items (user_id, id, project_id, kind, content, from_device)
+                   values (${u}, ${key}, ${u === uid.A ? PROJECT_ID.A : PROJECT_ID.B}, 'text', 'Fixture note', 'Laptop')`,
+  ],
 ];
 
 const FIXTURE_KEYS = {
@@ -190,7 +210,81 @@ const FIXTURE_KEYS = {
   usage: { A: 'youtube', B: 'youtube' },
   import_tokens: { A: 'hash-of-token-a', B: 'hash-of-token-b' },
   settings: { A: null, B: null }, // keyed by user_id alone
+  projects: { A: PROJECT_ID.A, B: PROJECT_ID.B },
+  project_items: { A: ITEM_ID.A, B: ITEM_ID.B },
 };
+
+/**
+ * The extra fixtures the project-folder assertions need, which do not fit the
+ * one-row-per-user shape above.
+ *
+ * THE POSTED DATES
+ *   projects.posted_at is maintained by a trigger: it is set to now() the
+ *   moment status becomes 'posted'. So a folder cannot simply be inserted with
+ *   a date a month ago — it is inserted posted, and then the date is moved
+ *   back by a second statement. That update leaves status alone, so the
+ *   trigger's two branches both decline to fire and the backdated value
+ *   survives. The suite then checks the 14-day rule against real dates rather
+ *   than against whatever today happens to be.
+ *
+ * THE FILES
+ *   storage.objects rows are inserted directly, with a size in metadata and no
+ *   bytes behind them. That is the only sane way to test a 300 MB cap: B's
+ *   single 320 MB row puts B over it without 320 MB being uploaded anywhere.
+ *   Nothing is left behind — the whole suite's assertions roll back, and these
+ *   fixtures are deleted with the users at the end.
+ */
+async function createProjectFixtures() {
+  const posted = [
+    [uid.A, PROJECT_ID.A_POSTED_OLD, 'A posted a month ago', '30 days'],
+    [uid.A, PROJECT_ID.A_POSTED_NEW, 'A posted three days ago', '3 days'],
+    [uid.B, PROJECT_ID.B_POSTED_OLD, 'B posted a month ago', '30 days'],
+  ];
+  for (const [user, id, title, age] of posted) {
+    await db`insert into viralradar.projects (user_id, id, title, status)
+             values (${user}, ${id}, ${title}, 'posted')`;
+    await db`update viralradar.projects set posted_at = now() - ${age}::interval
+             where user_id = ${user} and id = ${id}`;
+  }
+
+  // C is signed in but NOT on the allowlist. Giving C a folder of its own makes
+  // "C can do nothing" a real statement: without it, every C assertion would
+  // pass simply because there was nothing there to reach.
+  await db`insert into viralradar.projects (user_id, id, title)
+           values (${uid.C}, ${PROJECT_ID.C}, 'C folder, planted by the test')`;
+
+  const files = [
+    [uid.A, ITEM_ID.A_OLD_FILE, PROJECT_ID.A_POSTED_OLD, 'old.png', FIXTURE_BYTES.A_OLD],
+    [uid.A, ITEM_ID.A_NEW_FILE, PROJECT_ID.A_POSTED_NEW, 'new.png', FIXTURE_BYTES.A_NEW],
+    [uid.B, ITEM_ID.B_OLD_FILE, PROJECT_ID.B_POSTED_OLD, 'old.png', FIXTURE_BYTES.B_OLD],
+  ];
+  for (const [user, id, project, name, size] of files) {
+    const path = objectPath(user, project, name);
+    await db`insert into viralradar.project_items
+               (user_id, id, project_id, kind, storage_path, file_name, mime, size_bytes)
+             values (${user}, ${id}, ${project}, 'image', ${path}, ${name}, 'image/png', ${size})`;
+    await db`insert into storage.objects (bucket_id, name, metadata)
+             values (${BUCKET}, ${path}, ${db.json({ size })})`;
+  }
+
+  // The one that puts B over the 300 MB cap. Deliberately with no
+  // project_items row: the cap is measured against the bucket, not against our
+  // own rows, precisely so that bytes with no row still count.
+  await db`insert into storage.objects (bucket_id, name, metadata)
+           values (${BUCKET}, ${objectPath(uid.B, PROJECT_ID.B, 'huge.bin')},
+                   ${db.json({ size: FIXTURE_BYTES.B_HUGE })})`;
+}
+
+/**
+ * Storage rows do not hang off auth.users, so deleting the test users does not
+ * take them with it. They are removed by name instead, and only ever under a
+ * test user's own prefix.
+ */
+async function deleteStorageFixtures() {
+  await db`delete from storage.objects
+           where bucket_id = ${BUCKET}
+             and (name like ${`${uid.A}/%`} or name like ${`${uid.B}/%`} or name like ${`${uid.C}/%`})`;
+}
 
 async function createUsers() {
   for (const [label, id] of [['a', A], ['b', B], ['c', C]]) {
@@ -214,6 +308,8 @@ async function createFixtures() {
 
 async function deleteUsers() {
   // Cascades through every table, the settings rows and the allowlist entries.
+  // Storage rows are not reached by that cascade, so they go first.
+  await deleteStorageFixtures();
   await db`delete from auth.users where id in (${A}, ${B}, ${C})`;
 }
 
@@ -222,7 +318,8 @@ async function main() {
   console.log(`  database: ${host}`);
   console.log(`  user A:   ${A}  (on the allowlist)`);
   console.log(`  user B:   ${B}  (on the allowlist)`);
-  console.log(`  user C:   ${C}  (signed in, NOT on the allowlist)\n`);
+  console.log(`  user C:   ${C}  (signed in, NOT on the allowlist)`);
+  console.log(`  bucket:   ${BUCKET}  (A is under the 300 MB cap; B is deliberately over it)\n`);
 
   let created = false;
   let plan = { passed: 0, failed: 0 };
@@ -232,6 +329,7 @@ async function main() {
     await createUsers();
     created = true;
     await createFixtures();
+    await createProjectFixtures();
 
     console.log('--- isolation assertions ---');
     plan = await runPlan(buildPlan({ A, B, C }), exec, (line) => console.log('  ' + line));

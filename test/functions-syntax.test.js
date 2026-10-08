@@ -68,6 +68,48 @@ test('the import function handles the methods and failures a browser will throw 
   assert.ok(!/req\.json\(\)/.test(source), 'req.json() would throw before the importer could explain the problem');
 });
 
+test('every function the schedule calls has the gateway stood down', () => {
+  // Supabase verifies the Authorization header as a JWT by default. pg_cron
+  // sends a shared secret in a header of its own and no Authorization at all,
+  // so without verify_jwt = false the gateway refuses the call before the
+  // function runs — which is how the import token path was broken once, and the
+  // failure looks nothing like its cause.
+  const config = fs.readFileSync(path.join(ROOT, 'supabase', 'config.toml'), 'utf8');
+  for (const name of ['vr-refresh-trends', 'vr-purge-project-files']) {
+    const block = config.slice(config.indexOf(`[functions.${name}]`));
+    assert.ok(config.includes(`[functions.${name}]`), `${name} has no config block`);
+    assert.match(block.slice(0, 200), /verify_jwt = false/, `${name} is called by the schedule and would be refused by the gateway`);
+
+    // Standing the gateway down means the function has to do the whole job
+    // itself, so both halves have to be visible in it.
+    const source = fs.readFileSync(path.join(FUNCTIONS, name, 'index.ts'), 'utf8');
+    assert.match(source, /x-vr-cron-secret/, `${name} must check the schedule secret itself`);
+    assert.match(source, /sameSecret/, `${name} must compare the secret in constant time`);
+    assert.match(source, /allowed_users/, `${name} runs as the service role, which skips the allowlist gate`);
+  }
+});
+
+test('the cleanup deletes files through Storage, and only ever its own', () => {
+  const source = fs.readFileSync(path.join(FUNCTIONS, 'vr-purge-project-files', 'index.ts'), 'utf8');
+
+  // The retention rule lives in the database, in one place, so it can be tested
+  // on its own against real dates.
+  assert.match(source, /rpc\('project_files_due'/, 'the function must ask which files are due, not work it out itself');
+  assert.ok(!/interval|14 \* 24|posted_at/.test(source), 'the fortnight belongs in the database, not in two places');
+
+  // Deleting the row leaves the bytes in the bucket, still counted against a
+  // shared quota and now unreachable. Only the Storage API really removes one.
+  assert.match(source, /storage\.from\(BUCKET\)\.remove/);
+  const files = source.indexOf('.remove(paths)');
+  const rows = source.indexOf("from('project_items').delete()");
+  assert.ok(files !== -1 && rows !== -1 && files < rows,
+    'files must go before rows, or a half-failure leaves files nothing points at');
+
+  // It runs as the service role for the schedule, which bypasses every policy.
+  assert.match(source, /startsWith\(prefix\)/, 'a path outside this user\'s prefix must be left alone');
+  assert.match(source, /\.eq\('user_id', caller\.userId\)/, 'the owner filter has to be explicit');
+});
+
 test('CORS never answers an origin it was not told about', () => {
   const source = fs.readFileSync(path.join(FUNCTIONS, '_shared', 'cors.ts'), 'utf8');
   // A wildcard origin would let any website call this with your session. There
