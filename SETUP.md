@@ -2,15 +2,28 @@
 
 This is the full list of manual steps, in order.
 
-**All of these are done.** The app is live at
+**Almost all of these are done.** The app is live at
 https://ytshortradar.netlify.app, signs you in, syncs between laptop and phone,
-imports, generates and refreshes trends on schedule. The one exception is
-Step 16, the folder watcher, which is optional and not built yet.
+imports, generates and refreshes trends on schedule. All seven migrations are
+applied, and `npm run test:rls` passes **309 assertions and 7 proofs** against
+the real database — including the project-file bucket and the private channel
+the two devices signal on.
 
 So this document now does two jobs: it is the **record** of how the live setup
 was put together, and the **recipe** if it ever has to be done again — a new
 Supabase project, a new machine, or a rebuild from scratch. Steps you have
 already done are marked ✅.
+
+**What is still outstanding**, all of it for the project-folders and video
+features:
+
+| Step | What |
+|---|---|
+| 10 | deploy `vr-purge-project-files` — the other three are deployed |
+| 11b | set `cron_config.purge_function_url`, or the nightly cleanup does nothing |
+| 14b | reload the installed PWA so its service worker picks up the Share Target |
+| 14c | run a video transfer between two devices on one network |
+| 16 | the folder watcher — optional, not built, probably never needed |
 
 The local app also still works, untouched, on the `local-sqlite` branch:
 `git switch local-sqlite` then `npm start`.
@@ -147,6 +160,16 @@ Realtime are shared with tracebug** the same way `auth.users` is:
 None of them alters or removes anything that was already there — a policy on
 `storage.objects` or `realtime.messages` may well be tracebug's.
 
+**This was measured, not assumed.** A fingerprint of every policy on those two
+tables that is *not* ViralRadar's was taken before and after the push and came
+back identical, and the RLS flags on both tables were unchanged. What was there
+beforehand: three policies of tracebug's on `storage.objects`
+(`reports_select_own`, `reports_insert_own`, `reports_delete_own`) and **none at
+all** on `realtime.messages` — which means tracebug uses no private Realtime
+channels, so there was nothing there for the new policies to interact with. The
+statement that does this is in PROJECT.md §5; worth re-running before any future
+migration that touches either table.
+
 Check it worked: **Table Editor** → the schema dropdown (top left, probably says
 "public") → you should now be able to pick **viralradar** and see `ideas`,
 `scripts`, `results`, `trends`, `settings`, `usage`, `import_tokens`,
@@ -234,9 +257,19 @@ proofs:     7 passed, 0 failed
 PASS - a user can only reach their own rows, and the test can detect it when that breaks.
 ```
 
-**If anything fails, paste it to me and put no real data in the project until it
-passes.** There is also a browser version: paste `supabase/tests/rls.sql` into
-**SQL Editor → New query → Run** and read the Messages panel.
+**This has been run against the live database and passes** — 309 assertions,
+7 proofs, with all three throwaway users and every fixture cleaned up
+afterwards. That is the first clean run including the project-file bucket and
+the signalling channel, and getting there took three bugs in the harness itself;
+they are written up in PROJECT.md §11, because each one was a test that could
+not have failed.
+
+**If anything ever fails, paste it to me and put no real data in the project
+until it passes.** There is also a browser version: paste
+`supabase/tests/rls.sql` into **SQL Editor → New query → Run**. Note that the
+Supabase SQL editor shows only the **last** statement's result and does not
+surface `NOTICE` output at all, so read the error it ends with rather than
+looking for a Messages tab.
 
 ## Step 6. Create your account
 
@@ -365,7 +398,7 @@ checking once: run `git status` and confirm `.env` is not listed.
 
 ---
 
-# PART 2 — Keys and the Edge Functions ✅
+# PART 2 — Keys and the Edge Functions  (one function still to deploy)
 
 All three functions are deployed and all the secrets are set. The commands are
 here so the same thing can be done again without working it out twice.
@@ -485,7 +518,7 @@ reachable and allowed.
 
 ---
 
-# PART 3 — The site and your phone ✅
+# PART 3 — The site and your phone  (the two-device checks still to do)
 
 ## Step 12. Create the Netlify site
 

@@ -262,3 +262,11 @@ data in one.
   stars/hr). Use the source filter to compare like with like.
 - The YouTube key is capped at 25 searches a day — 2,500 of the free 10,000
   units — so the quota cannot run out by accident.
+- Project files take a fixed **300 MB** of this Supabase project's shared file
+  quota, 25 MB per file, and files in a folder marked *Posted* are deleted a
+  fortnight later. Settings shows how full the slice is.
+- Video never goes to a server, so sending one costs nothing and counts against
+  nothing. Both devices have to be on the same network: there is no relay, by
+  choice, because a relay would carry every byte of every video.
+- A transfer does not resume. Stopping one is clean — nothing part-written is
+  kept — but starting again starts from the beginning.

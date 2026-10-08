@@ -370,7 +370,7 @@ public/              the whole frontend — no build step, no framework
 
 scripts/             build, sync-shared, inspect-db, test-rls, rls-plan,
                      db-url, make-icons
-test/                26 files, 374 tests
+test/                26 files, 379 tests
 ```
 
 **Why `_shared/core/` is a copy.** A deployed Edge Function only receives files
@@ -464,15 +464,28 @@ except the optional folder watcher.
 | 8. Netlify build and deploy, PWA | **done** — installed on the phone |
 | 9. Watcher as a standalone script | **not started** — optional, may be skipped |
 | 10. README rewrite | **done** |
+| 11. Project folders + files | **done, migration applied, verified against the real database** |
+| 12. Device-to-device video transfer | **built and deployed; the database half verified, the two-device half NOT yet run** |
 
 Phase 10 originally also contained a SQLite → Postgres migration. It was
 dropped, not skipped: no local database ever held any data, so there was
 nothing to move.
 
+**Phases 11 and 12, as applied.** Both migrations were pushed to the live
+project together. The policy fingerprint of everything in `storage.objects` and
+`realtime.messages` that is *not* ViralRadar's was taken before and after and is
+unchanged, so the other app in this project was demonstrably untouched — see §5.
+`npm run test:rls` then passed **309 assertions and 7 proofs** against the real
+database, which is the first clean run of the storage and signalling coverage.
+
+Still not done by hand, and needed before the video half works end to end:
+`vr-purge-project-files` deployed, `cron_config.purge_function_url` set, and the
+installed PWA reloaded so its service worker picks up the Share Target.
+
 ### What works today
 
 Open **https://ytshortradar.netlify.app**, sign in with an email and password,
-and all six screens read and write the real database:
+and all seven screens read and write the real database:
 
 - **Import** — paste, upload, or the clipboard button. A real export goes
   through the deployed function and lands as proper rows.
@@ -488,6 +501,9 @@ and all six screens read and write the real database:
   written with `source = 'openrouter'`. Test AI shows both answering
   (Gemini ~2.0s, OpenRouter ~1.2s).
 - **Installed on the phone** from the home screen, offline shell included.
+- **Projects** — folders, notes, links, files, the 300 MB figure in Settings,
+  and *Open project* on any script. The schema and policies behind it are
+  verified against the real database; the two-device flows are not yet (below).
 
 ### What does not work yet
 
@@ -503,14 +519,28 @@ and all six screens read and write the real database:
   mismatch — but `RTCPeerConnection` has never actually opened here, so the
   handshake, presence, and the File System Access save path are unexercised.
   This is the largest untested surface in the project and it needs two devices
-  on one Wi-Fi to clear.
+  on one Wi-Fi to clear. SETUP.md Step 14c is the procedure.
+- **The nightly file cleanup has not fired.** `vr-purge-project-files` is
+  written and its rule is verified against real dates, but it still needs
+  deploying and `cron_config.purge_function_url` set. *Clean up now* in Settings
+  runs it on demand, which is how to check it without waiting a fortnight.
+- **The phone flows have not been walked.** A note and a file in both
+  directions, and Android's Share menu into the Inbox. All of it is wired and
+  the Realtime half is the same machinery that already works for imports, but
+  the Share Target in particular only appears once the installed PWA has
+  activated the new service worker.
 
-**Done by hand:** migrations pushed, schema exposed to the Data API, account
-created with a password and added to the allowlist, the three API keys
+**Done by hand:** all seven migrations pushed, schema exposed to the Data API,
+account created with a password and added to the allowlist, the three API keys
 (Gemini, OpenRouter, YouTube) in Supabase secrets, `ALLOWED_ORIGINS` and
 `CRON_SECRET` set, the cron secret also in Vault, code on GitHub,
-Netlify deploying from `main`, all four functions deployed, PWA installed on
-the phone.
+Netlify deploying from `main`, three of the four functions deployed, PWA
+installed on the phone, and the before/after policy fingerprint taken to show
+the other app was untouched.
+
+**Still to do by hand:** deploy `vr-purge-project-files`, set
+`cron_config.purge_function_url`, and reload the installed PWA on the phone so
+its service worker picks up the Share Target.
 
 ---
 
@@ -801,13 +831,21 @@ introduced on purpose, the suite is confirmed to fail, and the file is restored.
   for one.
 - **The private channel's authorisation is only half-proved.** The RLS suite
   sets `realtime.topic()` and exercises the real gate, and reads the policies
-  back out of `pg_policies` — but whether the Realtime *server* consults them
-  can only be shown by two real devices, one of which is signed in as somebody
-  else. That test has not been run.
+  back out of `pg_policies` — both of which now pass against the live database.
+  What is still unproved is whether the Realtime *server* consults them, which
+  only two real devices can show, one signed in as somebody else. That test has
+  not been run.
+- **The delete policy on `storage.objects` is not covered by DML**, because
+  Supabase forbids a direct `DELETE` there and raises `42501` doing it — the
+  same code as an RLS refusal. It is covered by its gate, by its own definition
+  read from `pg_policies`, and by asserting the guard by message; see §10. End
+  to end, that path is exercised only by using the app.
 
-Two things that were unknown until the first deploy, now settled: the
-`jsr:@supabase/supabase-js@2` import resolves, and `--use-api` does bundle the
-`_shared/core/` copies.
+Three things that were unknown until the first deploy, now settled: the
+`jsr:@supabase/supabase-js@2` import resolves, `--use-api` does bundle the
+`_shared/core/` copies, and adding policies to `realtime.messages` is provably
+inert for the other app in this project — it had none, and the fingerprint of
+everything not ViralRadar's is unchanged either side of the migration.
 
 ---
 
