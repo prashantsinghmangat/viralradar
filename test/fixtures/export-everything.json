@@ -1,0 +1,94 @@
+{
+  "app": "shorts-studio",
+  "schema": 1,
+  "type": "bundle",
+  "exported_at": "2026-10-08T09:00:00Z",
+  "items": [
+    {
+      "kind": "script",
+      "id": "scr_pdf_001",
+      "created_at": "2026-10-05T10:00:00Z",
+      "topic": "pdf tool",
+      "title": "Free AI site that edits PDFs",
+      "beats": [
+        { "t": "0-3s", "say": "Stop paying for PDF editors", "screen": "Face + logo" },
+        { "t": "3-20s", "say": "Upload any PDF and it edits itself", "screen": "Screen recording of the upload" }
+      ],
+      "thumbnail_text": "FREE PDF AI",
+      "yt_title": "This free AI edits any PDF",
+      "ig_caption": "Save this for your next PDF",
+      "fb_caption": "Try it free",
+      "hashtags": ["#ai", "#tools"],
+      "pinned_comment": "Link in bio",
+      "broll": ["screen recording"],
+      "audio": "lofi",
+      "source": "shorts-studio"
+    },
+    {
+      "kind": "result",
+      "id": "res_pdf_001",
+      "logged_at": "2026-10-06T09:00:00Z",
+      "title": "This free AI edits any PDF",
+      "posted_on": "2026-10-06",
+      "platforms": ["yt", "ig"],
+      "format": "demo",
+      "hook": "question",
+      "len": "30s",
+      "cta": "save this",
+      "views": 12400,
+      "likes": 900,
+      "comments": 40,
+      "shares": 20,
+      "saves": 300,
+      "follows": 15,
+      "script_id": "scr_pdf_001",
+      "source": "shorts-studio"
+    },
+    {
+      "kind": "research",
+      "id": "rp_bgless_001",
+      "topic": "a free background remover",
+      "created_at": "2026-10-08T08:30:00Z",
+      "source": "claude-chat",
+      "project": { "title": "Background remover video" },
+      "pack": {
+        "topic": "a free background remover",
+        "main_tool": {
+          "name": "Bgless",
+          "url": "https://bgless.example",
+          "what_it_does": "removes the background from a photo in one click",
+          "how_it_works_simple": "upload a photo, it returns a transparent PNG",
+          "free_details": {
+            "signup": "no account needed",
+            "watermark": "none on images under 2000px",
+            "limits": "5 images a day on the free tier",
+            "export_quality": "PNG, up to 2000px on the free tier"
+          },
+          "steps": ["Go to bgless.example", "Drag in a photo", "Download the PNG"],
+          "prompts": [],
+          "best_inputs": ["a photo with a plain, contrasting background"],
+          "settings": []
+        },
+        "alternatives": [
+          { "name": "Removerly", "url": "https://removerly.example", "one_line": "similar, but needs a signup" }
+        ],
+        "fact_check": [
+          { "claim": "the free tier gives 5 images a day", "status": "verified", "source_url": "https://bgless.example" },
+          { "claim": "it works on video too", "status": "unverified", "source_url": "https://bgless.example" }
+        ],
+        "test_plan": ["Upload the same photo twice and show the free-tier counter drop"],
+        "recording_checklist": ["Have three sample photos ready before recording"],
+        "sources": ["https://bgless.example"]
+      }
+    },
+    {
+      "kind": "note",
+      "id": "note_watermark_001",
+      "text": "Double check the watermark claim before recording — it may have changed",
+      "url": "https://bgless.example/pricing",
+      "created_at": "2026-10-08T08:45:00Z",
+      "source": "claude-chat",
+      "project": { "title": "Background remover video" }
+    }
+  ]
+}

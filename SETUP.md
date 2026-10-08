@@ -708,7 +708,10 @@ npx supabase functions deploy vr-research --use-api
 ```
 
 `db push` adds `20261008000700_research.sql`, which only widens two check
-constraints on `project_items` so a pack can be stored. Nothing is dropped.
+constraints on `project_items` so a pack can be stored, and
+`20261008000800_import_projects.sql`, which adds `external_id` (nullable,
+with its own partial unique index) so re-importing the same research pack or
+note updates it instead of duplicating it. Nothing is dropped by either.
 
 Then the part worth actually doing — **pick a page you can read yourself**, so
 you can tell whether the pack is true:

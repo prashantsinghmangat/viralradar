@@ -3,13 +3,20 @@
 // "import" Edge Function and the tests all share this one file, so error
 // messages and import summaries are identical everywhere.
 //
-// Contract: { app: "shorts-studio", schema: 1, type: "script"|"ideas"|"results"|"bundle", exported_at, items: [...] }
+// Contract: { app: "shorts-studio", schema: 1, type: "script"|"ideas"|"results"|"bundle"|"research"|"note", exported_at, items: [...] }
+//
+// "research" and "note" items currently arrive inside a bundle; a standalone
+// export of either type is accepted too, for whenever Shorts Studio or a
+// Claude chat starts sending one on its own. Both go into a project folder
+// rather than a flat table — see shared/import-projects.mjs — so they carry
+// no TABLE entry here.
 
-export const TYPES = ['script', 'ideas', 'results', 'bundle'];
-export const KINDS = ['script', 'idea', 'result'];
-// Where an item came from. Imports are "shorts-studio"; the generate function
-// writes "gemini"/"openrouter"/"claude"; "manual" is for rows typed by hand.
-export const SOURCES = ['claude', 'gemini', 'openrouter', 'shorts-studio', 'manual'];
+export const TYPES = ['script', 'ideas', 'results', 'bundle', 'research', 'note'];
+export const KINDS = ['script', 'idea', 'result', 'research', 'note'];
+// Where an item came from. Imports are "shorts-studio" or "claude-chat"; the
+// generate function writes "gemini"/"openrouter"/"claude"; "manual" is for
+// rows typed by hand.
+export const SOURCES = ['claude', 'claude-chat', 'gemini', 'openrouter', 'shorts-studio', 'manual'];
 export const TABLE = { idea: 'ideas', script: 'scripts', result: 'results' };
 
 export class ImportError extends Error {}
@@ -97,19 +104,27 @@ export function validate(data) {
   if (data.items.length === 0) throw new ImportError('The export has no items in it.');
 
   // Resolve each item to a concrete kind; validate everything before writing anything.
-  const kindFor = { script: 'script', ideas: 'idea', results: 'result' };
-  return data.items.map((item, i) => {
+  const kindFor = { script: 'script', ideas: 'idea', results: 'result', research: 'research', note: 'note' };
+  const entries = [];
+  const skipped = [];
+  data.items.forEach((item, i) => {
     if (!item || typeof item !== 'object') throw new ImportError(`Item #${i + 1} is not an object.`);
     if (item.id === undefined || item.id === null || item.id === '') throw new ImportError(`Item #${i + 1} has no "id".`);
     let kind = kindFor[data.type];
     if (data.type === 'bundle') {
       kind = item.kind;
       if (!KINDS.includes(kind)) {
-        throw new ImportError(`Bundle item #${i + 1} (id ${item.id}) has kind ${JSON.stringify(kind ?? null)}; expected "script" or "result".`);
+        // Forward compatibility: a kind this version does not understand yet
+        // (a newer Shorts Studio sending something new) must not sink the
+        // items around it in the same file. It is counted and reported
+        // instead — see summarize() — and simply left out of entries.
+        skipped.push(String(kind ?? '(none)'));
+        return;
       }
     }
-    return { kind, item };
+    entries.push({ kind, item });
   });
+  return { entries, skipped };
 }
 
 // Neutral rows: contract field names, native arrays, ISO timestamps.
@@ -134,24 +149,49 @@ export const ROW = {
     saves: int(it.saves), follows: int(it.follows), script_id: str(it.script_id),
     source: source(it), origin_at: origin(it.logged_at, it.posted_on),
   }),
+  // research and note do not go into a flat table — they go into a project
+  // folder as a project_item, which shared/import-projects.mjs builds from
+  // this neutral row. `project` is kept as given (id / title / neither) so
+  // the filing rule can decide where each one lands.
+  research: (it) => ({
+    id: str(it.id), topic: str(it.topic), created_at: str(it.created_at),
+    source: source(it), project: (it.project && typeof it.project === 'object') ? it.project : null,
+    pack: (it.pack && typeof it.pack === 'object') ? it.pack : {},
+  }),
+  note: (it) => ({
+    id: str(it.id), text: str(it.text), url: str(it.url), created_at: str(it.created_at),
+    source: source(it), project: (it.project && typeof it.project === 'object') ? it.project : null,
+  }),
 };
 
 // The title shown in the import summary ("Imported 1 script: <title>").
-export const titleOf = (row) => row.title || row.yt_title || row.topic || row.id;
+export const titleOf = (row) => row.title || row.yt_title || row.topic || row.text || row.id;
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-export function summarize(counts, titles) {
+// The noun a count is read against. Plain English rather than the wire kind:
+// "1 research" reads as a typo, "1 research pack" does not.
+const LABEL = { script: 'script', idea: 'idea', result: 'result', research: 'research pack', note: 'note' };
+
+export function summarize(counts, titles, skipped = []) {
   const parts = [];
-  for (const k of ['script', 'idea', 'result']) {
+  for (const k of ['script', 'idea', 'result', 'research', 'note']) {
     if (!counts[k]) continue;
     const c = counts[k];
-    const label = plural(c.added + c.updated, k);
+    const label = plural(c.added + c.updated, LABEL[k]);
     const extra = c.updated ? ` (${c.updated} updated)` : '';
     parts.push(label + extra);
   }
-  let msg = `Imported ${parts.join(', ')}`;
-  if (titles.length === 1 && titles[0]) msg += `: ${titles[0]}`;
+  let msg = parts.length ? `Imported ${parts.join(', ')}` : 'Imported nothing';
+  if (parts.length && titles.length === 1 && titles[0]) msg += `: ${titles[0]}`;
+
+  // Grouped by kind, so three unrelated unknown kinds in one file read as
+  // three sentences rather than one unreadable count.
+  const byKind = new Map();
+  for (const kind of skipped) byKind.set(kind, (byKind.get(kind) || 0) + 1);
+  for (const [kind, n] of byKind) {
+    msg += `. Skipped ${n} ${n === 1 ? 'item' : 'items'} of unknown kind '${kind}'`;
+  }
   return msg;
 }
 
@@ -162,6 +202,6 @@ export function summarize(counts, titles) {
  */
 export function prepare(input) {
   const data = parse(input);
-  const entries = validate(data).map(({ kind, item }) => ({ kind, item, row: ROW[kind](item) }));
-  return { type: data.type, entries };
+  const { entries, skipped } = validate(data);
+  return { type: data.type, entries: entries.map(({ kind, item }) => ({ kind, item, row: ROW[kind](item) })), skipped };
 }

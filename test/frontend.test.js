@@ -115,7 +115,7 @@ test('user text is escaped wherever it is put into HTML', () => {
   // model-written text on screen, so they are the ones that matter most.
   // encodeURIComponent() is on the list for a different reason: it percent-
   // encodes, so its output cannot be markup at all.
-  const safe = /^(esc\(|fmt\(|compact\(|ago\(|when\(|copyBtn\(|hbars\(|format\(|renderEditPlan\(|PASTE_BUTTON\(|makeButton\(|devicesLine\(|renderAngles\(|ANGLES_BUTTON\(|renderPack\(|RESEARCH_BUTTON\(|packLink\(|packList\(|liveBadge\(|encodeURIComponent\(|GENERATING\[|KIND_ICON|SOURCE|LIVE_LABEL|STAGES|LENGTHS|DEFAULT_AI_ORDER)/;
+  const safe = /^(esc\(|fmt\(|compact\(|ago\(|when\(|copyBtn\(|hbars\(|format\(|renderEditPlan\(|PASTE_BUTTON\(|makeButton\(|devicesLine\(|renderAngles\(|ANGLES_BUTTON\(|renderPack\(|RESEARCH_BUTTON\(|packLink\(|packList\(|liveBadge\(|factClass\(|encodeURIComponent\(|GENERATING\[|KIND_ICON|SOURCE|LIVE_LABEL|STAGES|LENGTHS|DEFAULT_AI_ORDER)/;
   const bad = [];
   for (const literal of htmlLiterals) {
     for (const m of literal.matchAll(/\$\{([^{}]*)\}/g)) {
@@ -269,8 +269,8 @@ test('every value a pack puts on screen is escaped', () => {
   const interpolations = htmlLiterals.flatMap((t) => [...t.matchAll(/\$\{([^{}]*)\}/g)].map((m) => m[1].trim()));
   assert.ok(interpolations.length >= 15, `expected the values it interpolates, found ${interpolations.length}`);
   for (const expr of interpolations) {
-    const ok = /^(esc\(|copyBtn\(|packLink\(|packList\(|liveBadge\(|encodeURIComponent\()/.test(expr)
-      || expr === 'facts' || /\.map\(|\.join\(|\?|&&/.test(expr)
+    const ok = /^(esc\(|copyBtn\(|packLink\(|packList\(|liveBadge\(|factClass\(|encodeURIComponent\()/.test(expr)
+      || expr === 'facts' || /\.map\(|\.join\(|\?|&&|\|\|/.test(expr)
       // A count cannot carry markup.
       || /^p\.downgraded_count$/.test(expr);
     assert.ok(ok, `renderPack puts ${expr} into HTML without escaping it`);
@@ -295,7 +295,7 @@ test('a badge says what the fetch found, never what the model claimed', () => {
   // And reachable is set by the server from the fetch result, not copied from
   // the model — see normalisePack in shared/research.mjs, where it is enforced.
   const research = fs.readFileSync(path.join(ROOT, 'shared', 'research.mjs'), 'utf8');
-  assert.match(research, /reachable: known\(/, 'reachable has to come from the pages that loaded');
+  assert.match(research, /reachable: checked \? known\(/, 'reachable has to come from the pages that loaded');
 });
 
 test('a verified claim and an unverified one cannot look the same', () => {
@@ -303,16 +303,22 @@ test('a verified claim and an unverified one cannot look the same', () => {
   // before recording. Showing it as if it were a fact is the failure this
   // whole feature exists to prevent, so the two must be styled apart.
   const fn = appjs.slice(appjs.indexOf('function renderPack'), appjs.indexOf('actions.closePack'));
-  // One of two literal class names, never the model's own string: a class
-  // attribute assembled from JSON is not worth trusting twice.
-  assert.match(fn, /class="fact \$\{f\.status === 'verified' \? 'verified' : 'unverified'\}"/,
-    'the status has to reach the markup, as one of two known names');
+  // One of three literal class names, via a function, never the model's own
+  // string: a class attribute assembled from JSON is not worth trusting twice.
+  assert.match(fn, /class="fact \$\{factClass\(factStatus\(f\)\)\}"/,
+    'the status has to reach the markup, via functions that return one of three known names');
   assert.match(fn, /badge good.*Verified/s);
   assert.match(fn, /badge warn.*Unverified/s);
+  assert.match(fn, /badge">\? Not checked/s);
+  const factClassFn = fn.slice(fn.indexOf('const factClass'), fn.indexOf('const facts ='));
+  assert.match(factClassFn, /'verified'/);
+  assert.match(factClassFn, /'unverified'/);
+  assert.match(factClassFn, /'unchecked'/);
 
   const css = fs.readFileSync(path.join(PUBLIC, 'styles.css'), 'utf8');
   assert.match(css, /\.fact\.verified/, 'a verified claim needs its own look');
   assert.match(css, /\.fact\.unverified/, 'and an unverified one must differ from it');
+  assert.match(css, /\.fact\.unchecked/, 'and an unchecked one must differ from both');
 });
 
 test('Research Pack is offered on a trend, an idea and in the free-text box', () => {

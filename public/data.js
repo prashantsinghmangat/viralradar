@@ -15,7 +15,7 @@ import { IDEA_STATUS, SCRIPT_STAGES } from './shared/defaults.mjs';
 import { istDay } from './shared/time.mjs';
 import {
   BUCKET, INBOX_TITLE, PROJECT_STATUS,
-  checkUpload, kindForFile, kindForText, safeFileName, sha256Hex, storagePath, titleForScript, usageSummary,
+  checkUpload, escapeLikePattern, kindForFile, kindForText, safeFileName, sha256Hex, storagePath, titleForScript, usageSummary,
 } from './shared/projects.mjs';
 import { deviceTopic, readSignal, videoRefRow } from './shared/transfer.mjs';
 
@@ -352,16 +352,42 @@ export function createData(client) {
       return created[0];
     },
 
-    /** Open the folder for a script, making it the first time. */
+    /**
+     * Open the folder for a script, making it the first time.
+     *
+     * In order: a folder already linked to this script; else an unlinked
+     * folder with the same title, case-insensitively — linked rather than
+     * left alone, because that is the folder a research pack or a note
+     * imported before the script existed would already have landed in, under
+     * exactly this title (see shared/import-projects.mjs). Without this step,
+     * opening the script's project after importing its research would make a
+     * second folder with the same name instead of reusing the one that
+     * already has the pack in it; only once neither exists is one created.
+     */
     async forScript(script) {
       const scriptId = String(script?.id ?? '');
       if (!scriptId) throw new Error('That script has no id.');
-      const existing = await run(
+
+      const linked = await run(
         client.from('projects').select('*').eq('script_id', scriptId).limit(1),
         'find that script\'s project',
       );
-      if (existing && existing.length) return existing[0];
-      return projects.create({ title: titleForScript(script), scriptId });
+      if (linked && linked.length) return linked[0];
+
+      const title = titleForScript(script);
+      const unlinked = await run(
+        client.from('projects').select('*').is('script_id', null).ilike('title', escapeLikePattern(title)).limit(1),
+        'find a folder with that name',
+      );
+      if (unlinked && unlinked.length) {
+        const rows = await run(
+          client.from('projects').update({ script_id: scriptId }).eq('id', unlinked[0].id).select('*'),
+          'link that folder to the script',
+        );
+        return rows && rows[0];
+      }
+
+      return projects.create({ title, scriptId });
     },
 
     async setStatus(id, status) {

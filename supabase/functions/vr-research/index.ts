@@ -3,6 +3,17 @@
 //   POST /functions/v1/vr-research
 //   Authorization: Bearer <user JWT>
 //   Body: { topic, urls?: string[], project_id?: string }
+//        | { recheck: true, item_id }
+//
+// The second shape is "Re-check links": a research pack that arrived by
+// import (Shorts Studio, a Claude chat) carries claims nobody here has ever
+// fetched a page for. Rather than trust them, shared/import-projects.mjs
+// already ran them through normalisePack({ checked: false }), which marks
+// every claim 'unchecked' and every `reachable` null. Re-check links fetches
+// the URLs the pack itself names and runs the SAME claims through
+// normalisePack() again, this time with real fetches — the identical
+// enforcement a fresh pack gets, just arriving a step later and with no AI
+// call at all (there is nothing left to ask for; the claims already exist).
 //
 // WHY THIS IS A FUNCTION AND NOT THE BROWSER
 //   Two reasons, and the second is the real one.
@@ -134,6 +145,65 @@ async function folderFor(client: { from: Function }, topic: string, given: strin
   return made?.[0]?.id ?? '';
 }
 
+/**
+ * Fetch the URLs an existing pack names, and run its own claims through the
+ * same enforcement a fresh pack gets. No AI call: the claims already exist,
+ * this only answers whether the pages behind them are real.
+ */
+async function recheckPack(req: Request, client: { from: Function }, userId: string, itemId: string) {
+  if (!itemId) return json(req, { ok: false, error: 'Which pack? No item was named.' }, 400);
+
+  const { data: row, error: readError } = await client.from('project_items')
+    .select('*').eq('id', itemId).eq('user_id', userId).maybeSingle();
+  if (readError) return json(req, { ok: false, error: `Could not find that pack: ${readError.message}` }, 500);
+  if (!row || row.kind !== 'research') {
+    return json(req, { ok: false, error: 'That is not a research pack.' }, 404);
+  }
+
+  let raw: Record<string, unknown> = {};
+  try {
+    raw = JSON.parse(row.content ?? '{}');
+  } catch {
+    return json(req, { ok: false, error: 'That pack is not readable JSON; it cannot be re-checked.' }, 500);
+  }
+
+  const tool = (raw.main_tool as Record<string, unknown>) ?? {};
+  const alternatives = Array.isArray(raw.alternatives) ? raw.alternatives as Record<string, unknown>[] : [];
+  const factCheck = Array.isArray(raw.fact_check) ? raw.fact_check as Record<string, unknown>[] : [];
+  const candidates = [
+    tool.url,
+    ...alternatives.map((a) => a.url),
+    ...factCheck.map((f) => f.source_url),
+    ...(Array.isArray(raw.sources) ? raw.sources : []),
+  ];
+  const urls = cleanUrls(candidates as string[], MAX_URLS);
+  if (!urls.length) {
+    return json(req, { ok: false, error: 'This pack names no URL at all, so there is nothing to check.' }, 422);
+  }
+
+  const pages = await fetchPages(urls);
+  const live = pages.filter((p) => p.reachable);
+  const pack = normalisePack({ pack: raw, pages, topic: String(raw.topic ?? ''), checked: true });
+
+  const { error: writeError } = await client.from('project_items')
+    .update({ content: JSON.stringify(pack) }).eq('id', itemId).eq('user_id', userId);
+  if (writeError) {
+    console.warn(`[vr-research] re-check succeeded but could not be saved: ${writeError.message}`);
+  }
+
+  console.log(`[vr-research] recheck ${itemId}: fetched=${live.length}/${pages.length}`);
+  return json(req, {
+    ok: true,
+    kind: 'research',
+    item_id: itemId,
+    project_id: row.project_id,
+    pack,
+    message: `${live.length} of ${pages.length} pages checked · ${pack.verified_count} verified`
+      + (writeError ? ' · not saved' : ''),
+    ...(writeError ? { warning: `Checked, but could not be saved: ${writeError.message}` } : {}),
+  });
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return preflight(req);
   if (req.method !== 'POST') return json(req, { ok: false, error: 'Use POST.' }, 405);
@@ -155,10 +225,15 @@ Deno.serve(async (req: Request) => {
     return json(req, { ok: false, error: 'The request body is not valid JSON.' }, 400);
   }
 
+  const { client, userId } = caller;
+
+  if (body.recheck === true) {
+    return recheckPack(req, client, userId, String(body.item_id ?? '').trim());
+  }
+
   const topic = String(body.topic ?? '').trim().slice(0, 500);
   if (!topic) return json(req, { ok: false, error: 'What subject? No topic was sent.' }, 400);
 
-  const { client, userId } = caller;
   const settings = await settingsFor(client, userId);
   const today = istDay();
   const ask = {

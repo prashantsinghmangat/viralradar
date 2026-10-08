@@ -172,6 +172,19 @@ export function usageSummary(usedBytes) {
  */
 export function itemPreview(item, max = 60) {
   const i = item || {};
+  // A research pack's content is JSON, not prose, so the database's generated
+  // preview column (which just takes the first 80 characters of content) would
+  // show raw braces. Its topic is the readable equivalent.
+  if (i.kind === 'research') {
+    try {
+      const topic = JSON.parse(i.content || '{}').topic;
+      if (topic) {
+        const flat = String(topic).replace(/\s+/g, ' ').trim();
+        return flat.length <= max ? flat : `${flat.slice(0, max - 1)}…`;
+      }
+    } catch { /* fall through to the generic path below */ }
+    return 'a research pack';
+  }
   // project_items.preview is a generated column holding exactly this, so a
   // list of folders never has to read every note in full. A row that arrived
   // over Realtime, or an older one, has the whole thing instead.
@@ -230,3 +243,13 @@ export const titleForScript = (script) => {
   const title = String(s.title || s.yt_title || s.topic || '').replace(/\s+/g, ' ').trim();
   return (title || `Script ${s.id ?? ''}`.trim()).slice(0, 120);
 };
+
+/**
+ * A plain string, safe to pass to Postgres `ilike` as an exact (case-insensitive)
+ * match rather than a pattern.
+ *
+ * `ilike` treats `%` and `_` as wildcards and `\` as their escape character, so a
+ * title containing any of those would otherwise match more than itself — or, if
+ * it ends in an unmatched `\`, be rejected by Postgres as a malformed pattern.
+ */
+export const escapeLikePattern = (value) => String(value ?? '').replace(/[\\%_]/g, (c) => `\\${c}`);

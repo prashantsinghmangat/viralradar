@@ -19,6 +19,7 @@
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2';
 import { hashToken, readAuthorization } from './core/tokens.mjs';
 import { pickKey } from './core/keys.mjs';
+import { escapeLikePattern, INBOX_TITLE } from './core/projects.mjs';
 
 export const SCHEMA = 'viralradar';
 
@@ -178,6 +179,80 @@ export function storeFor(caller: Caller) {
       if (!rows.length) return;
       const { error } = await caller.client.from(table).upsert(rows, { onConflict: 'user_id,id' });
       if (error) throw new Error(`Could not save your ${table}: ${error.message}`);
+    },
+
+    // ---- filing a research pack or a note into a project folder ----
+    // See shared/import-projects.mjs for the rule these back.
+    //
+    // Every query below filters by user_id explicitly, and every insert sets
+    // it explicitly, the same discipline findExisting()/upsert() use above:
+    // the vr_ token path runs with the service role, which bypasses RLS, so
+    // "yours" has to be said in the query rather than assumed from it.
+
+    async findProject(id: string) {
+      const { data, error } = await caller.client.from('projects').select('*')
+        .eq('id', id).eq('user_id', caller.userId).maybeSingle();
+      if (error) throw new Error(`Could not look up that project: ${error.message}`);
+      return data ?? null;
+    },
+
+    async findProjectByTitle(title: string) {
+      // ilike is case-insensitive but treats % and _ as wildcards; a title is
+      // plain text, not a search pattern, so both are escaped before matching.
+      const { data, error } = await caller.client.from('projects').select('*')
+        .eq('user_id', caller.userId).ilike('title', escapeLikePattern(title)).limit(1);
+      if (error) throw new Error(`Could not look up that project: ${error.message}`);
+      return data?.[0] ?? null;
+    },
+
+    async findProjectByScriptId(scriptId: string) {
+      const { data, error } = await caller.client.from('projects').select('*')
+        .eq('user_id', caller.userId).eq('script_id', scriptId).limit(1);
+      if (error) throw new Error(`Could not look up that script's project: ${error.message}`);
+      return data?.[0] ?? null;
+    },
+
+    async createProject({ title, scriptId }: { title: string; scriptId?: string }) {
+      const { data, error } = await caller.client.from('projects')
+        .insert({ user_id: caller.userId, title, script_id: scriptId ?? null }).select('*');
+      if (error) throw new Error(`Could not create a project folder: ${error.message}`);
+      return data?.[0];
+    },
+
+    // Same find-or-create-once race as the browser's data.projects.inbox():
+    // a partial unique index on is_inbox means a second insert is refused
+    // rather than making a second Inbox, so the loser just reads the winner.
+    async inbox() {
+      const existing = await caller.client.from('projects').select('*')
+        .eq('user_id', caller.userId).eq('is_inbox', true).limit(1);
+      if (existing.error) throw new Error(`Could not find your Inbox: ${existing.error.message}`);
+      if (existing.data?.length) return existing.data[0];
+      const made = await caller.client.from('projects')
+        .insert({ user_id: caller.userId, title: INBOX_TITLE, is_inbox: true }).select('*');
+      if (made.error) {
+        if (!/duplicate|unique|23505/i.test(made.error.message)) {
+          throw new Error(`Could not create your Inbox: ${made.error.message}`);
+        }
+        const after = await caller.client.from('projects').select('*')
+          .eq('user_id', caller.userId).eq('is_inbox', true).limit(1);
+        if (after.error || !after.data?.length) throw new Error('Could not find your Inbox.');
+        return after.data[0];
+      }
+      return made.data?.[0];
+    },
+
+    async findExistingItems(externalIds: string[]): Promise<string[]> {
+      if (!externalIds.length) return [];
+      const { data, error } = await caller.client.from('project_items')
+        .select('external_id').eq('user_id', caller.userId).in('external_id', externalIds);
+      if (error) throw new Error(`Could not read your existing project items: ${error.message}`);
+      return (data ?? []).map((r: { external_id: string }) => r.external_id);
+    },
+
+    async upsertItems(rows: Record<string, unknown>[]): Promise<void> {
+      if (!rows.length) return;
+      const { error } = await caller.client.from('project_items').upsert(rows, { onConflict: 'user_id,external_id' });
+      if (error) throw new Error(`Could not save that to a project folder: ${error.message}`);
     },
   };
 }

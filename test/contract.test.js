@@ -70,22 +70,46 @@ test('a byte order mark in front of the JSON is tolerated', () => {
 });
 
 test('prepare validates everything before shaping anything', () => {
-  assert.throws(() => prepare(wrap('bundle', [{ id: 'a', kind: 'script' }, { id: 'b', kind: 'video' }])),
-    (e) => e instanceof ImportError && /kind "video"/.test(e.message));
   assert.throws(() => prepare('   '), /Nothing to import/);
   assert.throws(() => prepare(wrap('ideas', [])), /no items in it/);
   assert.throws(() => prepare(wrap('ideas', 'nope')), /no "items" array/);
   assert.throws(() => prepare([1, 2]), /Expected one JSON object/);
 });
 
+test('a bundle item of a kind this version does not know is skipped, not refused', () => {
+  // Forward compatibility: a newer Shorts Studio sending something this
+  // version has never heard of must not sink the items around it in the
+  // same file.
+  const { entries, skipped } = prepare(wrap('bundle', [
+    { id: 'a', kind: 'script', title: 'S' }, { id: 'b', kind: 'video' }, { id: 'c', kind: 'video' },
+  ]));
+  assert.deepEqual(entries.map((e) => e.kind), ['script']);
+  assert.deepEqual(skipped, ['video', 'video']);
+});
+
 test('titleOf and summarize produce the message the UI shows', () => {
   assert.equal(titleOf({ id: 'x', title: 'A', yt_title: 'B' }), 'A');
   assert.equal(titleOf({ id: 'x', yt_title: 'B' }), 'B');
   assert.equal(titleOf({ id: 'x', topic: 'C' }), 'C');
+  assert.equal(titleOf({ id: 'x', text: 'D' }), 'D');
   assert.equal(titleOf({ id: 'x' }), 'x');
   assert.equal(summarize({ script: { added: 1, updated: 0 } }, ['Free AI site']), 'Imported 1 script: Free AI site');
   assert.equal(summarize({ script: { added: 1, updated: 0 }, result: { added: 2, updated: 0 } }, ['a', 'b', 'c']), 'Imported 1 script, 2 results');
   assert.equal(summarize({ idea: { added: 0, updated: 3 } }, ['a', 'b', 'c']), 'Imported 3 ideas (3 updated)');
+  assert.equal(summarize({ research: { added: 1, updated: 0 } }, ['a tool']), 'Imported 1 research pack: a tool');
+  assert.equal(summarize({ research: { added: 2, updated: 0 } }, ['a', 'b']), 'Imported 2 research packs');
+  assert.equal(summarize({ note: { added: 1, updated: 0 } }, ['hello']), 'Imported 1 note: hello');
+});
+
+test('a skipped kind is reported without blocking the rest of the message', () => {
+  assert.equal(
+    summarize({ script: { added: 1, updated: 0 } }, ['S'], ['video']),
+    "Imported 1 script: S. Skipped 1 item of unknown kind 'video'",
+  );
+  assert.equal(
+    summarize({}, [], ['video', 'video', 'audio']),
+    "Imported nothing. Skipped 2 items of unknown kind 'video'. Skipped 1 item of unknown kind 'audio'",
+  );
 });
 
 test('bundle items are resolved to their own kinds and rows', () => {
@@ -95,6 +119,25 @@ test('bundle items are resolved to their own kinds and rows', () => {
   assert.equal(type, 'bundle');
   assert.deepEqual(entries.map((e) => e.kind), ['script', 'result', 'idea']);
   assert.equal(entries[1].row.views, 10);
+});
+
+test('a research item keeps its pack, topic and project reference as given', () => {
+  const row = one('research', {
+    id: 'rp1', topic: 'a background remover', created_at: '2026-10-08T09:00:00Z', source: 'claude-chat',
+    project: { title: 'Background remover video' },
+    pack: { main_tool: { name: 'Bgless', url: 'https://bgless.example' }, fact_check: [{ claim: 'x', status: 'verified', source_url: 'https://bgless.example' }] },
+  });
+  assert.equal(row.topic, 'a background remover');
+  assert.equal(row.source, 'claude-chat');
+  assert.deepEqual(row.project, { title: 'Background remover video' });
+  assert.equal(row.pack.main_tool.name, 'Bgless');
+});
+
+test('a note item keeps its text, url and project reference as given', () => {
+  const row = one('note', { id: 'n1', text: 'check this before recording', url: 'https://example.com', project: { id: 'p1' } });
+  assert.equal(row.text, 'check this before recording');
+  assert.equal(row.url, 'https://example.com');
+  assert.deepEqual(row.project, { id: 'p1' });
 });
 
 test('unknown fields are not in the row but the original item is kept for raw', () => {

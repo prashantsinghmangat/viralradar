@@ -323,6 +323,20 @@ test('a research pack is a row of its own kind, and carries its JSON', () => {
     'a pack is JSON, never a file');
 });
 
+test('re-importing the same research pack or note updates it, by an external id', () => {
+  const sql = allMigrations();
+
+  assert.match(sql, /alter table viralradar\.project_items add column external_id text/,
+    'project_items needs a second identity for rows that came from an import');
+
+  // Partial: most rows (a screenshot, a typed note) have no external id at
+  // all, and this index exists only for the minority that do.
+  const idx = sql.match(/create unique index project_items_external_id_idx[\s\S]*?;/);
+  assert.ok(idx, 'there is no way to upsert a re-imported item without this index');
+  assert.match(idx[0], /\(user_id, external_id\)/);
+  assert.match(idx[0], /where external_id is not null/);
+});
+
 test('a video is recorded as a row, and can never be a file', () => {
   const sql = allMigrations();
 

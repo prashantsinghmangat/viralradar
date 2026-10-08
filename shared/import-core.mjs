@@ -10,6 +10,11 @@
 // fake one in the tests.
 
 import { prepare, summarize, titleOf, TABLE } from './contract.mjs';
+import { runProjectImport } from './import-projects.mjs';
+
+// research and note do not have a flat table at all — see TABLE in
+// shared/contract.mjs and shared/import-projects.mjs for where they do go.
+const PROJECT_KINDS = new Set(['research', 'note']);
 
 // The columns each table takes from an import.
 //
@@ -44,18 +49,25 @@ export function toRow(kind, row, item, userId) {
  *   findExisting(table, ids)    the subset of those ids this user already has
  *   upsert(table, rows)         insert or update, on conflict (user_id, id)
  *
+ * For research and note items, which file into a project folder rather than a
+ * flat table, `store` must also provide the project-items ports documented at
+ * the top of shared/import-projects.mjs.
+ *
  * Returns { ok, type, counts, titles, message }.
  * Throws ImportError, with a message meant to be read by a person, for bad input.
  * Nothing is written when it throws.
  */
 export async function runImport(input, store) {
-  const { type, entries } = prepare(input);
+  const { type, entries, skipped } = prepare(input);
+
+  const flatEntries = entries.filter((e) => !PROJECT_KINDS.has(e.kind));
+  const projectEntries = entries.filter((e) => PROJECT_KINDS.has(e.kind));
 
   // An export can legitimately mention the same id twice. Postgres refuses to
   // update the same row twice in one statement, so the last one wins, which is
   // what a person would expect from a file read top to bottom.
   const byKind = new Map();
-  for (const entry of entries) {
+  for (const entry of flatEntries) {
     if (!byKind.has(entry.kind)) byKind.set(entry.kind, new Map());
     byKind.get(entry.kind).set(entry.row.id, entry);
   }
@@ -76,8 +88,12 @@ export async function runImport(input, store) {
     for (const id of ids) counts[kind][existing.has(id) ? 'updated' : 'added']++;
   }
 
+  if (projectEntries.length) {
+    Object.assign(counts, (await runProjectImport(projectEntries, store)).counts);
+  }
+
   // Titles follow the order they appear in the file, so a one-item import names
-  // the thing that was imported.
+  // the thing that was imported — flat and project kinds interleaved as given.
   const seen = new Set();
   const titles = [];
   for (const entry of entries) {
@@ -87,5 +103,5 @@ export async function runImport(input, store) {
     titles.push(titleOf(entry.row));
   }
 
-  return { ok: true, type, counts, titles, message: summarize(counts, titles) };
+  return { ok: true, type, counts, titles, message: summarize(counts, titles, skipped) };
 }

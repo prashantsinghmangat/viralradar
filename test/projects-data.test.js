@@ -38,6 +38,8 @@ function fakeClient({ respond = () => ({ data: [], error: null }), rpc = () => (
       delete() { call.op = 'delete'; return self; },
       eq(column, value) { call.filters.push(['eq', column, value]); return self; },
       in(column, values) { call.filters.push(['in', column, values]); return self; },
+      ilike(column, pattern) { call.filters.push(['ilike', column, pattern]); return self; },
+      is(column, value) { call.filters.push(['is', column, value]); return self; },
       order(column, options) { call.order.push([column, options?.ascending === false ? 'desc' : 'asc']); return self; },
       limit(n) { call.limit = n; return self; },
       then(onOk, onErr) {
@@ -258,6 +260,37 @@ test('a script with no folder yet gets one named after it', async () => {
   const insert = client.calls.find((c) => c.op === 'insert');
   assert.equal(insert.payload.title, 'Remove a background');
   assert.equal(insert.payload.script_id, 's1');
+});
+
+test('a folder already made under the script\'s title is linked, not duplicated', async () => {
+  // A research pack imported before the script existed files into a folder
+  // named after its topic (shared/import-projects.mjs). If "Open project"
+  // on the script then made a second folder with the same title, the pack
+  // and the script would end up in two different places with the same name.
+  const { createData } = await load();
+  const client = fakeClient({
+    respond: (call) => {
+      if (call.op === 'update') return { data: [{ id: 'p-imported', title: 'Remove a background', script_id: 's1' }], error: null };
+      // Nothing is linked to the script yet, but an unlinked folder with its
+      // title already exists — the one the import made.
+      const isTitleLookup = call.filters.some(([op]) => op === 'ilike');
+      return isTitleLookup
+        ? { data: [{ id: 'p-imported', title: 'remove a background', script_id: null }], error: null }
+        : { data: [], error: null };
+    },
+  });
+
+  const project = await createData(client).projects.forScript({ id: 's1', title: 'Remove a background' });
+
+  assert.equal(project.id, 'p-imported');
+  assert.ok(!client.calls.some((c) => c.op === 'insert'), 'the existing folder must be reused, not duplicated');
+  const update = client.calls.find((c) => c.op === 'update');
+  assert.ok(update, 'the folder must be linked to the script once found');
+  assert.equal(update.payload.script_id, 's1');
+  assert.deepEqual(update.filters, [['eq', 'id', 'p-imported']]);
+
+  const titleLookup = client.calls.find((c) => c.filters.some(([op]) => op === 'ilike'));
+  assert.deepEqual(titleLookup.filters, [['is', 'script_id', null], ['ilike', 'title', 'Remove a background']]);
 });
 
 test('an unknown status never reaches the database', async () => {

@@ -268,6 +268,7 @@ tr:last-child td { border-bottom: 0; }
 .fact { padding: 8px 10px; border-radius: 10px; border-left: 3px solid var(--border); background: var(--surface); font-size: .9rem; display: grid; gap: 4px; overflow-wrap: anywhere; }
 .fact.verified { border-left-color: var(--good); }
 .fact.unverified { border-left-color: var(--warn); background: var(--warn-soft); }
+.fact.unchecked { border-left-color: var(--border); opacity: .75; }
 .fact a { font-size: .78rem; overflow-wrap: anywhere; }
 
 /* Projects: folder cards, and what is inside one */

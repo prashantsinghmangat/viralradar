@@ -478,3 +478,93 @@ test('the label counts what is actually in the pack', async () => {
   assert.equal(packLabel(pack), '1 source · 1 verified · 1 unverified');
   assert.equal(packLabel(null), '');
 });
+
+// ---------- importing a pack nobody here has fetched yet ----------
+//
+// shared/import-projects.mjs runs an imported pack through normalisePack()
+// with no pages at all and checked:false — this is what that produces, and
+// what Re-check links (vr-research's `recheck` mode) turns it back into.
+
+test('checked:false marks every claim unchecked rather than trusting what arrived', async () => {
+  const { normalisePack } = await load();
+  const pack = normalisePack({
+    checked: false,
+    pack: {
+      topic: 'a background remover',
+      main_tool: { name: 'Bgless', url: 'https://bgless.example', reachable: true }, // the sender's own claim
+      alternatives: [{ name: 'Other', url: 'https://other.example', reachable: true }],
+      fact_check: [{ claim: 'free tier gives 5 images a day', status: 'verified', source_url: 'https://bgless.example' }],
+      sources: ['https://bgless.example'],
+    },
+  });
+
+  // Whatever the sender said about reachability is replaced with "not
+  // checked", not with its own claim and not with a confident "false".
+  assert.equal(pack.main_tool.reachable, null);
+  assert.equal(pack.alternatives[0].reachable, null);
+  // The claimed status is kept, not overwritten — Re-check links needs to
+  // know what was claimed — but the pack as a whole is marked unchecked, and
+  // that is what the UI actually displays from (see unchecked_count below).
+  assert.equal(pack.fact_check[0].status, 'verified');
+  assert.equal(pack.checked, false);
+  assert.equal(pack.grounded, false, 'nothing has been fetched, so nothing can be grounded yet');
+  assert.equal(pack.unchecked_count, 1);
+  assert.equal(pack.verified_count, 0);
+  assert.equal(pack.unverified_count, 0);
+
+  // The claim itself survives — only the verdict about it is withheld.
+  assert.equal(pack.main_tool.name, 'Bgless');
+  assert.equal(pack.fact_check[0].claim, 'free tier gives 5 images a day');
+  assert.deepEqual(pack.sources, ['https://bgless.example'], 'the claimed sources are kept, pending a real fetch');
+});
+
+test('an unchecked pack contributes nothing to a script prompt until it is rechecked', async () => {
+  const { normalisePack, packSummary } = await load();
+  const pack = normalisePack({
+    checked: false,
+    pack: { main_tool: { name: 'x' }, fact_check: [{ claim: 'a', status: 'verified', source_url: 'https://x.example' }] },
+  });
+  assert.equal(packSummary(pack), '', 'an unchecked claim must never reach the prompt as if it were fact');
+});
+
+test('Re-check links is normalisePack() called again, this time with real fetches', async () => {
+  const { normalisePack } = await load();
+  const imported = normalisePack({
+    checked: false,
+    pack: {
+      topic: 'a background remover',
+      main_tool: { name: 'Bgless', url: livePage.url },
+      fact_check: [{ claim: 'free tier gives 5 images a day', status: 'verified', source_url: livePage.url }],
+    },
+  });
+
+  // The recheck re-runs the SAME claims — imported is itself valid input to
+  // normalisePack(), because a pack's shape never changes across a recheck.
+  const rechecked = normalisePack({ checked: true, pages: [livePage], pack: imported, topic: imported.topic });
+
+  assert.equal(rechecked.main_tool.reachable, true);
+  assert.equal(rechecked.fact_check[0].status, 'verified');
+  assert.equal(rechecked.grounded, true);
+  assert.equal(rechecked.checked, true);
+});
+
+test('a claim that fails Re-check links is downgraded, not left looking untouched', async () => {
+  const { normalisePack } = await load();
+  const imported = normalisePack({
+    checked: false,
+    pack: { main_tool: { name: 'x' }, fact_check: [{ claim: 'invented limit', status: 'verified', source_url: 'https://dead.example' }] },
+  });
+  // The recheck fetches real pages, and dead.example is not among them.
+  const rechecked = normalisePack({ checked: true, pages: [livePage], pack: imported });
+  assert.equal(rechecked.fact_check[0].status, 'unverified', 'a claim citing a page that never loaded stays unverified');
+});
+
+test('packLabel says "not checked yet" rather than a false source count', async () => {
+  const { normalisePack, packLabel } = await load();
+  const pack = normalisePack({
+    checked: false,
+    pack: { fact_check: [{ claim: 'a', status: 'verified', source_url: 'x' }, { claim: 'b', status: 'verified', source_url: 'y' }] },
+  });
+  assert.equal(packLabel(pack), '2 claims · not checked yet');
+  assert.equal(packLabel(normalisePack({ checked: false, pack: {} })), 'not checked yet');
+});

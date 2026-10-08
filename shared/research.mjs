@@ -341,8 +341,18 @@ const asFreeDetails = (v) => {
  *
  * Everything it downgrades is still shown — as unverified, with its link — so
  * nothing is hidden, it is just no longer presented as fact.
+ *
+ * `checked` is false for a pack that arrived by import rather than by a real
+ * fetch here (a Shorts Studio or Claude-chat research item): its own
+ * `reachable` and `status` fields were someone else's word for it, not this
+ * function's, so they are untrustworthy in exactly the way a wrong URL would
+ * be. Rather than guess, every claim is marked 'unchecked' and every
+ * `reachable` is left `null` — "not checked", not "checked and false" — until
+ * Re-check links calls this same function again with `checked: true` and
+ * pages it actually fetched. The shape of the two outputs is identical; only
+ * the verdicts differ.
  */
-export function normalisePack({ pack, pages = [], topic = '' } = {}) {
+export function normalisePack({ pack, pages = [], topic = '', checked = true } = {}) {
   const raw = pack && typeof pack === 'object' ? pack : {};
   const live = pages.filter((p) => p.reachable);
 
@@ -353,7 +363,7 @@ export function normalisePack({ pack, pages = [], topic = '' } = {}) {
     reachableUrls.add(p.url);
     if (p.finalUrl) reachableUrls.add(p.finalUrl);
   }
-  const known = (url) => reachableUrls.has(str(url, 2000));
+  const known = (url) => checked && reachableUrls.has(str(url, 2000));
 
   const tool = raw.main_tool && typeof raw.main_tool === 'object' ? raw.main_tool : {};
   const toolUrl = str(tool.url, 2000);
@@ -362,18 +372,27 @@ export function normalisePack({ pack, pages = [], topic = '' } = {}) {
     .slice(0, 6)
     .map((a) => {
       const url = str(a?.url, 2000);
-      return { name: str(a?.name, 200), url, reachable: known(url), one_line: str(a?.one_line, 300) };
+      return { name: str(a?.name, 200), url, reachable: checked ? known(url) : null, one_line: str(a?.one_line, 300) };
     })
     .filter((a) => a.name || a.url);
 
   // The rule that does the work. A claim whose source did not load cannot have
   // been read off it, whatever the model called the claim.
+  //
+  // When !checked, the claimed status is kept exactly as it arrived rather
+  // than forced to 'unchecked' here: Re-check links calls this same function
+  // a second time, with real fetches, on this pack's own output — and it
+  // needs to know what was claimed in order to confirm or downgrade it. What
+  // the UI shows while unchecked is a presentation decision, made from the
+  // pack's top-level `checked` flag (every claim reads as "not checked" then,
+  // regardless of its stored status) rather than by destroying the claim.
   let downgraded = 0;
   const factCheck = (Array.isArray(raw.fact_check) ? raw.fact_check : [])
     .slice(0, 40)
     .map((f) => {
       const sourceUrl = str(f?.source_url, 2000);
       const claimedVerified = str(f?.status, 20).toLowerCase() === 'verified';
+      if (!checked) return { claim: str(f?.claim, 600), status: claimedVerified ? 'verified' : 'unverified', source_url: sourceUrl };
       // `live.length > 0` is redundant — with nothing live, reachableUrls is
       // empty and known() is already false. It stays as a second gate, and a
       // tamper test that removes it rightly shows no change in behaviour.
@@ -394,7 +413,7 @@ export function normalisePack({ pack, pages = [], topic = '' } = {}) {
       url: toolUrl,
       // Never the model's opinion. This is the one field a wrong answer would
       // turn into a video recommending a dead site.
-      reachable: known(toolUrl),
+      reachable: checked ? known(toolUrl) : null,
       what_it_does: str(tool.what_it_does, 800),
       how_it_works_simple: str(tool.how_it_works_simple, 1200),
       free_details: asFreeDetails(tool.free_details),
@@ -408,11 +427,19 @@ export function normalisePack({ pack, pages = [], topic = '' } = {}) {
     test_plan: lines(raw.test_plan, 12),
     recording_checklist: lines(raw.recording_checklist, 15),
     // Set here, not by the model: the list of pages that actually answered.
-    sources: live.map((p) => p.finalUrl || p.url),
+    // An unchecked pack has no fetch to draw this from, so it keeps whatever
+    // the import said — clearly unverifiable until Re-check links runs.
+    sources: checked ? live.map((p) => p.finalUrl || p.url) : lines(raw.sources, 20),
     unreachable: pages.filter((p) => !p.reachable).map((p) => ({ url: p.url, error: p.error })),
-    grounded: live.length > 0,
-    verified_count: factCheck.filter((f) => f.status === 'verified').length,
-    unverified_count: factCheck.filter((f) => f.status === 'unverified').length,
+    checked,
+    grounded: checked && live.length > 0,
+    // Counted from `checked`, not from the per-claim status: while unchecked,
+    // every claim displays as "not checked" regardless of what it carries
+    // internally (see the comment above factCheck), so the counts a reader
+    // sees have to agree with that, not with the hidden claimed status.
+    verified_count: checked ? factCheck.filter((f) => f.status === 'verified').length : 0,
+    unverified_count: checked ? factCheck.filter((f) => f.status === 'unverified').length : 0,
+    unchecked_count: checked ? 0 : factCheck.length,
     downgraded_count: downgraded,
     researched_at: new Date().toISOString(),
   };
@@ -451,9 +478,13 @@ script rather than guessing: every claim above was read off the live page, and
 anything else would not have been.`;
 }
 
-/** "3 sources · 7 verified · 2 unverified" */
+/** "3 sources · 7 verified · 2 unverified", or "4 claims · not checked yet" before a recheck. */
 export const packLabel = (pack) => {
   if (!pack) return '';
+  if (pack.checked === false) {
+    const n = pack.unchecked_count || 0;
+    return n ? `${n} claim${n === 1 ? '' : 's'} · not checked yet` : 'not checked yet';
+  }
   const bits = [`${(pack.sources || []).length} source${(pack.sources || []).length === 1 ? '' : 's'}`];
   if (pack.verified_count) bits.push(`${pack.verified_count} verified`);
   if (pack.unverified_count) bits.push(`${pack.unverified_count} unverified`);

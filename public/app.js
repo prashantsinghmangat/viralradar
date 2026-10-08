@@ -434,9 +434,14 @@ actions.refreshRadar = async (btn) => {
 
 let pack = null; // { topic, data, projectId, provider, urlsFrom }
 
-const liveBadge = (url, reachable) => (url
-  ? `<span class="badge ${reachable ? 'good' : 'bad'}">${reachable ? '● Live' : '✕ Not reachable'}</span>`
-  : '');
+// Three states, not two: `reachable` is null for a pack that arrived by
+// import rather than by a fetch here, and "not checked" must never read as
+// either "live" or "dead" — it is neither yet.
+const liveBadge = (url, reachable) => {
+  if (!url) return '';
+  if (reachable === null || reachable === undefined) return '<span class="badge">? Not checked</span>';
+  return `<span class="badge ${reachable ? 'good' : 'bad'}">${reachable ? '● Live' : '✕ Not reachable'}</span>`;
+};
 
 const packLink = (url, reachable) => (url
   ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" class="pack-url">${esc(url)}</a> ${liveBadge(url, reachable)}`
@@ -460,15 +465,26 @@ function renderPack() {
     ['Free limits', free.limits], ['Export quality', free.export_quality],
   ].filter(([, v]) => v);
 
-  // Verified and unverified are never styled the same. A yellow tag beside a
-  // claim is the difference between a fact and a thing to go and check.
+  // Verified, unverified and unchecked are never styled the same. A yellow
+  // tag beside a claim is the difference between a fact and a thing to go and
+  // check; a grey one is a claim nobody has fetched the page for yet.
+  const FACT_BADGE = {
+    verified: '<span class="badge good">✓ Verified</span>',
+    unverified: '<span class="badge warn">⚠ Unverified</span>',
+    unchecked: '<span class="badge">? Not checked</span>',
+  };
+  const factClass = (status) => (status === 'verified' ? 'verified' : status === 'unchecked' ? 'unchecked' : 'unverified');
+  // While the pack itself is unchecked, every claim displays as "not
+  // checked" regardless of what it carries internally — see the comment on
+  // factCheck in shared/research.mjs's normalisePack(): the stored status is
+  // kept so a later Re-check links can tell what was claimed, and is not the
+  // same thing as what should be shown before that has happened.
+  const factStatus = (f) => (p.checked === false ? 'unchecked' : f.status);
   const facts = (p.fact_check || []).map((f) => `
-    <li class="fact ${f.status === 'verified' ? 'verified' : 'unverified'}">
+    <li class="fact ${factClass(factStatus(f))}">
       <div>${esc(f.claim)}</div>
       <div class="muted small">
-        ${f.status === 'verified'
-          ? '<span class="badge good">✓ Verified</span>'
-          : '<span class="badge warn">⚠ Unverified</span>'}
+        ${FACT_BADGE[factStatus(f)] || FACT_BADGE.unverified}
         ${f.source_url ? `<a href="${esc(f.source_url)}" target="_blank" rel="noopener noreferrer">${esc(f.source_url)}</a>` : 'no source'}
       </div>
     </li>`).join('');
@@ -482,7 +498,11 @@ function renderPack() {
         <button type="button" class="sm ghost" data-action="closePack">✕ Close</button>
       </div>
 
-      ${p.grounded ? '' : '<div class="notice">Nothing could be read, so nothing here is verified.</div>'}
+      ${p.checked === false
+        ? `<div class="notice">This pack arrived from outside ViralRadar, so nothing in it has been checked yet —
+            every claim is shown grey until <b>Re-check links</b> actually fetches these pages.
+            ${pack.itemId ? '<button type="button" class="sm" data-action="recheckPack">↻ Re-check links</button>' : ''}</div>`
+        : (p.grounded ? '' : '<div class="notice">Nothing could be read, so nothing here is verified.</div>')}
       ${p.downgraded_count ? `<div class="notice">${p.downgraded_count} claim${p.downgraded_count === 1 ? '' : 's'}
         cited a page that did not load, so ${p.downgraded_count === 1 ? 'it was' : 'they were'} moved to unverified.</div>` : ''}
 
@@ -549,6 +569,7 @@ actions.researchPack = async (btn) => {
     topic,
     data: result.pack,
     projectId: result.project_id || '',
+    itemId: result.item_id || '',
     provider: result.provider || '',
     urlsFrom: result.urls_from || 'given',
   };
@@ -556,6 +577,35 @@ actions.researchPack = async (btn) => {
   angles = null; // one panel at a time, or the screen is unreadable
   render();
   window.scrollTo(0, 0);
+};
+
+/** Open a research pack already saved in a project folder — e.g. an imported one. */
+actions.openPack = async (card) => {
+  const projectId = parseHash().params[0];
+  const list = await data.projects.items(projectId);
+  const item = list.find((i) => i.id === card.dataset.id);
+  if (!item) { toast('That pack is no longer there.', true); return; }
+  const packData = JSON.parse(item.content || '{}');
+  pack = {
+    topic: packData.topic || 'Research',
+    data: packData,
+    projectId,
+    itemId: item.id,
+    provider: '',
+    urlsFrom: 'given',
+  };
+  angles = null;
+  render();
+  window.scrollTo(0, 0);
+};
+
+/** Re-fetch every URL a pack names, so an imported pack's claims go from grey to real. */
+actions.recheckPack = async (btn) => {
+  if (!pack || !pack.itemId) return;
+  const result = await askAi(btn, { kind: 'research', recheck: true, item_id: pack.itemId });
+  if (!result) return;
+  pack = { ...pack, data: result.pack };
+  render();
 };
 
 actions.anglesFromPack = async (btn) => {
@@ -1077,7 +1127,7 @@ actions.resultDim = (btn) => { resultDim = btn.dataset.v; render(); };
 // project, and Part 2 sends it device to device instead.
 
 const PROJECT_STATUSES = [['active', 'Active'], ['posted', 'Posted'], ['archived', 'Archived']];
-const ITEM_ICON = { text: '📝', link: '🔗', image: '🖼️', file: '📎', video_ref: '📹' };
+const ITEM_ICON = { text: '📝', link: '🔗', image: '🖼️', file: '📎', video_ref: '📹', research: '🔍' };
 
 async function renderProjects(params) {
   if (params[0]) return renderProjectDetail(params[0]);
@@ -1164,9 +1214,11 @@ async function renderProjectDetail(id) {
   const rows = list.map((item) => {
     const icon = ITEM_ICON[item.kind] || '📎';
     const url = urls.get(item.id) || '';
-    // A video_ref's size is in its own summary line, so it is not repeated here.
+    // A video_ref's size is its own summary line, and a research pack's is a
+    // one-line label (sources/verified/unchecked), so neither repeats the
+    // generic size here.
     const meta = [item.from_device && `from ${item.from_device}`, ago(item.created_at),
-      item.kind !== 'video_ref' && item.size_bytes && formatBytes(item.size_bytes)].filter(Boolean).join(' · ');
+      !['video_ref', 'research'].includes(item.kind) && item.size_bytes && formatBytes(item.size_bytes)].filter(Boolean).join(' · ');
 
     let body = '';
     let buttons = '';
@@ -1176,6 +1228,14 @@ async function renderProjectDetail(id) {
       body = `<div class="item-text">${esc(item.file_name)}</div>
         <div class="muted small">${esc(videoRefSummary(item))}</div>`;
       buttons = copyBtn(item.sha256 || '', 'Copy SHA-256');
+    } else if (item.kind === 'research') {
+      // The pack itself is a JSON blob, not something to show inline — Open
+      // puts it through the same renderPack() a fresh one uses.
+      let packData = {};
+      try { packData = JSON.parse(item.content || '{}'); } catch { /* shown plainly below */ }
+      body = `<div class="item-text">${esc(packData.topic || 'Research pack')}</div>
+        <div class="muted small">${esc(packLabel(packData))}</div>`;
+      buttons = `<button type="button" class="sm primary" data-action="openPack" data-id="${esc(item.id)}">Open</button>`;
     } else if (item.kind === 'text') {
       body = `<div class="item-text">${esc(item.content)}</div>`;
       buttons = copyBtn(item.content, 'Copy');

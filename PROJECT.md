@@ -121,7 +121,7 @@ maintained by a trigger.
 | `usage` | `(user_id, date, provider)` | units, requests — YouTube quota and AI call counts |
 | `import_tokens` | `id` | `token_hash` (SHA-256 only), label, last_used_at |
 | `projects` | `(user_id, id)` | title, `script_id`, `status` active/posted/archived, `is_inbox`, `posted_at` |
-| `project_items` | `(user_id, id)` | `project_id`, `kind` text/link/image/file/video_ref, content, storage_path, file_name, mime, size_bytes, sha256, `devices[]`, from_device, `preview` (generated) |
+| `project_items` | `(user_id, id)` | `project_id`, `kind` text/link/image/file/video_ref/research, content, storage_path, file_name, mime, size_bytes, sha256, `devices[]`, `external_id` (an import's own id, for re-import upsert), from_device, `preview` (generated) |
 | `allowed_users` | `user_id` | who may use ViralRadar at all |
 
 Notes that matter:
@@ -379,7 +379,7 @@ public/              the whole frontend — no build step, no framework
 
 scripts/             build, sync-shared, inspect-db, test-rls, rls-plan,
                      db-url, make-icons
-test/                28 files, 432 tests
+test/                29 files, 453 tests
 ```
 
 **Why `_shared/core/` is a copy.** A deployed Edge Function only receives files
@@ -393,22 +393,88 @@ file. `shared/` stays the single source of truth; the copies carry a
 
 ## 7. The import contract
 
-Unchanged from the local version, deliberately:
+The envelope is unchanged from the local version, deliberately:
 
 ```json
 {
   "app": "shorts-studio",
   "schema": 1,
-  "type": "script" | "ideas" | "results" | "bundle",
+  "type": "script" | "ideas" | "results" | "bundle" | "research" | "note",
   "exported_at": "...",
   "items": [ ... ]
 }
 ```
 
+`research` and `note` were added for Shorts Studio and a Claude chat to hand
+over a research pack or a quick note, in a bundle (`kind: "research" | "note"`
+on an item) or, for whenever either sender starts producing one on its own, as
+a standalone `type`. Both file into a **project folder** rather than a flat
+table — see §7b.
+
 Anything else is refused with a message meant to be read by a person ("Wrong
-app: expected …", "Schema mismatch: …"). The cloud and local importers are run
-side by side in the tests on the same files and asserted to produce **identical
-messages, counts and errors** — that is the test for "reuse, do not rewrite".
+app: expected …", "Schema mismatch: …"), with one exception: a bundle item
+whose `kind` this version does not recognise is **skipped, not refused** — the
+rest of the file still imports, and the message says so ("Skipped 2 items of
+unknown kind 'thumbnail'"). A future Shorts Studio sending something new must
+not be able to sink an entire export around it.
+
+The cloud and local importers are run side by side in the tests on the same
+files and asserted to produce **identical messages, counts and errors** — that
+is the test for "reuse, do not rewrite".
+
+**Every kind's fields:**
+
+| kind | goes to | fields |
+|---|---|---|
+| `script` | `scripts` table | `id`, `topic`, `title`, `beats[]`, `thumbnail_text`, `yt_title`, `ig_caption`, `fb_caption`, `hashtags[]`, `pinned_comment`, `broll[]`, `audio`, `created_at`, `source` |
+| `idea` | `ideas` table | `id`, `date`, `title`, `hook`, `tool`, `show`, `why`, `format`, `source` |
+| `result` | `results` table | `id`, `logged_at`, `title`, `posted_on`, `platforms[]`, `format`, `hook`, `len`, `cta`, `views`, `likes`, `comments`, `shares`, `saves`, `follows`, `script_id`, `source` |
+| `research` | a `project_item` of kind `research` | `id`, `topic`, `created_at`, `source` (`"shorts-studio"` \| `"claude-chat"`), `project?: { id?, title? }`, `pack: { main_tool, alternatives[], fact_check[], test_plan[], recording_checklist[], sources[] }` — **the pack's own field names are exactly what vr-research itself writes**, so an imported pack and a freshly-researched one are the same shape; see §9's Research Pack section for the pack schema in full |
+| `note` | a `project_item`, kind `text` or `link` | `id`, `text?`, `url?`, `created_at`, `source`, `project?: { id?, title? }` — filed as `link` when there is a URL and no text, `text` otherwise (the URL appended on its own line) |
+
+`source` accepts `claude`, `claude-chat`, `gemini`, `openrouter`, `shorts-studio`
+or `manual`; anything else is recorded as `shorts-studio`.
+
+### 7b. Filing a research pack or a note into a project folder
+
+Unlike the three flat-table kinds, `research` and `note` need somewhere to
+live — see §3's "project folders" — and the rule for where, in order:
+
+1. **`project.id`**, if it names a folder this user owns.
+2. **`project.title`**, matched case-insensitively and trimmed; made if no
+   folder has that title yet.
+3. A default, by kind:
+   - `research` → a folder named after the **topic** — the same thing
+     vr-research itself does when it saves a fresh pack.
+   - `note` → the **Inbox**.
+
+Re-importing the same `id` **updates that item in place** rather than
+duplicating it. This needed a second identity on `project_items`: its own
+`id` is a uuid the database generates for every row, including the ones with
+no external origin at all (a screenshot, a typed note), so the import's own
+id is kept separately as `external_id` — null for anything made in the app,
+set for anything that arrived from outside it. See
+`supabase/migrations/20261008000800_import_projects.sql`.
+
+**The reverse direction matters too.** A research pack filed under a topic
+title exists before the matching script ever does — importing is usually the
+*first* thing that happens, not the last. So **"Open project" on a script**
+(`data.projects.forScript()` in `public/data.js`) checks, in order: a folder
+already linked to this script; else an unlinked folder with the same title,
+case-insensitively, which it **links** rather than leaving alone; only then
+does it create one. Skipping the middle step would give the pack and the
+script two folders with the same name instead of one with both in it.
+
+**An imported pack's `reachable` and verified/unverified claims are not
+trusted.** They are someone else's word for it, not a fetch this app ever
+made. Every imported pack is run through `normalisePack({ checked: false })` —
+the identical function and enforcement a fresh `vr-research` pack gets, just
+with no pages fetched yet — which marks the whole pack `checked: false` and
+shows every claim as grey "Not checked" until **Re-check links** (on the pack,
+once opened from its folder) actually fetches the URLs it names and runs the
+same claims through `normalisePack({ checked: true })` again, this time for
+real. See shared/research.mjs's `normalisePack()` and the "WHAT IS ASKED FOR,
+AND WHAT IS ENFORCED" note at its top.
 
 ---
 
@@ -477,6 +543,7 @@ except the optional folder watcher.
 | 12. Device-to-device video transfer | **built and deployed; the database half verified, the two-device half NOT yet run** |
 | 13. Angles, and learning from results | **done** |
 | 14. Research Pack | **built and tested; migration NOT yet pushed, function NOT yet deployed** |
+| 15. Import research packs and notes; forward-compatible bundles | **built and tested; the `external_id` migration NOT yet pushed** |
 
 Phase 10 originally also contained a SQLite → Postgres migration. It was
 dropped, not skipped: no local database ever held any data, so there was
