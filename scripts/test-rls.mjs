@@ -23,7 +23,7 @@ import { randomUUID } from 'node:crypto';
 import { describe, explain, WHERE_TO_FIND } from './db-url.mjs';
 import {
   buildPlan, buildProofs, runPlan, runProofs,
-  BUCKET, FIXTURE_BYTES, ITEM_ID, PROJECT_ID, objectPath,
+  BUCKET, FIXTURE_BYTES, ITEM_ID, PROJECT_ID, objectPath, storageFixtures,
 } from './rls-plan.mjs';
 
 const HELP = `

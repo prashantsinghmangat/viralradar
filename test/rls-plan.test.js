@@ -576,6 +576,30 @@ test('a WITH CHECK that accepts anything makes the insert and update assertions 
 // table it could not delete from and then leave three accounts behind in a live
 // project when the cleanup threw. It is read as text here, in the same way the
 // frontend tests read app.js: these are the properties that bug violated.
+test('the runner imports everything it uses from the plan', async () => {
+  // `node --check` validates syntax, not whether a name is defined, and the
+  // runner cannot be imported here — it reads DATABASE_URL and exits. So a
+  // missing import survived every offline check and only showed up as 33
+  // failures against the real database, all of them saying
+  // "storageFixtures is not defined".
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const runner = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'test-rls.mjs'), 'utf8');
+  const plan = await import('../scripts/rls-plan.mjs');
+
+  const at = runner.indexOf("} from './rls-plan.mjs';");
+  assert.ok(at > 0, 'the runner should import the plan as one statement');
+  const importStart = runner.lastIndexOf('import {', at);
+  const imported = runner.slice(importStart, at);
+  const body = runner.slice(at);
+
+  const missing = Object.keys(plan)
+    .filter((name) => new RegExp(`\\b${name}\\b`).test(body))
+    .filter((name) => !new RegExp(`\\b${name}\\b`).test(imported));
+  assert.deepEqual(missing, [],
+    `scripts/test-rls.mjs uses these without importing them: ${missing.join(', ')}`);
+});
+
 test('the runner creates its bucket fixtures inside the transaction that rolls back', () => {
   const fs = require('node:fs');
   const path = require('node:path');
