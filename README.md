@@ -213,7 +213,7 @@ deploys and the phone. It assumes nothing and says why each step exists.
 
 ```
 npm install
-npm test            # 374 tests. No network, no database, no keys needed.
+npm test            # 377 tests. No network, no database, no keys needed.
 npm run build       # builds the site into dist/ (Netlify runs this)
 ```
 
@@ -221,7 +221,7 @@ Other commands:
 
 | | |
 |---|---|
-| `npm run test:rls` | 306 assertions against the real database, proving nobody can read your rows |
+| `npm run test:rls` | 309 assertions against the real database, proving nobody can read your rows |
 | `npm run inspect:db` | what the live database actually looks like right now |
 | `npm run sync:shared` | copies `shared/` out to the function and browser folders |
 | `npm run icons` | regenerates the app icons |

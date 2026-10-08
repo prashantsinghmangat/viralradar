@@ -91,12 +91,20 @@ const host = (() => {
   try { return new URL(url).host; } catch { return 'the database'; }
 })();
 
-async function becomeUser(tx, as) {
+async function becomeUser(tx, check) {
+  const { as, jwt } = check;
+
   // The connection is already the owner, which BYPASSES Row Level Security.
-  // Used only for reading configuration — the bucket's own settings — where
-  // there is no policy to test and the question is simply "is it set right?".
-  // rls-plan.test.js refuses to let this be used for anything else.
-  if (as === 'owner') return;
+  // Used for two things and nothing else: reading configuration that no policy
+  // governs, and evaluating a policy's gate against a row that RLS would
+  // otherwise hide — which needs the row visible AND a real session, so the
+  // claims are set without changing role. rls-plan.test.js holds it to that.
+  if (as === 'owner') {
+    if (jwt) {
+      await tx`select set_config('request.jwt.claims', ${JSON.stringify({ sub: uid[jwt], role: 'authenticated' })}, true)`;
+    }
+    return;
+  }
   if (as === 'anon') {
     await tx.unsafe('set local role anon');
     return;
@@ -104,6 +112,26 @@ async function becomeUser(tx, as) {
   await tx.unsafe('set local role authenticated');
   const claims = as === 'noclaims' ? '' : JSON.stringify({ sub: uid[as], role: 'authenticated' });
   await tx`select set_config('request.jwt.claims', ${claims}, true)`;
+}
+
+/**
+ * The files an assertion needs, created inside its own transaction.
+ *
+ * WHY NOT ALONGSIDE THE OTHER FIXTURES
+ *   Supabase forbids a direct DELETE on storage.objects — it wants the Storage
+ *   API, so bytes cannot be orphaned in the bucket. The first version of this
+ *   created the rows once, up front, and then could not clear them up: the run
+ *   left four rows and three users behind in a live project.
+ *
+ *   Created here instead, they are rolled back with everything else the
+ *   assertion did. Nothing is ever committed to storage.objects, so there is
+ *   nothing to delete and no cleanup to fail.
+ */
+async function createStorageFixtures(tx) {
+  for (const { path, size } of storageFixtures({ A, B })) {
+    await tx`insert into storage.objects (bucket_id, name, metadata)
+             values (${BUCKET}, ${path}, ${tx.json({ size })})`;
+  }
 }
 
 async function attempt(tx, check) {
@@ -123,7 +151,9 @@ async function attempt(tx, check) {
 async function exec(check) {
   try {
     await db.begin(async (tx) => {
-      await becomeUser(tx, check.as);
+      // Still the owner here, before SET LOCAL ROLE.
+      if (check.needsStorage) await createStorageFixtures(tx);
+      await becomeUser(tx, check);
       throw new Rollback(await attempt(tx, check));
     });
     return { rows: [], rowCount: 0, errorCode: 'no-rollback', errorMessage: 'the transaction committed unexpectedly' };
@@ -138,8 +168,10 @@ async function exec(check) {
 async function execBroken(proof) {
   try {
     await db.begin(async (tx) => {
-      await tx.unsafe(proof.breakSql); // still the owner here, before SET LOCAL ROLE
-      await becomeUser(tx, proof.check.as);
+      // Still the owner here, before SET LOCAL ROLE.
+      await tx.unsafe(proof.breakSql);
+      if (proof.check.needsStorage) await createStorageFixtures(tx);
+      await becomeUser(tx, proof.check);
       throw new Rollback(await attempt(tx, proof.check));
     });
     throw new Error('the proof transaction committed unexpectedly');
@@ -228,11 +260,11 @@ const FIXTURE_KEYS = {
  *   than against whatever today happens to be.
  *
  * THE FILES
- *   storage.objects rows are inserted directly, with a size in metadata and no
- *   bytes behind them. That is the only sane way to test a 300 MB cap: B's
- *   single 320 MB row puts B over it without 320 MB being uploaded anywhere.
- *   Nothing is left behind — the whole suite's assertions roll back, and these
- *   fixtures are deleted with the users at the end.
+ *   Not here. The storage.objects rows are created inside each assertion that
+ *   needs them and roll back with it — see createStorageFixtures above.
+ *   Supabase forbids a direct DELETE on that table, so anything committed to it
+ *   could not be cleared up again afterwards. The project_items rows below do
+ *   stay, because they delete perfectly well.
  */
 async function createProjectFixtures() {
   const posted = [
@@ -263,16 +295,7 @@ async function createProjectFixtures() {
     await db`insert into viralradar.project_items
                (user_id, id, project_id, kind, storage_path, file_name, mime, size_bytes)
              values (${user}, ${id}, ${project}, 'image', ${path}, ${name}, 'image/png', ${size})`;
-    await db`insert into storage.objects (bucket_id, name, metadata)
-             values (${BUCKET}, ${path}, ${db.json({ size })})`;
   }
-
-  // The one that puts B over the 300 MB cap. Deliberately with no
-  // project_items row: the cap is measured against the bucket, not against our
-  // own rows, precisely so that bytes with no row still count.
-  await db`insert into storage.objects (bucket_id, name, metadata)
-           values (${BUCKET}, ${objectPath(uid.B, PROJECT_ID.B, 'huge.bin')},
-                   ${db.json({ size: FIXTURE_BYTES.B_HUGE })})`;
 
   // A video B transferred between its own devices: two gigabytes recorded, and
   // not one byte of it in the bucket. B has to have one for "A cannot see how
@@ -285,14 +308,22 @@ async function createProjectFixtures() {
 }
 
 /**
- * Storage rows do not hang off auth.users, so deleting the test users does not
- * take them with it. They are removed by name instead, and only ever under a
- * test user's own prefix.
+ * Anything of ours left in the bucket, which there should never be.
+ *
+ * Nothing commits to storage.objects any more, so this is a tripwire rather
+ * than a cleanup step: it cannot delete them — Supabase forbids a direct DELETE
+ * there — so it reports them and says what to do. If this ever prints
+ * something, a fixture has escaped its transaction.
  */
-async function deleteStorageFixtures() {
-  await db`delete from storage.objects
-           where bucket_id = ${BUCKET}
-             and (name like ${`${uid.A}/%`} or name like ${`${uid.B}/%`} or name like ${`${uid.C}/%`})`;
+async function checkBucketIsClean() {
+  const rows = await db`select name from storage.objects
+                        where bucket_id = ${BUCKET}
+                          and (name like ${`${uid.A}/%`} or name like ${`${uid.B}/%`} or name like ${`${uid.C}/%`})`;
+  if (!rows.length) return;
+  console.error(`\nLEFT BEHIND IN THE BUCKET — ${rows.length} row(s). This is a bug in this script:`);
+  for (const r of rows) console.error(`  ${r.name}`);
+  console.error('  SQL cannot remove them. Delete these folders in the dashboard:');
+  console.error('  Storage -> vr-project-files -> the folders named after the user ids above.');
 }
 
 async function createUsers() {
@@ -317,8 +348,6 @@ async function createFixtures() {
 
 async function deleteUsers() {
   // Cascades through every table, the settings rows and the allowlist entries.
-  // Storage rows are not reached by that cascade, so they go first.
-  await deleteStorageFixtures();
   await db`delete from auth.users where id in (${A}, ${B}, ${C})`;
 }
 
@@ -349,12 +378,26 @@ async function main() {
     console.log('  back, so the policy is restored either way.\n');
     proofs = await runProofs(buildProofs({ A, B, C }), execBroken, (line) => console.log('  ' + line));
   } finally {
+    // Two separate attempts on purpose. The first version did the bucket first
+    // and the users second, in one try block — so when the bucket step failed
+    // (Supabase forbids a direct DELETE there) the users were never deleted
+    // either, and a failed run left three accounts behind in a live project.
+    // Deleting the users is the part that actually matters, so it goes first
+    // and nothing else can prevent it.
     if (created) {
       try {
         await deleteUsers();
         console.log('\nCleaned up: all three throwaway users and all their rows are deleted.');
       } catch (e) {
-        console.error(`\nCOULD NOT CLEAN UP. Delete these users by hand:\n  ${A}\n  ${B}\n  ${e.message}`);
+        console.error('\nCOULD NOT DELETE THE TEST USERS. Remove them by hand, in the SQL editor:');
+        console.error("  delete from auth.users where email like 'rls-test-%@viralradar.invalid';");
+        console.error(`  (they are ${A}, ${B}, ${C})`);
+        console.error(`  ${e.message}`);
+      }
+      try {
+        await checkBucketIsClean();
+      } catch (e) {
+        console.error(`\nCould not check the bucket: ${e.message}`);
       }
     }
     await db.end({ timeout: 5 });

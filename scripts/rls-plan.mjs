@@ -13,15 +13,30 @@
 //                 C must be able to do nothing at all.
 //   'anon'     -> SET LOCAL ROLE anon (a browser with no session)
 //   'noclaims' -> SET LOCAL ROLE authenticated with no claims at all, so auth.uid() is null
+//   'owner'    -> no role change, so RLS is BYPASSED. Only for reading
+//                 configuration, or for evaluating a policy's gate against a
+//                 row RLS would otherwise hide; with `jwt: 'A'` the claims are
+//                 set without changing role, so auth.uid() is still real.
+//                 test/rls-plan.test.js refuses to let it be used otherwise.
 //
 // "expect" is one of:
-//   { rowCount: n }     exactly n rows came back (0 means "RLS hid everything")
-//   { minRows: n }      at least n rows came back
-//   { rows: [...] }     the rows came back exactly like this
-//   { errorCode: c }    the statement was rejected with that SQLSTATE
-//   { errorCodeIn: [] } rejected with any one of these SQLSTATEs
-//                       42501 = row level security violation, or no privilege
-//                       23502 = not-null violation (no owner on the row)
+//   { rowCount: n }      exactly n rows came back (0 means "RLS hid everything")
+//   { minRows: n }       at least n rows came back
+//   { rows: [...] }      the rows came back exactly like this
+//   { errorCode: c }     the statement was rejected with that SQLSTATE
+//   { errorCodeIn: [] }  rejected with any one of these SQLSTATEs
+//                        42501 = row level security violation, or no privilege
+//                        23502 = not-null violation (no owner on the row)
+//                        23505 = unique violation    23514 = check violation
+//   { errorMatches: s }  rejected with a message containing s. For the one case
+//                        where a SQLSTATE cannot tell two causes apart: see the
+//                        storage DELETE guard below.
+//   { nothingVisible }   no rows, or refused outright — both mean "this role
+//                        gets nothing", where which one is not ours to decide.
+//
+// "needsStorage" asks the runner to create the bucket fixtures inside this
+// assertion's own transaction, so they roll back with it. Supabase forbids a
+// direct DELETE on storage.objects, so nothing may ever be committed there.
 //
 // "sim" names what the assertion means, independent of its SQL, so the plan can
 // be checked offline against a model of how RLS behaves (see test/rls-plan.test.js).
@@ -82,6 +97,26 @@ export const FIXTURE_BYTES = {
 };
 
 export const A_USED = FIXTURE_BYTES.A_OLD + FIXTURE_BYTES.A_NEW;
+
+/**
+ * The files in the bucket, as data.
+ *
+ * Created inside each assertion's own transaction rather than once up front,
+ * because **Supabase forbids a direct DELETE on storage.objects** — it wants
+ * the Storage API, so bytes cannot be orphaned. Anything committed to that
+ * table from here could never be cleared up again, and the first version of
+ * this suite proved it by leaving four rows and three users in a live project.
+ *
+ * B's single enormous row is what puts B over the 300 MB cap. No bytes exist
+ * behind any of them: a size in metadata is all storage_used() reads, which is
+ * the only sane way to test a cap without uploading 320 MB.
+ */
+export const storageFixtures = ({ A, B }) => [
+  { path: objectPath(A, PROJECT_ID.A_POSTED_OLD, 'old.png'), size: FIXTURE_BYTES.A_OLD },
+  { path: objectPath(A, PROJECT_ID.A_POSTED_NEW, 'new.png'), size: FIXTURE_BYTES.A_NEW },
+  { path: objectPath(B, PROJECT_ID.B_POSTED_OLD, 'old.png'), size: FIXTURE_BYTES.B_OLD },
+  { path: objectPath(B, PROJECT_ID.B, 'huge.bin'), size: FIXTURE_BYTES.B_HUGE },
+];
 
 // Every table, with enough shape to insert a row and to find one again.
 // `key` is the column that identifies a row within one user.
@@ -498,12 +533,40 @@ export function buildPlan({ A, B, C }) {
   // The fixtures put A well under the 300 MB cap and B deliberately over it, so
   // the same set proves the cap refuses an upload AND that it is counted per
   // user rather than across the whole bucket.
-  const aFile = objectPath(A, PROJECT_ID.A_POSTED_OLD, 'old.png');
-  const bFile = objectPath(B, PROJECT_ID.B, 'huge.bin');
+  //
+  // WHAT CANNOT BE TESTED HERE, AND WHY
+  //   Supabase forbids a direct DELETE on storage.objects: it raises
+  //   "Direct deletion from storage tables is not allowed. Use the Storage API
+  //   instead." So the delete policy cannot be exercised with SQL, however much
+  //   one would like to. Worse, it raises SQLSTATE 42501 — the same code as an
+  //   RLS refusal — so an assertion expecting 42501 from a DELETE here would go
+  //   green while proving the exact opposite of what it claimed.
+  //
+  //   So the delete policy is covered two ways instead, and neither is DML:
+  //   the gate it applies is evaluated against the real row with a real
+  //   session (below), and the policy itself is read out of pg_policies for its
+  //   verb and all four gates (further down). That is weaker than DML and is
+  //   labelled as such in PROJECT.md rather than left looking equivalent.
+  //
+  //   INSERT and UPDATE are not guarded — measured, not assumed — so those stay
+  //   as real statements.
+  const ownFile = { A: objectPath(A, PROJECT_ID.A_POSTED_OLD, 'old.png'), B: objectPath(B, PROJECT_ID.B_POSTED_OLD, 'old.png') };
+
+  // The delete policy's USING clause, evaluated against one row. Run as the
+  // owner so the row is visible at all, with the claims of a real session so
+  // auth.uid() and is_allowed() are the real thing.
+  const DELETE_GATE = `select (
+      o.bucket_id = $1
+      and (storage.foldername(o.name))[1] = auth.uid()::text
+      and array_length(storage.foldername(o.name), 1) = 2
+      and (select viralradar.is_allowed())
+    ) as allowed
+    from storage.objects o where o.name = $2`;
 
   add({
     name: 'storage: A can see their own files',
     as: 'A', table: 'storage.objects', sim: 'storage-select-own', owner: 'A',
+    needsStorage: true,
     sql: 'select name from storage.objects where bucket_id = $1 and name like $2',
     params: [BUCKET, `${A}/%`],
     expect: { minRows: 1 },
@@ -512,6 +575,7 @@ export function buildPlan({ A, B, C }) {
     add({
       name: `storage: ${me} cannot see ${them}'s files`,
       as: me, table: 'storage.objects', sim: 'storage-select-other', owner: them,
+      needsStorage: true,
       sql: 'select name from storage.objects where bucket_id = $1 and name like $2',
       params: [BUCKET, `${uid[them]}/%`],
       expect: { rowCount: 0 },
@@ -520,20 +584,33 @@ export function buildPlan({ A, B, C }) {
     add({
       name: `storage: an unfiltered select by ${me} returns only ${me}'s files`,
       as: me, table: 'storage.objects', sim: 'storage-select-unfiltered', owner: them,
+      needsStorage: true,
       sql: 'select count(*)::int as n from storage.objects where bucket_id = $1 and name not like $2',
       params: [BUCKET, `${uid[me]}/%`],
       expect: { rows: [{ n: 0 }] },
     });
+    // The delete policy cannot be exercised with SQL at all — see the block
+    // below. What is checked here is the gate it applies, against the real row.
     add({
-      name: `storage: ${me} cannot delete ${them}'s files`,
-      as: me, table: 'storage.objects', sim: 'storage-delete-other', owner: them,
-      sql: 'delete from storage.objects where bucket_id = $1 and name like $2 returning name',
-      params: [BUCKET, `${uid[them]}/%`],
-      expect: { rowCount: 0 },
+      name: `storage: the delete gate says no to ${me} for ${them}'s files`,
+      as: 'owner', jwt: me, table: 'storage.objects', sim: 'storage-delete-gate', owner: them,
+      needsStorage: true,
+      sql: DELETE_GATE,
+      params: [BUCKET, ownFile[them]],
+      expect: { rows: [{ allowed: false }] },
+    });
+    add({
+      name: `storage: the delete gate says yes to ${me} for ${me}'s own files`,
+      as: 'owner', jwt: me, table: 'storage.objects', sim: 'storage-delete-gate-own', owner: me,
+      needsStorage: true,
+      sql: DELETE_GATE,
+      params: [BUCKET, ownFile[me]],
+      expect: { rows: [{ allowed: true }] },
     });
     add({
       name: `storage: ${me} cannot rename one of ${them}'s files`,
       as: me, table: 'storage.objects', sim: 'storage-update-other', owner: them,
+      needsStorage: true,
       sql: "update storage.objects set name = name || '.taken' where bucket_id = $1 and name like $2 returning name",
       params: [BUCKET, `${uid[them]}/%`],
       expect: { rowCount: 0 },
@@ -541,6 +618,7 @@ export function buildPlan({ A, B, C }) {
     add({
       name: `storage: ${me} cannot upload into ${them}'s folder`,
       as: me, table: 'storage.objects', sim: 'storage-insert-other', owner: them,
+      needsStorage: true,
       sql: 'insert into storage.objects (bucket_id, name, metadata) values ($1, $2, $3) returning name',
       params: [BUCKET, objectPath(uid[them], PROJECT_ID[them], 'planted.png'), '{"size": 10}'],
       expect: { errorCode: '42501' },
@@ -550,6 +628,7 @@ export function buildPlan({ A, B, C }) {
     add({
       name: `storage: ${me} cannot upload into ${them}'s folder, even without reading it back`,
       as: me, table: 'storage.objects', sim: 'storage-insert-other-silent', owner: them,
+      needsStorage: true,
       sql: 'insert into storage.objects (bucket_id, name, metadata) values ($1, $2, $3)',
       params: [BUCKET, objectPath(uid[them], PROJECT_ID[them], 'planted-silently.png'), '{"size": 10}'],
       expect: { errorCode: '42501' },
@@ -560,6 +639,7 @@ export function buildPlan({ A, B, C }) {
     add({
       name: `storage: ${me} cannot move their own file into ${them}'s folder`,
       as: me, table: 'storage.objects', sim: 'storage-move-away', owner: me,
+      needsStorage: true,
       sql: 'update storage.objects set name = $3 where bucket_id = $1 and name like $2 returning name',
       params: [BUCKET, `${uid[me]}/%`, objectPath(uid[them], PROJECT_ID[them], 'moved.png')],
       expect: { errorCode: '42501' },
@@ -571,24 +651,37 @@ export function buildPlan({ A, B, C }) {
   add({
     name: 'storage: A can upload into their own folder, even though B is over the cap',
     as: 'A', table: 'storage.objects', sim: 'storage-insert-own', owner: 'A',
+    needsStorage: true,
     sql: 'insert into storage.objects (bucket_id, name, metadata) values ($1, $2, $3) returning name',
     params: [BUCKET, objectPath(A, PROJECT_ID.A, 'fresh.png'), '{"size": 10}'],
     expect: { rowCount: 1 },
   });
+  // Being full must not mean being stuck: deleting is how you get unstuck, and
+  // the delete policy deliberately carries no cap. Asked of the gate rather
+  // than by deleting, for the reason given at the top of this section.
   add({
-    name: 'storage: A can delete their own files',
-    as: 'A', table: 'storage.objects', sim: 'storage-delete-own', owner: 'A',
-    sql: 'delete from storage.objects where bucket_id = $1 and name = $2 returning name',
-    params: [BUCKET, aFile],
-    expect: { rowCount: 1 },
+    name: 'storage: the delete gate still says yes to B, who is over the cap',
+    as: 'owner', jwt: 'B', table: 'storage.objects', sim: 'storage-delete-gate-own', owner: 'B',
+    needsStorage: true,
+    sql: DELETE_GATE,
+    params: [BUCKET, objectPath(B, PROJECT_ID.B, 'huge.bin')],
+    expect: { rows: [{ allowed: true }] },
   });
-  // Being full must not mean being stuck: deleting is how you get unstuck.
+
+  // The guard itself, stated rather than tripped over. It raises 42501, the
+  // same SQLSTATE as an RLS refusal, so this is the assertion that stops a
+  // future author writing a delete assertion that goes green for the wrong
+  // reason. If Supabase ever allows direct deletes, this fails and the delete
+  // policy can go back to being tested with DML.
   add({
-    name: 'storage: B can still delete files while over the cap',
-    as: 'B', table: 'storage.objects', sim: 'storage-delete-own', owner: 'B',
+    name: 'storage: a direct DELETE is refused by Supabase itself, whoever asks',
+    as: 'A', table: 'storage.objects', sim: 'storage-delete-guarded', owner: 'A',
+    needsStorage: true,
     sql: 'delete from storage.objects where bucket_id = $1 and name = $2 returning name',
-    params: [BUCKET, bFile],
-    expect: { rowCount: 1 },
+    params: [BUCKET, ownFile.A],
+    // Not { errorCode: '42501' }: that would also pass if the policy had
+    // refused it, which is the confusion this assertion exists to name.
+    expect: { errorMatches: 'Use the Storage API' },
   });
 
   // The path shape. Anything that is not exactly <user>/<project>/<file> is
@@ -597,6 +690,7 @@ export function buildPlan({ A, B, C }) {
   add({
     name: 'storage: A cannot upload to the top of the bucket',
     as: 'A', table: 'storage.objects', sim: 'storage-bad-shape', owner: 'A',
+    needsStorage: true,
     sql: 'insert into storage.objects (bucket_id, name, metadata) values ($1, $2, $3)',
     params: [BUCKET, 'loose.png', '{"size": 10}'],
     expect: { errorCode: '42501' },
@@ -604,6 +698,7 @@ export function buildPlan({ A, B, C }) {
   add({
     name: 'storage: A cannot upload straight into their own prefix with no project folder',
     as: 'A', table: 'storage.objects', sim: 'storage-bad-shape', owner: 'A',
+    needsStorage: true,
     sql: 'insert into storage.objects (bucket_id, name, metadata) values ($1, $2, $3)',
     params: [BUCKET, `${A}/loose.png`, '{"size": 10}'],
     expect: { errorCode: '42501' },
@@ -611,6 +706,7 @@ export function buildPlan({ A, B, C }) {
   add({
     name: 'storage: A cannot upload deeper than a project folder',
     as: 'A', table: 'storage.objects', sim: 'storage-bad-shape', owner: 'A',
+    needsStorage: true,
     sql: 'insert into storage.objects (bucket_id, name, metadata) values ($1, $2, $3)',
     params: [BUCKET, `${A}/${PROJECT_ID.A}/nested/deep.png`, '{"size": 10}'],
     expect: { errorCode: '42501' },
@@ -620,6 +716,7 @@ export function buildPlan({ A, B, C }) {
   add({
     name: `storage: A's usage counts A's files and nobody else's`,
     as: 'A', table: 'storage.objects', sim: 'used-own', owner: 'A',
+    needsStorage: true,
     // B has 320 MB in the same bucket. If this returned anything other than
     // A's own few kilobytes, the cap would be shared rather than per user.
     sql: 'select viralradar.storage_used()::int as used',
@@ -629,6 +726,7 @@ export function buildPlan({ A, B, C }) {
   add({
     name: 'storage: A is under the cap, and the policy agrees',
     as: 'A', table: 'storage.objects', sim: 'cap-under', owner: 'A',
+    needsStorage: true,
     sql: 'select viralradar.storage_under_cap() as under',
     params: [],
     expect: { rows: [{ under: true }] },
@@ -636,6 +734,7 @@ export function buildPlan({ A, B, C }) {
   add({
     name: 'storage: B is over the cap',
     as: 'B', table: 'storage.objects', sim: 'cap-over', owner: 'B',
+    needsStorage: true,
     sql: 'select viralradar.storage_under_cap() as under',
     params: [],
     expect: { rows: [{ under: false }] },
@@ -643,6 +742,7 @@ export function buildPlan({ A, B, C }) {
   add({
     name: 'storage: B cannot upload while over the cap, even into their own folder',
     as: 'B', table: 'storage.objects', sim: 'cap-refuses-upload', owner: 'B',
+    needsStorage: true,
     // Everything else about this upload is correct: own prefix, right shape,
     // on the allowlist. The only thing wrong with it is the 300 MB.
     sql: 'insert into storage.objects (bucket_id, name, metadata) values ($1, $2, $3)',
@@ -652,6 +752,7 @@ export function buildPlan({ A, B, C }) {
   add({
     name: "storage: C's usage reads as nothing, whatever is in the bucket",
     as: 'C', table: 'storage.objects', sim: 'used-not-allowed', owner: null,
+    needsStorage: true,
     // The function is SECURITY DEFINER, so it is the filter in its body that
     // has to hold here rather than any policy.
     sql: 'select viralradar.storage_used()::int as used',
@@ -663,6 +764,7 @@ export function buildPlan({ A, B, C }) {
   add({
     name: 'storage: C is signed in but not on the allowlist, and sees no files',
     as: 'C', table: 'storage.objects', sim: 'storage-not-allowed-select', owner: null,
+    needsStorage: true,
     sql: 'select name from storage.objects where bucket_id = $1',
     params: [BUCKET],
     expect: { rowCount: 0 },
@@ -670,6 +772,7 @@ export function buildPlan({ A, B, C }) {
   add({
     name: 'storage: C cannot upload anything, not even into a folder of its own',
     as: 'C', table: 'storage.objects', sim: 'storage-not-allowed-insert', owner: 'C',
+    needsStorage: true,
     sql: 'insert into storage.objects (bucket_id, name, metadata) values ($1, $2, $3)',
     params: [BUCKET, objectPath(C, PROJECT_ID.C, 'c.png'), '{"size": 10}'],
     expect: { errorCode: '42501' },
@@ -677,14 +780,16 @@ export function buildPlan({ A, B, C }) {
   add({
     name: 'storage: anon (not signed in) sees no files',
     as: 'anon', table: 'storage.objects', sim: 'storage-anon', owner: null,
-    // Unlike the viralradar tables, anon is NOT revoked from storage.objects:
-    // that table is shared, and the other app may well serve public files from
-    // it. So this is an empty result rather than a refusal — which is the
-    // right answer, and worth stating so a future change cannot quietly turn
-    // it into a leak.
+    needsStorage: true,
+    // storage.objects is the Storage extension's, shared with the other app,
+    // and whether anon has table privileges on it is their business rather
+    // than ours. Both possible answers mean the same thing here — nothing is
+    // visible — so the assertion accepts either, instead of pinning one and
+    // failing the day a Supabase upgrade changes it. What it will not accept
+    // is a single row coming back.
     sql: 'select name from storage.objects where bucket_id = $1',
     params: [BUCKET],
-    expect: { rowCount: 0 },
+    expect: { nothingVisible: true },
   });
 
   // ---- the bucket's own settings ----
@@ -692,6 +797,26 @@ export function buildPlan({ A, B, C }) {
   // It is here because the 25 MB per-file limit is the ONE limit the Storage
   // API can enforce before the bytes are transferred, and nothing else in this
   // suite would notice if it were missing.
+  // The delete policy, read out of the catalogue for its verb and all four
+  // gates. This is the other half of covering a policy that cannot be
+  // exercised with SQL — and unlike the file-based test in the offline suite,
+  // it reads what the database actually has.
+  add({
+    name: 'storage: the delete policy exists, for DELETE, with all four gates',
+    as: 'owner', table: 'storage.objects', sim: 'storage-delete-policy', owner: null,
+    needsStorage: true,
+    sql: `select count(*)::int as n from pg_policies
+          where schemaname = 'storage' and tablename = 'objects'
+            and policyname = 'vr_project_files_delete'
+            and cmd = 'DELETE'
+            and qual like '%vr-project-files%'
+            and qual like '%foldername%'
+            and qual like '%auth.uid()%'
+            and qual like '%is_allowed%'`,
+    params: [],
+    expect: { rows: [{ n: 1 }] },
+  });
+
   add({
     name: 'storage: the bucket is private and limits one file to 25 MB',
     as: 'owner', table: 'storage.buckets', sim: 'bucket-config', owner: null,
@@ -952,6 +1077,7 @@ export function buildProofs({ A, B, C }) {
       check: {
         name: 'storage: A can see their own files',
         as: 'A', table: 'storage.objects', sim: 'storage-select-own', owner: 'A',
+        needsStorage: true,
         sql: 'select name from storage.objects where bucket_id = $1 and name like $2',
         params: [BUCKET, `${A}/%`],
         expect: { minRows: 1 },
@@ -967,6 +1093,7 @@ export function buildProofs({ A, B, C }) {
       check: {
         name: "storage: A cannot see B's files",
         as: 'A', table: 'storage.objects', sim: 'storage-select-other', owner: 'B',
+        needsStorage: true,
         sql: 'select name from storage.objects where bucket_id = $1 and name like $2',
         params: [BUCKET, `${B}/%`],
         expect: { rowCount: 0 },
@@ -989,6 +1116,7 @@ export function buildProofs({ A, B, C }) {
         // stopped the allowlist proof from proving nothing.
         name: 'storage: B cannot upload while over the cap, even into their own folder',
         as: 'B', table: 'storage.objects', sim: 'cap-refuses-upload', owner: 'B',
+        needsStorage: true,
         sql: 'insert into storage.objects (bucket_id, name, metadata) values ($1, $2, $3)',
         params: [BUCKET, objectPath(B, PROJECT_ID.B, 'one-more.png'), '{"size": 10}'],
         expect: { errorCode: '42501' },
@@ -1001,6 +1129,31 @@ export function buildProofs({ A, B, C }) {
 
 /** Did a statement's outcome match what the assertion expected? */
 export function matches(expect, outcome) {
+  // A refusal recognised by its MESSAGE rather than its SQLSTATE. Needed
+  // because Supabase's guard on storage.objects raises 42501 — the same code as
+  // an RLS refusal — so "rejected with 42501" cannot tell the two apart, and an
+  // assertion that accepted either would pass for the wrong reason.
+  if (expect.errorMatches) {
+    if (!outcome.errorCode) {
+      return { ok: false, detail: `expected a refusal mentioning "${expect.errorMatches}", but the statement succeeded with ${outcome.rowCount} row(s)` };
+    }
+    return (outcome.errorMessage || '').includes(expect.errorMatches)
+      ? { ok: true, detail: `refused with ${outcome.errorCode}: ${outcome.errorMessage}` }
+      : { ok: false, detail: `expected a refusal mentioning "${expect.errorMatches}", got ${outcome.errorCode}: ${outcome.errorMessage || ''}`.trim() };
+  }
+
+  // "This role gets nothing", however the database chooses to say it: no rows,
+  // or refused outright. Used for anon against storage.objects, where whether
+  // the role has table privileges at all is the Storage extension's business
+  // and not ViralRadar's — both answers mean the same thing to us, and pinning
+  // one would make the suite fail on a Supabase upgrade that changed it.
+  if (expect.nothingVisible) {
+    if (outcome.errorCode) return { ok: true, detail: `refused outright (${outcome.errorCode})` };
+    return outcome.rowCount === 0
+      ? { ok: true, detail: '0 row(s)' }
+      : { ok: false, detail: `expected nothing to be visible, got ${outcome.rowCount} row(s)` };
+  }
+
   if (expect.errorCodeIn) {
     if (!outcome.errorCode) return { ok: false, detail: `expected one of ${expect.errorCodeIn.join('/')}, but the statement succeeded with ${outcome.rowCount} row(s)` };
     return expect.errorCodeIn.includes(outcome.errorCode)

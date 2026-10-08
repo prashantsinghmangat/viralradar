@@ -516,11 +516,11 @@ the phone.
 
 ## 10. Testing
 
-`npm test` — **374 tests**, no network, no database, no keys needed. One
+`npm test` — **377 tests**, no network, no database, no keys needed. One
 more is skipped unless `VR_SLOW_TESTS=1`: it hashes 512 MB to check the digest
 at the size where the bit-length high word stops being zero.
 
-`npm run test:rls` — **306 assertions and 7 proofs** against the real Supabase
+`npm run test:rls` — **309 assertions and 7 proofs** against the real Supabase
 database. It connects as `postgres`, which owns the tables and therefore
 bypasses RLS, so every assertion runs in its own transaction that first becomes
 a real signed-in user (`SET LOCAL ROLE authenticated` plus `request.jwt.claims`)
@@ -563,6 +563,36 @@ policies and no `user_id` column:
   is allowed to nobody, and the non-allowlisted account is allowed nowhere.
   `realtime.topic()` reads a connection setting, so the suite can set it and
   exercise the real gate
+
+**What the storage half cannot do, and why.** Supabase forbids a direct `DELETE`
+on `storage.objects` — "Use the Storage API instead" — so the delete policy
+cannot be exercised with SQL at all. Worse, the guard raises **SQLSTATE 42501**,
+the same code as an RLS refusal, so an assertion expecting `42501` from a
+`DELETE` there would go green while proving the opposite of what it claimed.
+
+`SELECT`, `INSERT` and `UPDATE` are unguarded (measured, not assumed), so those
+remain real statements. The delete policy is covered three weaker ways instead:
+
+1. its gate evaluated against the real row, as the owner so RLS does not hide
+   it, with a real session attached so `auth.uid()` and `is_allowed()` are
+   genuine — in both directions, and for the user over the cap, who must still
+   be allowed to delete;
+2. the policy itself read out of `pg_policies` for its verb and all four gates;
+3. the guard asserted **by its message**, not its SQLSTATE, so nobody can
+   reintroduce an assertion that passes for the wrong reason.
+
+That is less than DML and is recorded as less. End to end, the delete path is
+covered only by using the app.
+
+**The runner is tested too, now.** It had no tests, which is how it came to
+create rows in a table it could not delete from, and then — because the cleanup
+did the bucket before the users in one `try` — leave three accounts behind in a
+live project when that threw. `test/rls-plan.test.js` now reads
+`scripts/test-rls.mjs` as text and holds it to the properties that bug violated:
+fixtures created inside the transaction that rolls back and before
+`SET LOCAL ROLE`, no `delete from storage.objects` anywhere, the users deleted
+first and in their own `try`, and a failed cleanup naming all three users rather
+than two.
 
 ### Testing the half that cannot be tested
 
@@ -654,6 +684,19 @@ introduced on purpose, the suite is confirmed to fail, and the file is restored.
   privileges and every query came back "permission denied for schema
   viralradar", which reads like a database problem and is not. Now in
   shared/keys.mjs with its own tests.
+- *The RLS suite created rows it could not delete* — Supabase forbids a direct
+  `DELETE` on `storage.objects`, so the first run against the real database left
+  four rows in the bucket and, because the cleanup deleted the bucket rows
+  before the users in a single `try`, three accounts in a live project too.
+  Nothing offline tested the runner, so nothing could have caught it. Fixed by
+  creating the fixtures inside each assertion's own transaction, splitting the
+  cleanup, and testing the runner as text. Found by running it.
+- *The guard shares a SQLSTATE with an RLS refusal* — both are `42501`, so four
+  delete assertions could have been "fixed" by expecting `42501` and would then
+  have passed whether or not the policy existed. The suite now asserts that
+  guard by its message, and refuses to let any storage `DELETE` assertion rest
+  on `42501`. This is the same class of mistake as the two proofs that could
+  not fail, found the same way: against the real thing.
 - *Two new shared modules were not shipped to the browser* — `sha256.mjs` and
   `transfer.mjs` were written and imported before being added to
   `BROWSER_SHARED`, which would have been a 404 and a blank screen. Caught

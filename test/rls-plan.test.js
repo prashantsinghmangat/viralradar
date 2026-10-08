@@ -37,6 +37,14 @@ const affected = (n) => ({ rows: [], rowCount: n, errorCode: null, errorMessage:
 function simulate(check, leak = 'none') {
   const { sim, as, owner } = check;
 
+  // ---- files in Storage ----
+  // Routed first, and regardless of role: some of these run as the owner (a
+  // gate evaluated against a row RLS would hide, and the policy read from the
+  // catalogue), so the owner branch below must not swallow them.
+  if (sim.startsWith('storage-') || sim.startsWith('cap-') || sim.startsWith('used-')) {
+    return simulateStorage(check, leak);
+  }
+
   // ---- configuration, read as the owner ----
   // Not an isolation check at all: the bucket's own settings, which no policy
   // governs. The 25 MB per-file limit lives there and nowhere else in SQL.
@@ -70,14 +78,6 @@ function simulate(check, leak = 'none') {
   if (['video-ref-stored', 'video-ref-undigested', 'video-ref-nowhere'].includes(sim)) return err('23514');
   if (sim === 'video-ref-not-allowed') return err('42501');
   if (sim === 'video-totals-other') return rows(canSeeAs(as, 'B', leak) ? [{ videos: 1 }] : []);
-
-  // ---- files in Storage ----
-  // Checked before the anon and noclaims shortcuts below, because
-  // storage.objects is shared with the other app and is NOT revoked from anon:
-  // a browser with no session gets an empty result there rather than a refusal.
-  if (sim.startsWith('storage-') || sim.startsWith('cap-') || sim.startsWith('used-')) {
-    return simulateStorage(check, leak);
-  }
 
   if (as === 'anon') return err('42501'); // privileges revoked from anon
   if (as === 'noclaims') return err('23502'); // auth.uid() is null, so the owner default is null
@@ -194,12 +194,22 @@ function simulateStorage(check, leak) {
       return rows(canSee(owner) ? [{ name: 'fixture' }] : []);
     case 'storage-select-unfiltered':
       return rows([{ n: canSee(owner) ? 1 : 0 }]);
-    case 'storage-delete-own':
-    case 'storage-delete-other':
     case 'storage-update-other':
-      // USING decides which rows an UPDATE or DELETE can even find, and that
-      // is the same clause a SELECT uses.
+      // USING decides which rows an UPDATE can even find, and that is the same
+      // clause a SELECT uses.
       return rows(canSee(owner) ? [{ name: 'fixture' }] : []);
+    case 'storage-delete-gate':
+    case 'storage-delete-gate-own':
+      // Evaluated as the owner with a real session, so RLS does not hide the
+      // row and the answer is the gate's alone: own prefix and on the
+      // allowlist. No policy this model can break changes it.
+      return rows([{ allowed: owner === check.jwt && check.jwt !== 'C' }]);
+    case 'storage-delete-policy':
+      // Read from the catalogue, so no policy this model can break changes it.
+      return rows([{ n: 1 }]);
+    case 'storage-delete-guarded':
+      // Supabase's own guard, not a policy. Recognised by its message.
+      return { rows: [], rowCount: 0, errorCode: '42501', errorMessage: 'Direct deletion from storage tables is not allowed. Use the Storage API instead.' };
     case 'storage-move-away':
       // Renaming into someone else's prefix fails the update policy's WITH
       // CHECK, which is the storage equivalent of handing a row away.
@@ -220,6 +230,7 @@ function simulateStorage(check, leak) {
     case 'storage-not-allowed-insert':
       return err('42501');
     case 'storage-anon':
+      // Either answer is a pass; the model picks one.
       return rows([]);
     case 'used-own':
       return rows([{ used: A_USED }]);
@@ -253,12 +264,21 @@ test('every assertion in the plan is well formed and uniquely named', () => {
     // anything about isolation, which it could not do.
     assert.ok(['A', 'B', 'C', 'anon', 'noclaims', 'owner'].includes(c.as), `${c.name}: bad "as" value ${c.as}`);
     if (c.as === 'owner') {
-      // The owner bypasses RLS, so it can prove nothing about isolation. It is
-      // allowed only for reading configuration that no policy governs: the
-      // bucket's own settings, and whether the signalling policies exist.
+      // The owner bypasses RLS, so it can prove nothing about isolation on its
+      // own. Two uses are allowed: reading configuration no policy governs, and
+      // evaluating a policy's gate against a row RLS would otherwise hide —
+      // which needs a real session, hence `jwt`.
       assert.match(c.sql.trim(), /^select /i, 'the owner role bypasses RLS, so it may only ever read');
-      assert.ok(['bucket-config', 'signal-policies', 'signal-policy-text'].includes(c.sim),
-        `${c.name}: the owner role is only for reading configuration, not for ${c.sim}`);
+      const ALLOWED_OWNER_SIMS = ['bucket-config', 'signal-policies', 'signal-policy-text',
+        'storage-delete-gate', 'storage-delete-gate-own', 'storage-delete-policy'];
+      assert.ok(ALLOWED_OWNER_SIMS.includes(c.sim),
+        `${c.name}: the owner role is only for configuration or gate evaluation, not for ${c.sim}`);
+      if (c.sim.startsWith('storage-delete-gate')) {
+        assert.ok(['A', 'B', 'C'].includes(c.jwt),
+          `${c.name}: evaluating a gate is pointless without a real session on it`);
+        assert.match(c.sql, /auth\.uid\(\)/, `${c.name}: must compare against the real session`);
+        assert.match(c.sql, /is_allowed\(\)/, `${c.name}: must include the allowlist gate`);
+      }
     }
     // "with" is here for the signalling checks, which have to put the channel
     // name on the connection before reading the gate that depends on it — a
@@ -274,7 +294,8 @@ test('every assertion in the plan is well formed and uniquely named', () => {
     assert.ok(c.sim, `${c.name}: missing sim label`);
     const keys = Object.keys(c.expect);
     assert.equal(keys.length, 1, `${c.name}: an assertion must expect exactly one thing, got ${keys}`);
-    assert.ok(['rowCount', 'minRows', 'rows', 'errorCode', 'errorCodeIn'].includes(keys[0]), `${c.name}: unknown expectation ${keys[0]}`);
+    assert.ok(['rowCount', 'minRows', 'rows', 'errorCode', 'errorCodeIn', 'errorMatches', 'nothingVisible'].includes(keys[0]),
+      `${c.name}: unknown expectation ${keys[0]}`);
     // A statement must never carry a user id it does not use, or use one it was not given.
     const highest = Math.max(0, ...[...c.sql.matchAll(/\$(\d+)/g)].map((m) => Number(m[1])));
     assert.equal(highest, c.params.length, `${c.name}: uses $${highest} but got ${c.params.length} param(s)`);
@@ -335,9 +356,28 @@ test('the plan covers the files in Storage, not only the rows in the schema', ()
 
   for (const sim of ['storage-select-own', 'storage-select-other', 'storage-select-unfiltered',
     'storage-insert-own', 'storage-insert-other', 'storage-insert-other-silent',
-    'storage-update-other', 'storage-move-away', 'storage-delete-own', 'storage-delete-other',
+    'storage-update-other', 'storage-move-away',
     'storage-bad-shape', 'storage-not-allowed-select', 'storage-not-allowed-insert', 'storage-anon']) {
     assert.ok(storage.some((c) => c.sim === sim), `storage: missing "${sim}"`);
+  }
+
+  // Deleting cannot be tested with SQL: Supabase forbids a direct DELETE on
+  // storage.objects, and raises 42501 doing it — the same code as an RLS
+  // refusal. So the delete policy is covered by its gate and by its own
+  // definition, and the guard is asserted by MESSAGE so nothing can go green
+  // for the wrong reason.
+  for (const sim of ['storage-delete-gate', 'storage-delete-gate-own', 'storage-delete-guarded', 'storage-delete-policy']) {
+    assert.ok(storage.some((c) => c.sim === sim), `storage: missing "${sim}"`);
+  }
+  const guard = storage.find((c) => c.sim === 'storage-delete-guarded');
+  assert.ok(guard.expect.errorMatches, 'the guard must be recognised by its message, not by 42501');
+  assert.ok(!storage.some((c) => /^delete/i.test(c.sql.trim()) && c.expect.errorCode === '42501'),
+    'no storage assertion may rest on 42501 from a DELETE: the guard and a policy refusal share that code');
+
+  // Every assertion that reads the bucket needs the fixtures, and they have to
+  // be per-assertion so they roll back — nothing may be committed there.
+  for (const c of storage.filter((x) => x.table === 'storage.objects')) {
+    assert.equal(c.needsStorage, true, `${c.name}: must ask for the in-transaction bucket fixtures`);
   }
 
   // Both directions, like every other table.
@@ -349,8 +389,11 @@ test('the plan covers the files in Storage, not only the rows in the schema', ()
 
   // Every storage assertion must name the bucket, or it could be passing
   // because of something the other app in this project happens to have done.
+  // Three ways to say it: as a parameter, inside a function that pins it, or
+  // literally in the SQL — the catalogue checks do the last of those, because
+  // they read a policy's text rather than touching a row.
   for (const c of storage) {
-    assert.ok(c.params.includes(BUCKET) || /storage_use|under_cap/.test(c.sql),
+    assert.ok(c.params.includes(BUCKET) || /storage_use|under_cap/.test(c.sql) || c.sql.includes(BUCKET),
       `${c.name}: must be scoped to ViralRadar's own bucket`);
   }
 });
@@ -365,8 +408,8 @@ test('the plan covers the 300 MB cap, the 25 MB limit and the 14-day cleanup', (
     assert.ok(sims.has(sim), `the 300 MB cap is not covered: missing "${sim}"`);
   }
   // Being full must not mean being stuck.
-  assert.ok(plan.some((c) => c.as === 'B' && c.sim === 'storage-delete-own'),
-    'a user over the cap must still be able to delete, or there is no way back');
+  assert.ok(plan.some((c) => c.jwt === 'B' && c.sim === 'storage-delete-gate-own'),
+    'a user over the cap must still be allowed to delete, or there is no way back');
 
   // The 25 MB limit, in both the places that can refuse it.
   assert.ok(sims.has('item-too-big'), 'nothing checks the 25 MB limit in the database');
@@ -529,6 +572,77 @@ test('a WITH CHECK that accepts anything makes the insert and update assertions 
   assert.ok(updateFailures.includes('ideas: A cannot give their own row away to B'));
 });
 
+// The runner had no tests at all, which is how it came to create rows in a
+// table it could not delete from and then leave three accounts behind in a live
+// project when the cleanup threw. It is read as text here, in the same way the
+// frontend tests read app.js: these are the properties that bug violated.
+test('the runner creates its bucket fixtures inside the transaction that rolls back', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const runner = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'test-rls.mjs'), 'utf8');
+
+  // Supabase forbids a direct DELETE on storage.objects, so anything committed
+  // there can never be cleared up. The only safe place to create it is inside
+  // the transaction that is about to be rolled back.
+  assert.ok(!/delete from storage\.objects/i.test(runner),
+    'the runner must never try to delete from storage.objects: Supabase refuses, and the cleanup then fails');
+
+  for (const fn of ['exec', 'execBroken']) {
+    const start = runner.indexOf(`async function ${fn}(`);
+    assert.ok(start > 0, `${fn} is missing`);
+    const body = runner.slice(start, runner.indexOf('\n}', start));
+    assert.match(body, /needsStorage/, `${fn} must create the bucket fixtures for assertions that need them`);
+    // Before SET LOCAL ROLE, or the insert runs as the user and the INSERT
+    // policy — the thing under test — decides whether the fixture exists.
+    const fixtures = body.indexOf('createStorageFixtures');
+    const become = body.indexOf('becomeUser');
+    assert.ok(fixtures > 0 && become > 0 && fixtures < become,
+      `${fn} must create the fixtures as the owner, before becoming the user`);
+  }
+
+  const create = runner.slice(runner.indexOf('async function createStorageFixtures'));
+  assert.match(create.slice(0, create.indexOf('\n}')), /tx`insert into storage\.objects/,
+    'the fixtures must be inserted on the transaction, not on the pool');
+});
+
+test('the runner deletes the test users whatever else fails', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const runner = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'test-rls.mjs'), 'utf8');
+  const cleanup = runner.slice(runner.indexOf('} finally {'), runner.indexOf('const failed ='));
+
+  // The original did the bucket first and the users second in one try block,
+  // so when the bucket step threw the users were never deleted either.
+  const users = cleanup.indexOf('deleteUsers()');
+  const bucket = cleanup.indexOf('checkBucketIsClean()');
+  assert.ok(users > 0, 'the cleanup must delete the test users');
+  assert.ok(bucket > 0, 'the cleanup should still report anything left in the bucket');
+  assert.ok(users < bucket, 'deleting the users is what matters, so it must come first');
+  assert.equal(cleanup.match(/try \{/g).length, 2,
+    'the two steps need separate try blocks, or one failing stops the other');
+
+  // And if it cannot, it has to name every user — the first version printed two
+  // of the three, so the third was left behind silently.
+  assert.match(cleanup, /\$\{A\}, \$\{B\}, \$\{C\}|\$\{A\}[\s\S]{0,40}\$\{B\}[\s\S]{0,40}\$\{C\}/,
+    'a failed cleanup must list all three users, not two');
+  assert.match(cleanup, /rls-test-%@viralradar\.invalid/,
+    'it should give the exact statement to run by hand');
+});
+
+test('the delete policy is covered by its verb and all four gates', () => {
+  // This assertion stands in for DML that Supabase will not allow, so if it
+  // stops pinning any of the four gates it stops standing in for anything.
+  const plan = buildPlan({ A, B, C });
+  const check = plan.find((c) => c.sim === 'storage-delete-policy');
+  assert.ok(check, 'the delete policy is never read out of the catalogue');
+  assert.match(check.sql, /policyname = 'vr_project_files_delete'/);
+  assert.match(check.sql, /cmd = 'DELETE'/, 'a policy for the wrong verb would prove nothing');
+  for (const gate of ['vr-project-files', 'foldername', 'auth.uid()', 'is_allowed']) {
+    assert.ok(check.sql.includes(gate), `the catalogue check does not pin "${gate}"`);
+  }
+  assert.deepEqual(check.expect, { rows: [{ n: 1 }] });
+});
+
 test('matches() reads each kind of expectation correctly', () => {
   assert.equal(matches({ rowCount: 0 }, rows([])).ok, true);
   assert.equal(matches({ rowCount: 0 }, rows([{}])).ok, false);
@@ -547,6 +661,26 @@ test('matches() reads each kind of expectation correctly', () => {
   // An unexpected error must never be read as a pass.
   assert.equal(matches({ rowCount: 0 }, err('42P01')).ok, false);
   assert.match(matches({ rowCount: 0 }, err('42P01')).detail, /unexpected error 42P01/);
+
+  // errorMatches: a refusal recognised by its message, because Supabase's
+  // guard on storage.objects raises 42501 — the same code as an RLS refusal —
+  // so the SQLSTATE alone cannot tell the two causes apart.
+  const guard = { rows: [], rowCount: 0, errorCode: '42501', errorMessage: 'Direct deletion from storage tables is not allowed. Use the Storage API instead.' };
+  const policy = { rows: [], rowCount: 0, errorCode: '42501', errorMessage: 'new row violates row-level security policy' };
+  assert.equal(matches({ errorMatches: 'Use the Storage API' }, guard).ok, true);
+  assert.equal(matches({ errorMatches: 'Use the Storage API' }, policy).ok, false,
+    'the whole point: an RLS refusal must not satisfy an assertion about the guard');
+  // And a statement that quietly succeeded is never a pass.
+  assert.equal(matches({ errorMatches: 'Use the Storage API' }, rows([{}])).ok, false);
+  assert.match(matches({ errorMatches: 'Use the Storage API' }, rows([{}])).detail, /but the statement succeeded/);
+
+  // nothingVisible: no rows, or refused outright. Both mean "this role gets
+  // nothing", where which one it is belongs to the Storage extension.
+  assert.equal(matches({ nothingVisible: true }, rows([])).ok, true);
+  assert.equal(matches({ nothingVisible: true }, err('42501')).ok, true);
+  assert.equal(matches({ nothingVisible: true }, rows([{ name: 'leaked' }])).ok, false,
+    'a row coming back is the one answer that is never acceptable');
+  assert.match(matches({ nothingVisible: true }, rows([{}])).detail, /expected nothing to be visible/);
 });
 
 test('a proof passes only when breaking the policy makes the assertion fail', async () => {
