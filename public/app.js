@@ -364,7 +364,7 @@ async function renderIdeas() {
     </section>`).join('');
 
   return `
-    <div class="page-head"><h1>Ideas</h1></div>
+    <div class="page-head"><h1>Ideas</h1>${PASTE_BUTTON()}</div>
     <div class="chips" style="margin-bottom:14px">
       ${[['all', 'All'], ['new', 'New'], ['picked', 'Picked'], ['skipped', 'Skipped']].map(([k, l]) =>
         `<button type="button" class="chip ${ideaFilter === k ? 'on' : ''}" data-action="ideaFilter" data-v="${k}">${l} · ${counts[k] || 0}</button>`).join('')}
@@ -401,7 +401,7 @@ async function renderScripts(params) {
     </section>`;
   }).join('');
   return `
-    <div class="page-head"><h1>Scripts</h1><span class="muted small">${canDrag ? 'Drag cards between columns, or use the arrows.' : 'Tap the arrow to move a script.'}</span></div>
+    <div class="page-head"><h1>Scripts</h1><span class="muted small">${canDrag ? 'Drag cards between columns, or use the arrows.' : 'Tap the arrow to move a script.'}</span>${PASTE_BUTTON()}</div>
     ${scripts.length ? `<div class="board">${cols}</div>` : '<div class="empty"><span class="big">🎬</span>No scripts yet. Export a script from Shorts Studio and it lands in “To shoot”.</div>'}`;
 }
 actions.openScript = (card) => { location.hash = `#/scripts/${encodeURIComponent(card.dataset.id)}`; };
@@ -692,7 +692,7 @@ const KIND_ICON = { idea: '💡', script: '🎬', result: '📈' };
 async function renderImport() {
   const recent = await data.imports.recent(30);
   return `
-    <div class="page-head"><h1>Import</h1></div>
+    <div class="page-head"><h1>Import</h1>${PASTE_BUTTON()}</div>
     <div class="card stack">
       <div>
         <label class="field" for="pasteBox">Paste a Shorts Studio export</label>
@@ -716,6 +716,66 @@ async function renderImport() {
       </li>`).join('')}</ul>` : '<p class="muted">Nothing imported yet.</p>'}
     </div>`;
 }
+
+// ---- paste from Shorts Studio ----
+//
+// One button, on three screens. It reads the clipboard and imports whatever is
+// there, so copying an export in Shorts Studio and tapping once is the whole
+// job — no switching screens, no finding the paste box.
+//
+// Reading the clipboard needs permission, and some browsers do not allow it at
+// all. When that happens the paste box is still right there, so the button
+// says so and takes you to it rather than just failing.
+const PASTE_BUTTON = (label = '📋 Paste from Shorts Studio') =>
+  `<button type="button" class="primary" data-action="pasteImport">${esc(label)}</button>`;
+
+actions.pasteImport = async (btn) => {
+  const original = btn.textContent;
+  const fail = (message) => {
+    toast(message, true, 7000);
+    showImportResult(false, message);
+  };
+
+  if (!navigator.clipboard || !navigator.clipboard.readText) {
+    fail('This browser will not let a page read the clipboard. Use the paste box on the Import screen instead.');
+    if (currentRoute() !== 'import') location.hash = '#/import';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Reading clipboard…';
+  let text = '';
+  try {
+    text = await navigator.clipboard.readText();
+  } catch {
+    // Either the permission was refused, or the browser asked and nothing was
+    // allowed. Either way the paste box always works.
+    fail('ViralRadar was not allowed to read the clipboard. Use the paste box on the Import screen instead.');
+    if (currentRoute() !== 'import') location.hash = '#/import';
+    btn.disabled = false;
+    btn.textContent = original;
+    return;
+  }
+
+  if (!text.trim()) {
+    fail('There is nothing on the clipboard. Copy an export from Shorts Studio first.');
+    btn.disabled = false;
+    btn.textContent = original;
+    return;
+  }
+
+  btn.textContent = 'Importing…';
+  try {
+    const result = await data.imports.send(text);
+    toast(result.message);
+    showImportResult(true, result.message);
+    render();
+  } catch (e) {
+    fail(e.message);
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+};
 
 function showImportResult(ok, msg) {
   const box = $('#importResult');
@@ -982,7 +1042,32 @@ async function signedIn(session) {
   data.settings.get(session.user.id).catch((e) => toast(e.message, true));
 }
 
+// ---------- installing ----------
+//
+// The service worker only makes the app open faster and work with no signal;
+// nothing depends on it, so every failure here is swallowed. It is skipped on
+// plain http, where browsers refuse to register one anyway.
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  if (location.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(location.hostname)) return;
+
+  navigator.serviceWorker.register('/sw.js').then((registration) => {
+    registration.addEventListener('updatefound', () => {
+      const incoming = registration.installing;
+      if (!incoming) return;
+      incoming.addEventListener('statechange', () => {
+        // A worker that reaches "installed" while one is already controlling
+        // the page means a new version is deployed and waiting.
+        if (incoming.state === 'installed' && navigator.serviceWorker.controller) {
+          toast('A new version is ready. Reload to use it.', false, 9000);
+        }
+      });
+    });
+  }).catch((e) => console.warn('[app] service worker not registered:', e));
+}
+
 async function boot() {
+  registerServiceWorker();
   if (!data) {
     fatal('This build has no Supabase configuration, so it cannot reach your data. Rebuild with SUPABASE_URL and SUPABASE_ANON_KEY set.');
     return;

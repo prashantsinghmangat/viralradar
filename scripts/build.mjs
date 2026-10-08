@@ -171,6 +171,17 @@ export async function build({ env = process.env, builtAt = new Date().toISOStrin
 
   writeFileSync(join(OUT_DIR, 'env.js'), envScript(config, builtAt));
 
+  // Stamp the service worker with this build, so a deploy makes a new cache and
+  // the old shell is thrown away. Without it a phone can keep serving an app
+  // from several releases ago and nothing will ever tell it otherwise.
+  const swPath = join(OUT_DIR, 'sw.js');
+  if (existsSync(swPath)) {
+    const version = builtAt.replace(/[^0-9]/g, '').slice(0, 14);
+    const sw = readFileSync(swPath, 'utf8');
+    if (!sw.includes('__VR_BUILD__')) throw new Error('sw.js has no __VR_BUILD__ to stamp; the cache would never be refreshed.');
+    writeFileSync(swPath, sw.split('__VR_BUILD__').join(version));
+  }
+
   // Last line of defence: nothing secret may be in the output, whatever the
   // environment happened to contain.
   const leaked = [];

@@ -106,7 +106,7 @@ test('user text is escaped wherever it is put into HTML', () => {
   assert.ok(htmlLiterals.length > 10, `expected to find the screens, found ${htmlLiterals.length} HTML templates`);
 
   // Values that escape for themselves, or that cannot carry user text.
-  const safe = /^(esc\(|fmt\(|compact\(|ago\(|when\(|copyBtn\(|hbars\(|format\(|renderEditPlan\(|KIND_ICON|SOURCE|LIVE_LABEL|STAGES|LENGTHS|DEFAULT_AI_ORDER)/;
+  const safe = /^(esc\(|fmt\(|compact\(|ago\(|when\(|copyBtn\(|hbars\(|format\(|renderEditPlan\(|PASTE_BUTTON\(|KIND_ICON|SOURCE|LIVE_LABEL|STAGES|LENGTHS|DEFAULT_AI_ORDER)/;
   const bad = [];
   for (const literal of htmlLiterals) {
     for (const m of literal.matchAll(/\$\{([^{}]*)\}/g)) {
@@ -156,4 +156,28 @@ test('the sign-in screen asks for a password and keeps the link as a fallback', 
   assert.match(screen, /signInPassword/, 'the primary action is signing in with the password');
   assert.match(screen, /sendLink/, 'the email link stays as a way back in');
   assert.match(screen, /stays signed in/i, 'people should know it is once per device');
+});
+
+test('the paste button is on the three screens where an export lands', () => {
+  // Copying in Shorts Studio and tapping once should be the whole job, from
+  // whichever screen you happen to be on.
+  for (const screen of ['renderIdeas', 'renderScripts', 'renderImport']) {
+    const start = appjs.indexOf(`function ${screen}`);
+    assert.ok(start > 0, `${screen} not found`);
+    const body = appjs.slice(start, appjs.indexOf('\n}', start));
+    assert.match(body, /PASTE_BUTTON\(\)/, `${screen} has no paste button`);
+  }
+});
+
+test('the paste button copes with a browser that will not allow it', () => {
+  // Reading the clipboard needs permission, and some browsers refuse outright.
+  // The paste box is always there, so the button must point at it rather than
+  // simply failing.
+  const fn = appjs.slice(appjs.indexOf('actions.pasteImport'), appjs.indexOf('function showImportResult'));
+  assert.match(fn, /navigator\.clipboard\.readText/);
+  assert.match(fn, /!navigator\.clipboard/, 'a browser with no clipboard API at all must not throw');
+  assert.match(fn, /catch/, 'a refused permission rejects, and must be caught');
+  assert.match(fn, /paste box/i, 'the fallback has to be named, not just implied');
+  assert.match(fn, /#\/import/, 'and the person should be taken there');
+  assert.match(fn, /nothing on the clipboard/i, 'an empty clipboard is its own case');
 });

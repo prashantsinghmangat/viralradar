@@ -457,7 +457,17 @@ person.
 ## Step 14. Add it to your phone's home screen
 
 Android, Chrome: open the site → menu (⋮) → **Add to Home screen** → **Install**.
-It then opens like an app, without the browser bars.
+It then opens like an app, with its own icon and no browser bars.
+
+iPhone, Safari: Share → **Add to Home Screen**.
+
+Once installed it opens instantly even on a bad connection, because the app
+itself is kept on the device. Your data is not: ideas, scripts, results and
+trends are always fetched fresh, so you never see yesterday's numbers and
+mistake them for today's. With no signal at all the app opens and says it
+cannot reach the database, which is the honest answer.
+
+When a new version is deployed you get a message saying so; reload to take it.
 
 ## Step 15. Close the door (optional)
 

@@ -12,7 +12,8 @@
     "test:rls": "node scripts/test-rls.mjs",
     "inspect:db": "node scripts/inspect-db.mjs",
     "sync:shared": "node scripts/sync-shared.mjs",
-    "build": "node scripts/build.mjs"
+    "build": "node scripts/build.mjs",
+    "icons": "node scripts/make-icons.mjs"
   },
   "license": "MIT",
   "dependencies": {

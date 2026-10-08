@@ -261,8 +261,8 @@ kept; the cloud version changes where the data comes from and adds the AI.
 | 4. `vr-refresh-trends` | **done, deployed, run live** |
 | 5. pg_cron daily refresh | **done** — 01:30 UTC, triggered and verified |
 | 6. Frontend on supabase-js + Realtime | **done, deployed** |
-| 7. Generate / Write script / Paste buttons | not started |
-| 8. Netlify build and deploy | **done** — PWA (manifest, service worker) still to do |
+| 7. Paste buttons | **done** — Generate / Write script wait on vr-generate |
+| 8. Netlify build and deploy, PWA | **done** — installable, shell cached offline |
 | 9. Watcher as a standalone script | not started |
 | 10. README rewrite | SETUP.md done; README still describes the local app |
 
@@ -279,9 +279,6 @@ database. An import on one device shows up on the other within a second or two.
   Reddit and GitHub all return results.
 - **"Generate ideas", "Write script" and "Test AI" fail** — `vr-generate` is not
   written. Phase 4/7.
-- **No "Paste from Shorts Studio" button** yet; the paste box and file upload on
-  the Import screen both work. Phase 7.
-- **Not installable to a home screen** — no manifest or service worker. Phase 8.
 - **No folder watcher** yet. Phase 9.
 
 **Done by hand so far:** migrations pushed, schema exposed to the Data API,
@@ -293,7 +290,7 @@ Supabase secrets, `ALLOWED_ORIGINS` set, code on GitHub, Netlify deploying from
 
 ## 10. Testing
 
-`npm test` — **180 tests**, no network, no database, no keys needed.
+`npm test` — **205 tests**, no network, no database, no keys needed.
 
 `npm run test:rls` — **193 assertions and 4 proofs** against the real Supabase
 database. It connects as `postgres`, which owns the tables and therefore
