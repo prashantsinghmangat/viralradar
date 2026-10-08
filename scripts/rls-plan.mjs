@@ -287,7 +287,16 @@ export function buildPlan({ A, B, C }) {
       });
 
       // ---- INSERT, both directions ----
+      //
+      // Two shapes, not one. For most tables they are identical, but a project
+      // item names the folder it goes in, and that folder has to belong to
+      // whoever the row says owns it — the foreign key is on the pair. Reusing
+      // one shape for both directions asked A to put a row it owned into B's
+      // folder, which the foreign key refused with 23503 before any policy was
+      // consulted, so "A can insert their own row" failed for a reason that
+      // had nothing to do with RLS.
       const fresh = t.insert('$2', them);
+      const freshOwn = t.insert('$2', me);
       add({
         name: `${table}: ${me} cannot insert a row owned by ${them}`,
         as: me, table, sim: 'insert-other', owner: them,
@@ -308,7 +317,7 @@ export function buildPlan({ A, B, C }) {
       add({
         name: `${table}: ${me} can insert their own row`,
         as: me, table, sim: 'insert-own', owner: me,
-        sql: `insert into viralradar.${table} (user_id, ${fresh.cols}) values ($1, ${fresh.vals}) returning ${key}`,
+        sql: `insert into viralradar.${table} (user_id, ${freshOwn.cols}) values ($1, ${freshOwn.vals}) returning ${key}`,
         params: [uid[me], t.fresh],
         expect: { rowCount: 1 },
       });

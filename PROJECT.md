@@ -516,7 +516,7 @@ the phone.
 
 ## 10. Testing
 
-`npm test` — **378 tests**, no network, no database, no keys needed. One
+`npm test` — **379 tests**, no network, no database, no keys needed. One
 more is skipped unless `VR_SLOW_TESTS=1`: it hashes 512 MB to check the digest
 at the size where the bit-length high word stops being zero.
 

@@ -576,6 +576,42 @@ test('a WITH CHECK that accepts anything makes the insert and update assertions 
 // table it could not delete from and then leave three accounts behind in a live
 // project when the cleanup threw. It is read as text here, in the same way the
 // frontend tests read app.js: these are the properties that bug violated.
+test('an insert assertion names a folder the row it creates could really live in', () => {
+  // project_items is the only table whose rows refer to another row: the
+  // foreign key is the pair (user_id, project_id). So an assertion that writes
+  // one has to name a folder belonging to the SAME user the row says owns it.
+  //
+  // The model cannot catch this — it simulates policies, not constraints — so
+  // "A can insert their own row" spent three runs failing with 23503 because it
+  // reused the row shape built for the cross-user direction and quietly asked A
+  // to put its own row in B's folder.
+  const plan = buildPlan({ A, B, C });
+  const find = (as, sim) => plan.find((c) => c.table === 'project_items' && c.as === as && c.sim === sim);
+
+  for (const [me, them] of [['A', 'B'], ['B', 'A']]) {
+    for (const sim of ['insert-own', 'insert-default-owner']) {
+      const check = find(me, sim);
+      assert.ok(check, `project_items: missing "${sim}" as ${me}`);
+      assert.ok(check.sql.includes(PROJECT_ID[me]),
+        `project_items ${sim} as ${me}: must use ${me}'s own folder, or the foreign key refuses it before any policy is consulted`);
+      assert.ok(!check.sql.includes(PROJECT_ID[them]),
+        `project_items ${sim} as ${me}: must not name ${them}'s folder`);
+    }
+    // And the cross-user ones must point at the other user's folder, so the
+    // foreign key is satisfied and the refusal can only come from the policy.
+    for (const sim of ['insert-other', 'insert-other-silent']) {
+      const check = find(me, sim);
+      assert.ok(check.sql.includes(PROJECT_ID[them]),
+        `project_items ${sim} as ${me}: must name ${them}'s folder, or a 23503 would mask the 42501 being tested`);
+    }
+  }
+
+  // C is not on the allowlist, and its folder exists only because the fixtures
+  // plant one; without that, its insert would fail on the key, not the policy.
+  const notAllowed = plan.find((c) => c.table === 'project_items' && c.as === 'C' && c.sim === 'not-allowed-insert');
+  assert.ok(notAllowed.sql.includes(PROJECT_ID.C), "C's insert must name C's own planted folder");
+});
+
 test('the runner imports everything it uses from the plan', async () => {
   // `node --check` validates syntax, not whether a name is defined, and the
   // runner cannot be imported here — it reads DATABASE_URL and exits. So a
