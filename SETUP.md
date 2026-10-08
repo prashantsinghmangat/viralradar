@@ -124,24 +124,28 @@ Your project ref is the random-looking part of your project URL
 `db push` asks for it instead.
 
 `db push` lists the migrations it is about to apply and asks you to confirm.
-There are six, and they are safe to run against a project that already has
+There are seven, and they are safe to run against a project that already has
 some of them: it applies only the ones missing. Between them they create a
 schema called `viralradar` and ten tables inside it — the nine the app uses,
 plus `allowed_users`, which controls who may use ViralRadar at all — then the
-security policies, the daily schedule, the model defaults, and the project
-folders with their file storage. Nothing touches `public`, where tracebug lives.
+security policies, the daily schedule, the model defaults, the project folders
+with their file storage, and the device-to-device video transfer. Nothing
+touches `public`, where tracebug lives.
 
-The last migration is the only one that reaches outside the `viralradar` schema,
-and it is worth knowing what it does there, because **Storage is shared with
-tracebug** the same way `auth.users` is:
+The last two migrations are the only ones that reach outside the `viralradar`
+schema, and it is worth knowing what they do there, because **Storage and
+Realtime are shared with tracebug** the same way `auth.users` is:
 
-- it adds **one row** to `storage.buckets`, for a private bucket called
+- **one row** in `storage.buckets`, for a private bucket called
   `vr-project-files` with a 25 MB per-file limit
-- it adds **four policies** to `storage.objects`, all named `vr_project_files_*`
-  and all scoped to that bucket in their very first condition
+- **four policies** on `storage.objects`, all named `vr_project_files_*` and
+  all scoped to that bucket in their very first condition
+- **two policies** on `realtime.messages`, named `vr_devices_read` and
+  `vr_devices_write`, which are what make the channel your two devices signal
+  on a private one rather than merely an obscurely named one
 
-It never alters or removes anything that was already there — a policy on
-`storage.objects` may well be tracebug's.
+None of them alters or removes anything that was already there — a policy on
+`storage.objects` or `realtime.messages` may well be tracebug's.
 
 Check it worked: **Table Editor** → the schema dropdown (top left, probably says
 "public") → you should now be able to pick **viralradar** and see `ideas`,
@@ -149,13 +153,14 @@ Check it worked: **Table Editor** → the schema dropdown (top left, probably sa
 `projects`, `project_items`. Then **Storage** in the left sidebar should list a
 bucket called `vr-project-files` with a padlock (private).
 
-### If `db push` fails on the storage part
+### If `db push` fails on a policy outside the viralradar schema
 
-`storage.objects` belongs to the Storage extension rather than to you, so
-depending on how your project is set up the CLI may be refused when it tries to
-add a policy to it. The error says something about permission or ownership.
+`storage.objects` and `realtime.messages` belong to their extensions rather than
+to you, so depending on how your project is set up the CLI may be refused when
+it tries to add a policy to one. The error says something about permission or
+ownership.
 
-Everything before that point has still been applied. Do the storage half from
+Everything before that point has still been applied. Do the refused part from
 the dashboard, which runs as an owner and will be allowed:
 
 1. **Storage → New bucket.** Name it exactly `vr-project-files`. Leave
@@ -165,6 +170,8 @@ the dashboard, which runs as an owner and will be allowed:
    `supabase/migrations/20261008000400_projects.sql`, copy the part from
    `-- ---------- storage policies ----------` to the end of the last
    `create policy` block, paste it, and run it.
+3. Same again for `supabase/migrations/20261008000500_video_transfer.sql`: the
+   two `create policy ... on realtime.messages` blocks.
 
 Then carry on. `npm run test:rls` checks the result either way — it reads the
 policies back out of the database rather than out of the files — so you do not
@@ -199,7 +206,7 @@ if it is wrong the app just looks empty with no error.
 npm run test:rls
 ```
 
-This creates three throwaway users and tries 292 ways to get at data that is not
+This creates three throwaway users and tries 306 ways to get at data that is not
 theirs, then deletes them. Two of the three are ViralRadar users; the third is
 signed in but not on the allowlist, standing in for a tracebug account. It also
 breaks seven security rules on purpose inside a transaction, checks the test
@@ -213,10 +220,15 @@ upload is refused, that the other user — in the same bucket — is unaffected,
 that being full still lets you delete, or there would be no way back. All of it
 is rolled back or deleted at the end.
 
+It also checks the private channel your two devices signal on, in both
+directions, and reads the policies back out of the database rather than out of
+the migration files — which is the one assertion in there that tells you a
+migration was really applied.
+
 What you want to see at the end:
 
 ```
-assertions: 292 passed, 0 failed
+assertions: 306 passed, 0 failed
 proofs:     7 passed, 0 failed
 
 PASS - a user can only reach their own rows, and the test can detect it when that breaks.
@@ -587,6 +599,61 @@ Two things worth knowing:
   25 MB per-file limit, and appearing in the Share sheet for something that
   would then be refused would be worse than not appearing at all.
 
+### Step 14c. Test a video transfer (this one is on you)
+
+This is the part of the app I could not test, and the only way to clear it is to
+do it. **Put both devices on the same network first** — same Wi-Fi, or your
+laptop connected to your phone's hotspot. Mobile data will not work, for the
+reasons below.
+
+1. Open ViralRadar on **both** devices, signed in to the same account.
+2. On each, **Settings → This device**, give it a name (*Laptop*, *Phone*) and
+   save. Check that each one now lists the other under **Your devices**. If it
+   does not, nothing else here will work — see the troubleshooting table.
+3. On one device open any project folder → **Send a video → Choose a video…**
+   Pick something small the first time, 20–50 MB, so a failure costs seconds.
+4. Pick the other device. It should show an **Incoming video** card within a
+   second or two. Accept it.
+   - On a **laptop** you are asked where to save it first. That is deliberate:
+     the file is written straight to disk as it arrives, and the browser only
+     allows that to be set up from a click.
+   - On **Android** it downloads when it finishes.
+5. Watch the progress bar, the speed and the time left. Then the verdict:
+
+```
+✓ Identical to original
+SHA-256 e3b0c44298fc1c14...
+```
+
+6. **Check that digest yourself**, on both files. This is the whole claim:
+
+```
+Windows   certutil -hashfile video.mp4 SHA256
+macOS     shasum -a 256 video.mp4
+Linux     sha256sum video.mp4
+```
+
+   Both should match each other and match what ViralRadar showed. If they do,
+   nothing was re-encoded, resized or lost.
+
+7. The folder now holds a 📹 note — name, size, digest, which devices have it.
+   **Not the video.** Check **Settings → Project files**: the figure must not
+   have moved, because nothing was uploaded.
+
+Then try the awkward cases, which are the ones worth knowing about:
+
+- **Press Stop half way.** It should stop at once, say nothing was saved, and
+  leave no part-written file. Starting again starts from the beginning — it does
+  not resume.
+- **Something big**, 1 GB or more, laptop to laptop. This is where streaming to
+  disk earns its keep.
+- **Big to a phone.** It should warn you *before* starting that the phone has to
+  hold the whole thing in memory. Believe the warning.
+- **Both devices on mobile data.** Expect it to fail after fifteen seconds with
+  a message about same Wi-Fi and LocalSend. That is the design, not a fault:
+  getting through carrier NAT needs a relay server, a relay carries every byte
+  of every video, and there is no free one.
+
 ## Step 15. Close the door (optional)
 
 **ViralRadar is already closed** without this step. The allowlist from Step 6b
@@ -660,6 +727,10 @@ watcher is a convenience, not a requirement.
   up on its own: one file can be at most 25 MB, and files in a project marked
   **Posted** are deleted fourteen days later by the nightly job. Raw video is
   never uploaded at all.
+- **Video transfer costs nothing and counts against nothing.** The two devices
+  talk to each other directly; Supabase only carries a few kilobytes of
+  handshake. Sending a 4 GB export uses none of the 300 MB, none of the database
+  and none of the bandwidth allowance.
 - **Backups**: Settings → Download backup gives you one JSON file with
   everything. Worth doing occasionally; free Supabase keeps no backups of its own.
 - **Expect the free AI models to move.** In the few days this was built, one
@@ -683,8 +754,13 @@ watcher is a convenience, not a requirement.
   time it shows you a file.
 - **Touching a storage policy that is not named `vr_...`.** `storage.objects` is
   one table shared with tracebug, and the others are tracebug's.
-- **Uploading raw video.** It does not fit, and that is the point: Part 2 sends
-  video from one device straight to the other without it being stored anywhere.
+- **Uploading raw video.** It does not fit, and that is the point: a video goes
+  from one device straight to the other without being stored anywhere.
+- **Touching a policy on `realtime.messages` that is not named `vr_...`.** Same
+  reason as storage: one shared table, and the others are tracebug's.
+- **Adding a TURN server to make mobile data work.** A relay carries every byte
+  of every video, which is both a bill and a thing standing between your two
+  devices. Same Wi-Fi, or LocalSend.
 
 ---
 
@@ -716,6 +792,13 @@ watcher is a convenience, not a requirement.
 | A shared screenshot never appears in the Inbox | Open the app directly — a share waits on the device until the app next opens with a connection, and that is when it is uploaded. |
 | **Settings → Project files** says it cannot read how much is used | `storage_used()` was not created, or `viralradar` is missing from Exposed schemas. `npm run inspect:db` distinguishes the two. |
 | **Clean up now** says the function is not deployed | `npx supabase functions deploy vr-purge-project-files --use-api` (Step 10). |
+| **Your devices** says nothing else is online, but the other device is open | Both have to be signed in to the *same account* and have finished loading. If it persists, the `realtime.messages` policies did not get applied — see Step 3 → "If `db push` fails on a policy outside the viralradar schema". `npm run test:rls` says which. |
+| "Could not open the channel your devices use to find each other" | The two `vr_devices_*` policies are missing, so Realtime refuses the private channel. Same fix as above. Nothing else in the app is affected. |
+| A transfer gets stuck on "Connecting…" and then gives up after 15 seconds | The two devices are not on the same network. Mobile data essentially never works — it needs a relay server and there is no free one. Same Wi-Fi; or connect your laptop to your phone's hotspot, which puts them on one network; or use LocalSend. |
+| "The copy does not match the original" | Some bytes arrived wrong and the file was thrown away, which is correct. Try again. If it happens twice on the same file, tell me — that is worth looking at. |
+| A big transfer to a phone dies near the end | The phone has to hold the whole file in memory before it can save it; ViralRadar warns about this before starting. Send to a laptop instead. |
+| The incoming video card never appears on the other device | It is already busy with another transfer (one at a time, by design) — or that device's app is on an old service worker. Reload it. |
+| Where did my video go? | Nowhere near Supabase — that is the point. On a laptop, where you chose to save it; on Android, Downloads. The folder keeps only a 📹 note about it. |
 
 When in doubt, paste the exact message to me — I would rather see the real error
 than guess from a description.

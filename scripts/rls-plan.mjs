@@ -56,6 +56,10 @@ export const ITEM_ID = {
   A_OLD_FILE: 'aaaa0002-0000-4000-8000-00000000aaaa',
   A_NEW_FILE: 'aaaa0003-0000-4000-8000-00000000aaaa',
   B_OLD_FILE: 'bbbb0002-0000-4000-8000-00000000bbbb',
+  // A two gigabyte video B transferred between its own devices, recorded as a
+  // row with no bytes anywhere. Needed so "A cannot see how many videos B has"
+  // is about the policies rather than about an empty table.
+  B_VIDEO: 'bbbb0003-0000-4000-8000-00000000bbbb',
 };
 
 export const BUCKET = 'vr-project-files';
@@ -730,6 +734,146 @@ export function buildPlan({ A, B, C }) {
     sql: 'select storage_path from viralradar.project_files_due($1, 14)',
     params: [A],
     expect: { rowCount: 0 },
+  });
+
+  // ---- videos, which are recorded but never stored ----
+  //
+  // A video_ref is the one row in this schema that makes a claim about
+  // something the database cannot see: a file on two devices, and that it
+  // arrived unchanged. So the constraints are the strictest here, and these
+  // assertions are about the constraints rather than about the policies.
+  const videoCols = 'user_id, id, project_id, kind, file_name, size_bytes, sha256, devices';
+  const DIGEST = 'a'.repeat(64);
+
+  add({
+    name: 'video_ref: a two gigabyte video can be recorded, because no bytes are stored',
+    as: 'A', table: 'project_items', sim: 'video-ref-own', owner: 'A',
+    // The 25 MB limit is about Storage. If it applied here, the one thing Part 2
+    // exists for could never be written down.
+    sql: `insert into viralradar.project_items (${videoCols})
+          values ($1, $2, '${PROJECT_ID.A}', 'video_ref', 'export.mp4', 2147483648, $3, array['Laptop','Phone'])
+          returning id`,
+    params: [A, 'ffff0010-0000-4000-8000-00000000ffff', DIGEST],
+    expect: { rowCount: 1 },
+  });
+  add({
+    name: 'video_ref: one that points at a file in Storage is refused',
+    as: 'A', table: 'project_items', sim: 'video-ref-stored', owner: 'A',
+    // A storage_path would mean a download button for bytes that are not there
+    // — and would be a way to smuggle a 2 GB row past the size limit.
+    sql: `insert into viralradar.project_items (${videoCols}, storage_path)
+          values ($1, $2, '${PROJECT_ID.A}', 'video_ref', 'export.mp4', 2147483648, $3, array['Laptop'], $4)`,
+    params: [A, 'ffff0011-0000-4000-8000-00000000ffff', DIGEST, objectPath(A, PROJECT_ID.A, 'export.mp4')],
+    expect: { errorCode: '23514' },
+  });
+  add({
+    name: 'video_ref: one with no digest is refused, because it would claim to be verified',
+    as: 'A', table: 'project_items', sim: 'video-ref-undigested', owner: 'A',
+    sql: `insert into viralradar.project_items (user_id, id, project_id, kind, file_name, size_bytes, devices)
+          values ($1, $2, '${PROJECT_ID.A}', 'video_ref', 'export.mp4', 2147483648, array['Laptop'])`,
+    params: [A, 'ffff0012-0000-4000-8000-00000000ffff'],
+    expect: { errorCode: '23514' },
+  });
+  add({
+    name: 'video_ref: one held by no device is refused',
+    as: 'A', table: 'project_items', sim: 'video-ref-nowhere', owner: 'A',
+    sql: `insert into viralradar.project_items (${videoCols})
+          values ($1, $2, '${PROJECT_ID.A}', 'video_ref', 'export.mp4', 2147483648, $3, array[]::text[])`,
+    params: [A, 'ffff0013-0000-4000-8000-00000000ffff', DIGEST],
+    expect: { errorCode: '23514' },
+  });
+  add({
+    name: 'video_ref: C cannot record a video, even in a folder of its own',
+    as: 'C', table: 'project_items', sim: 'video-ref-not-allowed', owner: 'C',
+    sql: `insert into viralradar.project_items (${videoCols})
+          values ($1, $2, '${PROJECT_ID.C}', 'video_ref', 'export.mp4', 100, $3, array['Phone'])`,
+    params: [C, 'ffff0014-0000-4000-8000-00000000ffff', DIGEST],
+    expect: { errorCode: '42501' },
+  });
+  add({
+    name: "video_ref: A cannot see how many videos B has recorded",
+    as: 'A', table: 'project_items', sim: 'video-totals-other', owner: 'B',
+    sql: 'select videos::int from viralradar.project_video_totals($1)',
+    params: [B],
+    expect: { rowCount: 0 },
+  });
+
+  // ---- the private channel the two devices signal on ----
+  //
+  // WHAT THESE CAN AND CANNOT PROVE
+  //   realtime.topic() reads a setting the Realtime server puts on the
+  //   connection, and this suite is talking to Postgres directly — so the
+  //   setting can be made here, and the gate the policy applies really is
+  //   exercised against real auth.uid() and real is_allowed() values.
+  //
+  //   What is NOT proved is that Realtime consults the policy at all; that is
+  //   the Realtime server's behaviour and only two real devices can show it.
+  //   So the policies themselves are also read back out of the catalogue, as
+  //   configuration, rather than being taken on trust from the migration file.
+  const gate = (topic) => `with chosen as materialized (select set_config('realtime.topic', ${topic}, true))
+     select (realtime.topic() = 'vr-devices-' || auth.uid()::text
+             and (select viralradar.is_allowed())) as allowed
+     from chosen`;
+
+  for (const me of ['A', 'B']) {
+    const them = OTHER[me];
+    add({
+      name: `signalling: ${me} is allowed on ${me}'s own channel`,
+      as: me, table: 'realtime.messages', sim: 'signal-own', owner: me,
+      sql: gate('$1'),
+      params: [`vr-devices-${uid[me]}`],
+      expect: { rows: [{ allowed: true }] },
+    });
+    add({
+      name: `signalling: ${me} is not allowed on ${them}'s channel`,
+      as: me, table: 'realtime.messages', sim: 'signal-other', owner: them,
+      // The topic IS the authorisation. Being able to guess the name of
+      // someone else's channel must buy nothing: a session description
+      // carries both devices' IP addresses.
+      sql: gate('$1'),
+      params: [`vr-devices-${uid[them]}`],
+      expect: { rows: [{ allowed: false }] },
+    });
+  }
+  add({
+    name: 'signalling: a channel name that is not a user id is allowed to nobody',
+    as: 'A', table: 'realtime.messages', sim: 'signal-junk', owner: null,
+    sql: gate("'vr-devices-everyone'"),
+    params: [],
+    expect: { rows: [{ allowed: false }] },
+  });
+  add({
+    name: 'signalling: C is signed in but not on the allowlist, and is allowed on no channel',
+    as: 'C', table: 'realtime.messages', sim: 'signal-not-allowed', owner: 'C',
+    sql: gate('$1'),
+    params: [`vr-devices-${C}`],
+    expect: { rows: [{ allowed: false }] },
+  });
+
+  // The two policies really exist, named as expected, saying what they should.
+  // Read as the owner, from the catalogue rather than from the migration file:
+  // this is the only check here that a migration was actually applied.
+  add({
+    name: 'signalling: the two policies exist on realtime.messages, for the right verbs',
+    as: 'owner', table: 'realtime.messages', sim: 'signal-policies', owner: null,
+    sql: `select policyname, cmd from pg_policies
+          where schemaname = 'realtime' and tablename = 'messages'
+            and policyname in ('vr_devices_read', 'vr_devices_write')
+          order by policyname`,
+    params: [],
+    expect: { rows: [{ policyname: 'vr_devices_read', cmd: 'SELECT' }, { policyname: 'vr_devices_write', cmd: 'INSERT' }] },
+  });
+  add({
+    name: 'signalling: both policies tie the channel to the caller and check the allowlist',
+    as: 'owner', table: 'realtime.messages', sim: 'signal-policy-text', owner: null,
+    sql: `select count(*)::int as n from pg_policies
+          where schemaname = 'realtime' and tablename = 'messages'
+            and policyname in ('vr_devices_read', 'vr_devices_write')
+            and (coalesce(qual, '') || coalesce(with_check, '')) like '%vr-devices-%'
+            and (coalesce(qual, '') || coalesce(with_check, '')) like '%auth.uid()%'
+            and (coalesce(qual, '') || coalesce(with_check, '')) like '%is_allowed%'`,
+    params: [],
+    expect: { rows: [{ n: 2 }] },
   });
 
   return plan;

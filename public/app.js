@@ -13,6 +13,11 @@ import {
   MAX_FILE_BYTES, POSTED_RETENTION_DAYS, TOTAL_BYTES_CAP,
   checkUpload, cleanDeviceName, downloadUrl, formatBytes, guessDeviceName, itemPreview, usageSummary,
 } from './shared/projects.mjs';
+import {
+  BIG_FILE_BYTES, SIGNAL, TransferCancelled,
+  acceptPrompt, formatDuration, sendWarning, videoRefSummary,
+} from './shared/transfer.mjs';
+import { canStreamToDisk, newPeerId, pickSink, receiveFrom, sendTo } from './transfer.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -101,7 +106,12 @@ $('#themeBtn').addEventListener('click', () => {
 });
 
 // ---------- who is signed in ----------
-const state = { session: null, settings: null, stopLive: null, stopProjectLive: null };
+const state = {
+  session: null, settings: null, stopLive: null, stopProjectLive: null,
+  // The device channel, this tab's peer id, and which of my other devices are
+  // online. See the video transfer section.
+  devices: null, peerId: null, peers: [], deviceError: '',
+};
 const userId = () => state.session?.user?.id ?? null;
 
 // ---------- which device this is ----------
@@ -157,6 +167,7 @@ function stopLive() {
   state.stopLive = null;
   if (state.stopProjectLive) state.stopProjectLive();
   state.stopProjectLive = null;
+  stopDevices();
   clearTimeout(liveTimer);
 }
 
@@ -805,7 +816,7 @@ actions.resultDim = (btn) => { resultDim = btn.dataset.v; render(); };
 // project, and Part 2 sends it device to device instead.
 
 const PROJECT_STATUSES = [['active', 'Active'], ['posted', 'Posted'], ['archived', 'Archived']];
-const ITEM_ICON = { text: '📝', link: '🔗', image: '🖼️', file: '📎' };
+const ITEM_ICON = { text: '📝', link: '🔗', image: '🖼️', file: '📎', video_ref: '📹' };
 
 async function renderProjects(params) {
   if (params[0]) return renderProjectDetail(params[0]);
@@ -892,12 +903,19 @@ async function renderProjectDetail(id) {
   const rows = list.map((item) => {
     const icon = ITEM_ICON[item.kind] || '📎';
     const url = urls.get(item.id) || '';
+    // A video_ref's size is in its own summary line, so it is not repeated here.
     const meta = [item.from_device && `from ${item.from_device}`, ago(item.created_at),
-      item.size_bytes && formatBytes(item.size_bytes)].filter(Boolean).join(' · ');
+      item.kind !== 'video_ref' && item.size_bytes && formatBytes(item.size_bytes)].filter(Boolean).join(' · ');
 
     let body = '';
     let buttons = '';
-    if (item.kind === 'text') {
+    if (item.kind === 'video_ref') {
+      // A note that a video exists, and that it arrived unchanged. The video
+      // itself was never uploaded — it went device to device.
+      body = `<div class="item-text">${esc(item.file_name)}</div>
+        <div class="muted small">${esc(videoRefSummary(item))}</div>`;
+      buttons = copyBtn(item.sha256 || '', 'Copy SHA-256');
+    } else if (item.kind === 'text') {
       body = `<div class="item-text">${esc(item.content)}</div>`;
       buttons = copyBtn(item.content, 'Copy');
     } else if (item.kind === 'link') {
@@ -954,11 +972,42 @@ async function renderProjectDetail(id) {
       <div id="projectResult"></div>
     </div>
 
-      <p class="muted small" style="margin:0">Raw video is never uploaded — it would not fit in this app's share of a
-        shared Supabase project. Part 2 sends video straight from one device to the other.</p>
+    <div class="card stack" style="margin-bottom:16px">
+      <div class="row" style="justify-content:space-between">
+        <h2 style="margin:0;font-size:1rem">📹 Send a video to your other device</h2>
+        <button type="button" class="primary" data-action="sendVideo" data-id="${esc(project.id)}">Choose a video…</button>
+      </div>
+      <input type="file" id="videoFile" accept="video/*" hidden>
+      ${devicesLine()}
+      <p class="muted small" style="margin:0">The video goes straight from this device to the other one — it is never
+        uploaded, so its size does not matter and nothing is re-encoded. Both ends work out the file's SHA-256 as it
+        goes past and compare them, so “identical to the original” is checked rather than assumed. Only a note saying
+        the video exists is saved here.</p>
+    </div>
 
     ${list.length ? `<ul class="items">${rows}</ul>`
       : '<div class="empty"><span class="big">📥</span>Nothing here yet.<br>Send a note from this device, or share something into ViralRadar from your phone.</div>'}`;
+}
+
+/**
+ * Which of my devices are online, in one line.
+ *
+ * Shown wherever sending a video is offered, because "nothing happens when I
+ * press the button" is almost always "the other device is not open", and that
+ * is worth saying before the button is pressed rather than after.
+ */
+function devicesLine() {
+  if (state.deviceError) {
+    return `<div class="notice small">${esc(state.deviceError)}</div>`;
+  }
+  const peers = state.peers || [];
+  if (!peers.length) {
+    return `<p class="muted small" style="margin:0">Nothing else is online. Open ViralRadar on your other device,
+      signed in to the same account, and it will appear here within a second or two.
+      Both devices need to be on the same Wi-Fi for a transfer to connect.</p>`;
+  }
+  return `<p class="small" style="margin:0">Online now: ${peers.map((p) =>
+    `<b>${esc(p.device)}</b>${p.canStream ? '' : ' <span class="muted">(downloads rather than saving to disk)</span>'}`).join(', ')}</p>`;
 }
 
 actions.setProjectStatus = async (btn) => {
@@ -1073,6 +1122,19 @@ afterRender.projects = () => {
       if (projectId) await uploadFiles(projectId, files);
     });
   }
+  // Choosing a video does not start anything: it opens the panel asking which
+  // device to send it to, so the size and the warnings can be seen first.
+  const video = $('#videoFile');
+  if (video) {
+    video.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      e.target.value = '';
+      if (!file) return;
+      transfer.file = file;
+      transfer.stage = 'offering';
+      drawTransfer();
+    });
+  }
   // Ctrl/Cmd+Enter sends, because a note worth sending is often several lines.
   const box = $('#sendBox');
   if (box) {
@@ -1084,6 +1146,340 @@ afterRender.projects = () => {
     });
   }
 };
+
+// ================= SENDING A VIDEO BETWEEN DEVICES =================
+//
+// A video export is hundreds of megabytes to a few gigabytes. This Supabase
+// project has about 1 GB of file storage for two apps and ViralRadar keeps to
+// 300 MB of it, so the video never goes to a server at all: the two devices
+// open a WebRTC data channel and the bytes go between them. All that reaches
+// the database is a row saying it exists and which devices hold it.
+//
+// The panel lives in #transfer, outside #view, because a transfer can take half
+// an hour and every render replaces #view. Moving between screens must not kill
+// one — that would be the worst possible moment to lose it.
+//
+// Everything that decides anything is in shared/transfer.mjs and is tested in
+// Node, including a corrupted byte and a cancel half way. What is here is the
+// screen.
+
+const panel = $('#transfer');
+
+// One transfer at a time, on purpose. Two 2 GB transfers over one Wi-Fi link
+// are slower than two in sequence, and on a phone they are two ways to run out
+// of memory instead of one.
+const transfer = {
+  // 'idle' | 'offering' | 'invited' | 'asking' | 'connecting' | 'sending' | 'receiving' | 'done' | 'failed'
+  stage: 'idle',
+  file: null,
+  projectId: null,
+  invite: null,
+  progress: null,
+  message: '',
+  verdict: null,
+  cancelled: false,
+};
+
+const resetTransfer = (patch = {}) => {
+  Object.assign(transfer, {
+    stage: 'idle', file: null, projectId: null, invite: null,
+    progress: null, message: '', verdict: null, cancelled: false,
+  }, patch);
+  drawTransfer();
+};
+
+const busy = () => ['asking', 'connecting', 'sending', 'receiving'].includes(transfer.stage);
+
+function drawTransfer() {
+  if (transfer.stage === 'idle') {
+    panel.hidden = true;
+    panel.innerHTML = '';
+    return;
+  }
+  panel.hidden = false;
+
+  // ---- an offer arriving from the other device ----
+  if (transfer.stage === 'invited') {
+    const { ask, warning } = acceptPrompt(transfer.invite);
+    panel.innerHTML = `
+      <div class="transfer-card">
+        <h3>📹 Incoming video</h3>
+        <p class="small">${esc(ask)}</p>
+        ${warning ? `<div class="notice">${esc(warning)}</div>` : ''}
+        <p class="muted small">${canStreamToDisk()
+          ? 'You will be asked where to save it before it starts.'
+          : 'It will download when it finishes, so it has to fit in memory first.'}</p>
+        <div class="row">
+          <button type="button" class="primary" data-action="acceptVideo">Accept</button>
+          <button type="button" data-action="declineVideo">No thanks</button>
+        </div>
+      </div>`;
+    return;
+  }
+
+  // ---- picking which device to send to ----
+  if (transfer.stage === 'offering') {
+    const peers = state.peers || [];
+    const warnings = new Map(peers.map((p) => [p.id, sendWarning({ size: transfer.file.size, target: p })]));
+    panel.innerHTML = `
+      <div class="transfer-card">
+        <h3>📹 Send “${esc(transfer.file.name)}”</h3>
+        <p class="muted small">${esc(formatBytes(transfer.file.size))} · sent straight to the other device, never uploaded.</p>
+        ${peers.length ? `<div class="stack">${peers.map((p) => `
+          <div class="peer">
+            <button type="button" class="primary" data-action="sendVideoTo" data-id="${esc(p.id)}">➤ ${esc(p.device)}</button>
+            ${warnings.get(p.id) ? `<div class="notice small">${esc(warnings.get(p.id))}</div>`
+              : `<span class="muted small">${p.canStream ? 'can save straight to disk' : 'saves by downloading'}</span>`}
+          </div>`).join('')}</div>`
+          : `<div class="notice">None of your other devices are online. Open ViralRadar on the other
+               device — signed in, on the same Wi-Fi — and it will appear here.</div>`}
+        <div class="row"><button type="button" data-action="cancelVideo">Cancel</button></div>
+      </div>`;
+    return;
+  }
+
+  // ---- in flight ----
+  const p = transfer.progress;
+  const percent = p ? p.percent : 0;
+  const heading = transfer.stage === 'receiving' ? '📥 Receiving' : transfer.stage === 'sending' ? '📤 Sending' : '🔗 Connecting';
+  const name = transfer.file ? transfer.file.name : (transfer.invite && transfer.invite.name) || 'video';
+
+  if (busy()) {
+    panel.innerHTML = `
+      <div class="transfer-card">
+        <h3>${heading} “${esc(name)}”</h3>
+        <div class="bar" role="progressbar" aria-valuenow="${Math.round(percent)}" aria-valuemin="0" aria-valuemax="100">
+          <div class="fill" style="width:${percent}%"></div>
+        </div>
+        <p class="small">${esc(p ? p.text : transfer.message || 'Finding the other device…')}</p>
+        ${transfer.stage === 'connecting' ? `<p class="muted small">Up to ${Math.round(15)} seconds. Both devices need to be on the same network.</p>` : ''}
+        <div class="row"><button type="button" data-action="cancelVideo">Stop</button></div>
+      </div>`;
+    return;
+  }
+
+  // ---- the verdict ----
+  const good = transfer.stage === 'done';
+  panel.innerHTML = `
+    <div class="transfer-card ${good ? 'good' : 'bad'}">
+      <h3>${good ? '✓ Identical to original' : 'Transfer failed'}</h3>
+      <p class="small">${esc(transfer.message)}</p>
+      ${transfer.verdict ? `<p class="muted small digest">${esc(transfer.verdict)}</p>` : ''}
+      <div class="row"><button type="button" class="primary" data-action="closeTransfer">Close</button></div>
+    </div>`;
+}
+
+panel.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-action]');
+  if (!btn) return;
+  const fn = actions[btn.dataset.action];
+  if (fn) { e.preventDefault(); fn(btn, e); }
+});
+
+actions.closeTransfer = () => resetTransfer();
+
+actions.cancelVideo = () => {
+  // The send loop and the receiver both check this; neither leaves a partial
+  // file behind, which is what makes "nothing was saved" true.
+  transfer.cancelled = true;
+  if (transfer.stage === 'offering') resetTransfer();
+  else transfer.message = 'Stopping…';
+  drawTransfer();
+};
+
+// ---- sending ----
+
+actions.sendVideo = (btn) => {
+  if (busy()) { toast('One transfer at a time. Wait for the current one to finish.', true); return; }
+  const peers = state.peers || [];
+  if (!state.devices) {
+    toast('Your devices cannot find each other yet. Reload and try again.', true);
+    return;
+  }
+  if (!peers.length) {
+    toast('No other device is online. Open ViralRadar on the other one first.', true, 7000);
+  }
+  transfer.projectId = btn.dataset.id;
+  $('#videoFile').click();
+};
+
+actions.sendVideoTo = async (btn) => {
+  const peer = (state.peers || []).find((p) => p.id === btn.dataset.id);
+  if (!peer) { toast('That device has gone offline.', true); return; }
+
+  const file = transfer.file;
+  const projectId = transfer.projectId;
+  transfer.cancelled = false;
+  transfer.stage = 'asking';
+  transfer.message = `Asking ${peer.device}…`;
+  drawTransfer();
+
+  try {
+    const result = await sendTo({
+      signaling: state.devices,
+      me: state.peerId,
+      peer,
+      file,
+      cancelled: () => transfer.cancelled,
+      onStage: (stage) => {
+        transfer.stage = stage === 'asking' ? 'asking' : stage === 'connecting' ? 'connecting' : 'sending';
+        drawTransfer();
+      },
+      onProgress: (progress) => { transfer.progress = progress; drawTransfer(); },
+    });
+
+    // The row goes in only now, with the digest both ends agreed on.
+    try {
+      await data.items.addVideoRef({
+        projectId,
+        name: file.name,
+        size: file.size,
+        sha256: result.sha256,
+        devices: [deviceName(), peer.device],
+        fromDevice: deviceName(),
+      });
+    } catch (e) {
+      toast(`Sent, but the note could not be saved: ${e.message}`, true, 9000);
+    }
+
+    transfer.stage = 'done';
+    transfer.message = `“${file.name}” reached ${peer.device} unchanged. ${formatBytes(file.size)} sent.`;
+    transfer.verdict = `SHA-256 ${result.sha256}`;
+    drawTransfer();
+    if (currentRoute() === 'projects') render();
+  } catch (e) {
+    transfer.stage = 'failed';
+    transfer.message = e instanceof TransferCancelled
+      ? 'You stopped the transfer. Nothing was saved on the other device.'
+      : e.message;
+    transfer.verdict = null;
+    drawTransfer();
+  }
+};
+
+// ---- receiving ----
+
+function onVideoOffer(message) {
+  if (busy()) {
+    // Politely refuse rather than silently ignore, so the other device is not
+    // left waiting fifteen seconds for an answer that is not coming.
+    state.devices.send({
+      type: SIGNAL.DECLINE, transferId: message.transferId, from: state.peerId, to: message.from,
+      reason: `${deviceName()} is busy with another transfer.`,
+    });
+    return;
+  }
+  transfer.invite = { ...message, from: peerName(message.from) };
+  transfer.stage = 'invited';
+  drawTransfer();
+  toast(`${peerName(message.from)} wants to send you a video.`, false, 8000);
+}
+
+const peerName = (id) => ((state.peers || []).find((p) => p.id === id) || {}).device || 'Your other device';
+
+actions.declineVideo = () => {
+  const message = transfer.invite;
+  if (message) {
+    state.devices.send({
+      type: SIGNAL.DECLINE, transferId: message.transferId, from: state.peerId, to: message.from,
+      reason: `${deviceName()} declined.`,
+    });
+  }
+  resetTransfer();
+};
+
+actions.acceptVideo = async (btn) => {
+  const message = transfer.invite;
+  if (!message) { resetTransfer(); return; }
+  btn.disabled = true;
+
+  // Where it goes is chosen NOW, while this click still counts as a gesture:
+  // showSaveFilePicker() needs one, and there will not be another twenty
+  // minutes into a transfer.
+  let sink;
+  try {
+    sink = await pickSink(message.name || 'video.mp4');
+  } catch {
+    // The person closed the file picker. That is a decline, not a failure.
+    actions.declineVideo();
+    return;
+  }
+
+  transfer.cancelled = false;
+  transfer.stage = 'connecting';
+  transfer.message = 'Connecting to the other device…';
+  drawTransfer();
+
+  try {
+    const result = await receiveFrom({
+      signaling: state.devices,
+      me: state.peerId,
+      peer: message.from,
+      transferId: message.transferId,
+      sink,
+      expect: { size: message.size },
+      // Stop is a flag, polled on both sides, because neither a connection
+      // being set up nor a sender that has gone quiet gives any other moment
+      // at which it could be noticed.
+      cancelled: () => transfer.cancelled,
+      onStage: (stage) => { transfer.stage = stage === 'connecting' ? 'connecting' : 'receiving'; drawTransfer(); },
+      onProgress: (progress) => { transfer.progress = progress; drawTransfer(); },
+    });
+
+    transfer.stage = 'done';
+    transfer.message = `“${result.name}” arrived unchanged — ${formatBytes(result.bytes)}.`
+      + (sink.kind === 'disk' ? ' Saved where you chose.' : ' Check your Downloads.');
+    transfer.verdict = `SHA-256 ${result.sha256}`;
+    drawTransfer();
+  } catch (e) {
+    transfer.stage = 'failed';
+    transfer.message = e instanceof TransferCancelled
+      ? 'The transfer stopped. Nothing was saved.'
+      : e.message;
+    transfer.verdict = null;
+    drawTransfer();
+    // The sink is aborted by the receiver itself, so there is nothing partial
+    // left on disk to tidy up here.
+  }
+};
+
+// ---- the channel the two devices find each other on ----
+
+async function startDevices() {
+  if (state.devices || !userId()) return;
+  state.peerId = state.peerId || newPeerId();
+  try {
+    state.devices = await data.devices.join({
+      userId: userId(),
+      peerId: state.peerId,
+      deviceName: deviceName(),
+      canStream: canStreamToDisk(),
+      onSignal: (message) => {
+        // Only the invite starts something. Everything else belongs to a
+        // transfer already under way and is handled inside it.
+        if (message.type === SIGNAL.INVITE) onVideoOffer(message);
+      },
+      onPeers: (peers) => {
+        state.peers = peers;
+        // The device list is on two screens, and the send panel shows it live.
+        if (transfer.stage === 'offering') drawTransfer();
+        if (['projects', 'settings'].includes(currentRoute())) render();
+      },
+    });
+    state.peers = state.devices.peers();
+  } catch (e) {
+    // Nothing else depends on this channel, so a failure costs only the
+    // transfer feature — and says so rather than looking like a dead button.
+    state.deviceError = e.message;
+    console.warn('[app] could not join the device channel:', e);
+  }
+}
+
+function stopDevices() {
+  if (state.devices) state.devices.leave();
+  state.devices = null;
+  state.peers = [];
+}
 
 // ---------- things shared into ViralRadar from Android ----------
 //
@@ -1440,6 +1836,11 @@ async function renderSettings() {
         <p class="muted small">Used when you send something to a project, so the other device can say
           “New from ${esc(deviceName())}”. Stored on this device only, never in the database.</p>
         <div><button type="button" class="primary" data-action="saveDevice">Save name</button></div>
+        <h3 style="margin:0;font-size:.85rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">Your devices</h3>
+        ${devicesLine()}
+        <p class="muted small">This device ${canStreamToDisk()
+          ? 'can save a received video straight to disk, so its size does not matter.'
+          : `has to hold a received video in memory before saving it, so files over ${esc(formatBytes(BIG_FILE_BYTES))} usually fail. A laptop does not have this limit.`}</p>
       </section>
 
       <section class="card stack">
@@ -1527,6 +1928,9 @@ actions.testAi = async (btn) => {
 actions.saveDevice = () => {
   const saved = setDeviceName($('#deviceName').value);
   toast(`This device is “${saved}”`);
+  // Presence is carrying the old name until this is done, so the other device
+  // would offer to send to a name that no longer exists.
+  if (state.devices) state.devices.rename(saved).catch(() => {});
   // The redraw is what makes the name the screen quotes back the new one.
   render();
 };
@@ -1648,6 +2052,12 @@ async function signedIn(session) {
   }
   startLive();
   startProjectLive();
+  // The channel the two devices find each other on. Nothing else depends on
+  // it, so it is started without being waited for: a failure costs the video
+  // feature and nothing else, and says so on the screens that offer it.
+  startDevices().then(() => {
+    if (['projects', 'settings'].includes(currentRoute())) render();
+  });
   // Say what happened before the drain starts, so a share is acknowledged
   // immediately rather than after an upload.
   reportShare();

@@ -17,6 +17,7 @@ import {
   BUCKET, INBOX_TITLE, PROJECT_STATUS,
   checkUpload, kindForFile, kindForText, safeFileName, sha256Hex, storagePath, titleForScript, usageSummary,
 } from './shared/projects.mjs';
+import { deviceTopic, readSignal, videoRefRow } from './shared/transfer.mjs';
 
 export const TABLES = { ideas: 'ideas', scripts: 'scripts', results: 'results', trends: 'trends' };
 export const LIVE_TABLES = ['ideas', 'scripts', 'results'];
@@ -488,6 +489,45 @@ export function createData(client) {
       return data?.signedUrl ?? null;
     },
 
+    /**
+     * Record that a video exists, and which devices hold it. Never the video.
+     *
+     * Sending the same video to the same folder twice should leave one note
+     * listing both devices, not two notes. That is done by reading first and
+     * merging rather than by a unique index: this row is written immediately
+     * after a transfer that may have taken half an hour, and a constraint
+     * violation at that moment would throw away the record of the one thing
+     * that did work. A duplicate note is cosmetic; losing the note is not.
+     */
+    async addVideoRef({ projectId, name, size, sha256, devices, fromDevice }) {
+      const row = videoRefRow({ projectId, name, size, sha256, devices, fromDevice });
+
+      let existing = null;
+      try {
+        const found = await run(
+          client.from('project_items').select('id, devices')
+            .eq('project_id', projectId).eq('kind', 'video_ref').eq('sha256', sha256).limit(1),
+          'look for that video',
+        );
+        existing = found && found[0];
+      } catch {
+        // Never a reason to lose the note. Worst case there are two of them.
+      }
+
+      if (existing) {
+        const merged = [...new Set([...(existing.devices || []), ...row.devices])].sort();
+        const rows = await run(
+          client.from('project_items').update({ devices: merged, from_device: row.from_device })
+            .eq('id', existing.id).select('*'),
+          'record that video',
+        );
+        return rows && rows[0];
+      }
+
+      const rows = await run(client.from('project_items').insert(row).select('*'), 'record that video');
+      return rows && rows[0];
+    },
+
     /** Files first, then the row, for the same reason as everywhere else here. */
     async remove(item) {
       if (item?.storage_path) {
@@ -542,6 +582,120 @@ export function createData(client) {
     },
     /** Delete files from projects posted more than a fortnight ago, now rather than tonight. */
     purge: () => callFunction('vr-purge-project-files', {}, 'clean up old project files'),
+  };
+
+  // ---------- my own devices ----------
+  //
+  // Two things on one Realtime channel: presence, so each device can see which
+  // of the others are online, and broadcast, which carries the WebRTC offers
+  // and ICE candidates that let them connect directly.
+  //
+  // THE CHANNEL IS PRIVATE, AND THAT MATTERS
+  //   An ordinary Realtime channel is readable by anyone with the publishable
+  //   key who knows its name, and this project's auth.users is shared with
+  //   another app. A session description contains both devices' IP addresses,
+  //   so a guessable channel would mean another account could read them and
+  //   inject offers of its own. `private: true` makes Realtime consult the
+  //   policies on realtime.messages instead, and those tie the topic to
+  //   auth.uid() — see the migration.
+  //
+  // No video goes over this channel. It carries a few kilobytes of handshake,
+  // and then the two devices talk to each other.
+
+  const devices = {
+    /**
+     * Join the channel as this device. Resolves once presence is established.
+     *
+     * `peerId` is per tab, not per device: two tabs on one laptop are two
+     * peers, and the name a person typed may well be the same on both.
+     */
+    async join({ userId, peerId, deviceName, canStream, onSignal = () => {}, onPeers = () => {} }) {
+      // A private channel is authorised by the session's own token, so the
+      // socket has to be carrying it before the subscribe.
+      try {
+        const session = await auth.session();
+        if (session?.access_token && client.realtime?.setAuth) await client.realtime.setAuth(session.access_token);
+      } catch {
+        // If this fails the subscribe below fails too, with a better message.
+      }
+
+      const channel = client.channel(deviceTopic(userId), {
+        config: {
+          private: true,
+          // Our own broadcasts coming back would have a device offering a file
+          // to itself. readSignal drops them anyway; this saves the round trip.
+          broadcast: { self: false },
+          presence: { key: peerId },
+        },
+      });
+
+      const listeners = new Set();
+
+      channel.on('broadcast', { event: 'signal' }, ({ payload }) => {
+        const message = readSignal(payload, peerId);
+        if (!message) return;
+        onSignal(message);
+        for (const listener of listeners) listener(message);
+      });
+
+      const readPeers = () => {
+        const state = channel.presenceState();
+        return Object.entries(state).flatMap(([key, entries]) => (entries || []).map((entry) => ({
+          id: entry.peerId || key,
+          device: entry.device || 'Unknown device',
+          canStream: entry.canStream === true,
+          at: entry.at || null,
+        }))).filter((p) => p.id !== peerId);
+      };
+
+      for (const event of ['sync', 'join', 'leave']) {
+        channel.on('presence', { event }, () => onPeers(readPeers()));
+      }
+
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(
+          'Could not open the channel your devices use to find each other. Reload and try again.',
+        )), 15000);
+        channel.subscribe(async (status, error) => {
+          if (status === 'SUBSCRIBED') {
+            clearTimeout(timer);
+            await channel.track({ peerId, device: deviceName, canStream: canStream === true, at: new Date().toISOString() });
+            resolve();
+            return;
+          }
+          if (['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED'].includes(status)) {
+            clearTimeout(timer);
+            reject(new Error(readable(error || { message: status }, 'reach your other devices')));
+          }
+        });
+      });
+
+      return {
+        /** The signalling port shared/transfer.mjs expects. */
+        send: (message) => channel.send({ type: 'broadcast', event: 'signal', payload: message }),
+        onMessage(listener) {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+        /** The next message that matches, or a readable failure if none comes. */
+        waitFor(matches, ms, timeoutMessage = () => 'The other device did not answer.') {
+          return new Promise((resolve, reject) => {
+            const stop = () => { listeners.delete(listener); clearTimeout(timer); };
+            const listener = (message) => {
+              if (!matches(message)) return;
+              stop();
+              resolve(message);
+            };
+            const timer = setTimeout(() => { stop(); reject(new Error(timeoutMessage())); }, ms);
+            listeners.add(listener);
+          });
+        },
+        peers: readPeers,
+        /** Keep presence honest when the name is changed in Settings. */
+        rename: (name) => channel.track({ peerId, device: name, canStream: canStream === true, at: new Date().toISOString() }),
+        leave: () => client.removeChannel(channel),
+      };
+    },
   };
 
   // ---------- Edge Functions ----------
@@ -700,7 +854,7 @@ export function createData(client) {
     },
   };
 
-  return { auth, settings, ideas, scripts, results, trends, usage, tokens, imports, ai, backup, projects, items, storage, live, liveProjects, callFunction };
+  return { auth, settings, ideas, scripts, results, trends, usage, tokens, imports, ai, backup, projects, items, storage, devices, live, liveProjects, callFunction };
 }
 
 // ---------- the real client ----------

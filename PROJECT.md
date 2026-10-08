@@ -43,6 +43,9 @@ and the source for the one-time data migration.
    └───────────┬───────────┘                  └──────────┬───────────┘
                │ reads + writes, protected by RLS        │ POST, vr_ token
                │                                         │
+               │  video: a WebRTC data channel, straight │
+               │  from one device to the other. Never    │
+               │  through Supabase, at any size.         │
    ┌───────────▼─────────────────────────────────────────▼───────────┐
    │ SUPABASE  (project "tracebug", shared with another app)         │
    │                                                                 │
@@ -54,6 +57,8 @@ and the source for the one-time data migration.
    │     vr-refresh-trends  holds YOUTUBE / GITHUB keys              │
    │     vr-purge-project-files  deletes files posted 14 days ago    │
    │  Storage  — private bucket "vr-project-files", 300 MB of ~1 GB  │
+   │  Realtime — a PRIVATE channel per user, carrying only the few   │
+   │             kilobytes of WebRTC handshake. No video, ever.      │
    │  pg_cron — 01:30 UTC (07:00 IST) → vr-refresh-trends            │
    │            02:00 UTC (07:30 IST) → vr-purge-project-files       │
    └─────────────────────────────────────────────────────────────────┘
@@ -111,7 +116,7 @@ maintained by a trigger.
 | `usage` | `(user_id, date, provider)` | units, requests — YouTube quota and AI call counts |
 | `import_tokens` | `id` | `token_hash` (SHA-256 only), label, last_used_at |
 | `projects` | `(user_id, id)` | title, `script_id`, `status` active/posted/archived, `is_inbox`, `posted_at` |
-| `project_items` | `(user_id, id)` | `project_id`, `kind` text/link/image/file, content, storage_path, file_name, mime, size_bytes, sha256, from_device, `preview` (generated) |
+| `project_items` | `(user_id, id)` | `project_id`, `kind` text/link/image/file/video_ref, content, storage_path, file_name, mime, size_bytes, sha256, `devices[]`, from_device, `preview` (generated) |
 | `allowed_users` | `user_id` | who may use ViralRadar at all |
 
 Notes that matter:
@@ -175,6 +180,26 @@ let the cap be walked past. It is checked as the row is created, so the new file
 is not yet counted: the promise is "no upload may *start* once 300 MB is held",
 which can overshoot by at most one file.
 
+### Video
+
+A video is **never stored anywhere**. `kind = 'video_ref'` is a row saying one
+exists: name, size, SHA-256, and which devices hold it. Its CHECK is the
+strictest in the schema, because it is the only row that makes a claim about
+something the database cannot see — it must have a name, a size, a digest and at
+least one device, and it must **not** have a `storage_path`. That last one is
+load-bearing twice over: a path would be a download button pointing at nothing,
+and it would be a way to smuggle a 2 GB row past the 25 MB size limit.
+
+The size limit is therefore conditional — `storage_path is null or size_bytes <=
+26214400` — so a 2 GB video_ref is legal and a 26 MB upload is not.
+
+There is deliberately **no unique index** on `(user_id, project_id, sha256)`.
+Sending the same video twice should merge into one note, and the data layer does
+that by reading first. A unique index would turn a lost race into a constraint
+violation raised *after* a half-hour transfer had succeeded, throwing away the
+record of the one thing that worked. A duplicate note is cosmetic; losing it is
+not.
+
 Files in a project marked **posted** are deleted 14 days later by a pg_cron job.
 The job does not delete anything itself: removing a row from `storage.objects`
 leaves the bytes in the bucket, still counted against the quota and now with
@@ -226,6 +251,31 @@ scoped to `authenticated`, so a browser with no session matches nothing and gets
 an empty result rather than a refusal. The RLS suite states that explicitly, so
 a future change cannot quietly turn it into a leak.
 
+**The signalling channel is the third shared table.** The two devices have to
+exchange WebRTC offers, answers and ICE candidates before they can connect, and
+those carry both devices' IP addresses. An ordinary Realtime channel is readable
+by anyone with the publishable key who knows its name, and this project's
+`auth.users` is shared — so a guessable name would not be enough. The channel is
+a **private** one (`config: { private: true }`), which makes Realtime consult
+two policies on `realtime.messages`:
+
+```sql
+realtime.topic() = 'vr-devices-' || auth.uid()::text
+and (select viralradar.is_allowed())
+```
+
+One for `select` (subscribing) and one for `insert` (broadcasting): reading
+without writing is a device that cannot answer, writing without reading is one
+that cannot hear. Same `vr_` prefix rule as storage, for the same reason.
+
+`realtime.topic()` reads a setting the Realtime server puts on the connection,
+which means the RLS suite can set it too and genuinely exercise the gate against
+real `auth.uid()` and `is_allowed()` values. What it cannot prove is that
+Realtime consults the policy at all — that is the server's behaviour, and only
+two real devices show it. So the policies are *also* read back out of
+`pg_policies`, which is the one assertion in that suite that says a migration
+was really applied.
+
 **Where the service role is used, the gates must be re-implemented by hand.** The
 import function's token path runs as the service role, which bypasses RLS
 entirely, so it:
@@ -275,6 +325,11 @@ shared/              runtime-agnostic cores — Node, Deno and the browser all u
   tokens.mjs           import tokens: generate, hash, read an Authorization header
   projects.mjs         project folders: the two storage limits, the path layout,
                        the device naming and the upload rules
+  sha256.mjs           SHA-256 a chunk at a time, so a 2 GB video can be verified
+                       without ever being in memory in one piece
+  transfer.mjs         the device-to-device protocol: chunking, backpressure,
+                       progress, the digest verdict, the warnings. Four injected
+                       ports, so whole transfers run in Node
   keys.mjs             pick a usable API key out of a bare value, list or JSON
   defaults.mjs         model names, language, length — matched to the DB defaults
   time.mjs, http.mjs
@@ -287,8 +342,9 @@ shared/              runtime-agnostic cores — Node, Deno and the browser all u
                      to say the same words.
 
 supabase/
-  migrations/        6 files: schema, policies, usage + schedule, model defaults,
-                     project folders + the storage bucket and its policies
+  migrations/        7 files: schema, policies, usage + schedule, model defaults,
+                     project folders + the storage bucket and its policies,
+                     video_ref + the private signalling channel
   tests/rls.sql      the isolation test, as one block for the dashboard
   functions/
     _shared/cors.ts    allow-list of origins, no wildcard
@@ -302,6 +358,8 @@ supabase/
 public/              the whole frontend — no build step, no framework
   index.html           every screen, as one page
   app.js               screens, sign-in, Realtime, the AI buttons, project folders
+  transfer.js          the untestable half of video transfer and nothing else:
+                       RTCPeerConnection, presence, File System Access
   data.js              every database call, with the client injected so it tests
   styles.css           one stylesheet, dark, phone-first
   sw.js                service worker: shell cached, config always fresh, and the
@@ -312,7 +370,7 @@ public/              the whole frontend — no build step, no framework
 
 scripts/             build, sync-shared, inspect-db, test-rls, rls-plan,
                      db-url, make-icons
-test/                24 files, 316 tests
+test/                26 files, 374 tests
 ```
 
 **Why `_shared/core/` is a copy.** A deployed Edge Function only receives files
@@ -355,7 +413,7 @@ kept; the cloud version changes where the data comes from and adds the AI.
 | **Radar** | trend cards by source, velocity score, Refresh now | "Write script" on any trend card |
 | **Ideas** | grouped by day, Picked / Skip, filters | **Generate ideas**, and "Write script" on an idea |
 | **Scripts** | board: To shoot → Shot → Edited → Posted, drag or arrows; detail view with teleprompter and copy buttons | arrives live when generated or imported elsewhere; the **edit plan** below the teleprompter, and **Make edit plan** when a script has none |
-| **Projects** | *new* | a folder per video: notes, links and files that reach the other device in a second. **Open project** from any script, an **Inbox** for anything shared in from Android, and a per-item note saying which device it came from |
+| **Projects** | *new* | a folder per video: notes, links and files that reach the other device in a second. **Open project** from any script, an **Inbox** for anything shared in from Android, a per-item note saying which device it came from, and **Send a video** — straight to the other device over WebRTC, with the copy checked byte for byte |
 | **Results** | totals, avg views, save rate, streak, bars by format/hook/len/CTA, top 5, full table | same numbers, computed in the browser |
 | **Import** | paste box, file upload, recent imports log | **Paste from Shorts Studio** button (clipboard), same on Ideas and Scripts |
 | **Settings** | watch folder, keywords, YouTube quota, LAN URLs, backup/restore | niche keywords, language, default length, AI order and models, **Test AI**, import token management, backup/restore, **this device's name**, and how much of the 300 MB of project files is used |
@@ -379,8 +437,11 @@ kept; the cloud version changes where the data comes from and adds the AI.
    app's Share menu. It lands in the **Inbox**.
 3. On the laptop, paste the tool's URL into the folder's Send box. The phone
    says *New from Laptop: …* a second later.
-4. Once the video is up, mark the folder **Posted**. Its files are deleted
-   fourteen days later, by itself. The notes and links stay.
+4. Shoot and edit on the phone, then **Send a video** to the laptop — or the
+   other way round. It goes device to device, and the panel says
+   *✓ Identical to original* when the digests agree.
+5. Once the video is up, mark the folder **Posted**. Its files are deleted
+   fourteen days later, by itself. The notes, links and video records stay.
 
 ---
 
@@ -437,8 +498,12 @@ and all six screens read and write the real database:
   useful without it.
 - **No folder watcher.** Phase 9, optional. *Paste from Shorts Studio* does the
   same job in one tap and works on the phone, which a watcher never could.
-- **Device-to-device video transfer is Part 2**, not built. Project folders hold
-  everything except the video itself; the video still has to be moved by hand.
+- **Video transfer has never run between two real devices.** The protocol is
+  tested end to end in Node — corrupted byte, cancel, backpressure, digest
+  mismatch — but `RTCPeerConnection` has never actually opened here, so the
+  handshake, presence, and the File System Access save path are unexercised.
+  This is the largest untested surface in the project and it needs two devices
+  on one Wi-Fi to clear.
 
 **Done by hand:** migrations pushed, schema exposed to the Data API, account
 created with a password and added to the allowlist, the three API keys
@@ -451,9 +516,11 @@ the phone.
 
 ## 10. Testing
 
-`npm test` — **316 tests**, no network, no database, no keys needed.
+`npm test` — **374 tests**, no network, no database, no keys needed. One
+more is skipped unless `VR_SLOW_TESTS=1`: it hashes 512 MB to check the digest
+at the size where the bit-length high word stops being zero.
 
-`npm run test:rls` — **292 assertions and 7 proofs** against the real Supabase
+`npm run test:rls` — **306 assertions and 7 proofs** against the real Supabase
 database. It connects as `postgres`, which owns the tables and therefore
 bypasses RLS, so every assertion runs in its own transaction that first becomes
 a real signed-in user (`SET LOCAL ROLE authenticated` plus `request.jwt.claims`)
@@ -488,9 +555,45 @@ policies and no `user_id` column:
   other's files are due
 - **rows that belong to you and are still wrong** — an item in someone else's
   folder, a path pointing outside the folder it claims, a file over 25 MB, a
-  second Inbox. RLS decides which rows you may write and says nothing about
-  whether their contents are true, so these are constraints, and they are tested
-  as such
+  second Inbox, a video claiming to be verified with no digest. RLS decides
+  which rows you may write and says nothing about whether their contents are
+  true, so these are constraints, and they are tested as such
+- **the private signalling channel**, in both directions: each user is allowed
+  on their own and refused on the other's, a channel name that is not a user id
+  is allowed to nobody, and the non-allowlisted account is allowed nowhere.
+  `realtime.topic()` reads a connection setting, so the suite can set it and
+  exercise the real gate
+
+### Testing the half that cannot be tested
+
+A video transfer involves `RTCPeerConnection`, Realtime presence and the File
+System Access API, none of which exist in Node. The usual outcome would be a
+feature with no tests at all. Instead:
+
+- **`shared/transfer.mjs` holds every decision**, behind four injected ports
+  (signaling, channel, source, sink) — the same trick the import path uses with
+  its storage port. `test/transfer.test.js` wires a sender and a receiver
+  together through fakes and runs **whole transfers in Node**: a byte corrupted
+  in flight (must refuse the file, not save it), a cancel half way (must leave
+  nothing behind), a channel that fills up (must stop the sender, not the tab),
+  a sender that lies about the size, a transfer that stops short whose digests
+  would otherwise have matched.
+- **`public/transfer.js` is only the wiring**, and a test asserts it stays that
+  way: no hashing, no digest comparison, no chunk size or threshold in it.
+  Anything that decides something there would be untested by construction.
+- **`shared/sha256.mjs` is not trusted, it is checked.** It is hand-written,
+  because `crypto.subtle.digest()` needs the whole message at once and a 2 GB
+  video cannot be. A hand-written SHA-256 that is wrong in one case would report
+  "✓ Identical to original" about a file that is not — worse than not checking.
+  So it is run against the published FIPS vectors, and then against
+  `crypto.subtle.digest()` on random data at hundreds of lengths in random chunk
+  sizes, with the padding boundaries (55, 56, 63, 64 bytes) checked by name.
+
+Other things the suite checks that are easy to get wrong:
+- every SQL file parses under the **real PostgreSQL grammar** (libpg-query)
+- migrations never touch `public` or `auth`, never drop, never delete rows
+- the cloud and local importers produce identical messages
+- the generated copies under `supabase/functions/` match their originals
 
 A deployed Edge Function cannot be run here, so it is **probed over HTTP**
 instead: a pre-flight from the real site gets CORS headers and one from any
@@ -518,6 +621,16 @@ introduced on purpose, the suite is confirmed to fail, and the file is restored.
 - One policy per verb, so a mistake can only widen one thing.
 - `(select is_allowed())` rather than `is_allowed()` so the planner evaluates it
   once per statement, not once per row.
+- **Ports wherever the platform cannot be run in Node.** The import path has a
+  storage port; a transfer has four. Both exist so the decisions can be tested
+  and the untestable layer stays thin enough to read in one sitting.
+- **A real SHA-256, not a hash of hashes.** A Merkle-style digest would also
+  stream and would be a few lines, but it would not be the file's SHA-256, so
+  it could not be checked against `sha256sum`. A number only ViralRadar can
+  produce proves nothing to anyone.
+- **No TURN relay, and the consequence stated rather than hidden.** It would
+  cost money and would carry every byte of every video. Mobile data therefore
+  does not work, so the failure message says exactly that and names LocalSend.
 
 **Mistakes found, and by what**
 
@@ -541,6 +654,46 @@ introduced on purpose, the suite is confirmed to fail, and the file is restored.
   privileges and every query came back "permission denied for schema
   viralradar", which reads like a database problem and is not. Now in
   shared/keys.mjs with its own tests.
+- *Two new shared modules were not shipped to the browser* — `sha256.mjs` and
+  `transfer.mjs` were written and imported before being added to
+  `BROWSER_SHARED`, which would have been a 404 and a blank screen. Caught
+  immediately by the test that checks every import the browser makes is really
+  copied. It also found that the rule it enforced was too strict: it forbade a
+  browser module importing another at all, which `transfer.mjs` legitimately
+  needs. The rule is now "it may, if the target is also shipped".
+- *A Stop button that would not have stopped anything* — the receiving side
+  only acts on an incoming message, so with a sender that had gone quiet the
+  flag would have been read at some indefinite future point. Written first,
+  spotted on re-reading, and now a short poll on both sides. The same pass found
+  a variable used before its `let`, which happened to work only because the
+  interval fired later.
+- *A folder list that read every note in full* — the Projects screen draws a
+  preview on each card, and the query pulled `content` to do it. A note can be
+  20,000 characters, so a few hundred of them would be megabytes over a phone
+  connection to draw a list of folders. Now a generated `preview` column. The
+  test asserting the behaviour was written before the problem was noticed and
+  had to be corrected along with it.
+- *A build-time check reported success without looking* — it treated any 401
+  as "schema exposed, anon refused", when the 401 was the project rejecting
+  the key. It said step 4 was done when it had not been.
+- *A bare `Bearer` header* was classified as a JWT and would have been forwarded
+  as one.
+- *`decodeURIComponent` throws on a stray `%`* — exactly the password that sends
+  someone looking for help would have crashed the helper meant to help them.
+- *A placeholder in a prompt is a value in the answer.* The ideas shape said
+  `"date": "YYYY-MM-DD (today)"`. Gemini filled it in sensibly; the OpenRouter
+  model copied the parenthetical, and because `date` is a real date column
+  Postgres refused the whole statement: `invalid input syntax for type date:
+  "2026-10-08 (today)"`. Found the first time the fallback ran against a second
+  live provider, and invisible until then. Fixed at both ends — the prompt now
+  carries the real date, and `dateOnly()` means nothing reaches a date column
+  without being one. Two lessons: a second model is a test the first cannot
+  perform, and a prompt is input validation.
+- *JavaScript rolls impossible dates forward.* `new Date('2026-02-31')` is
+  3 March, where Postgres rejects it. The first version of `dateOnly()` would
+  have written a date nobody typed; the test caught it on its first run, which
+  is why it checks the digits survive the round trip rather than only that
+  parsing succeeded.
 
 ---
 
@@ -588,6 +741,26 @@ introduced on purpose, the suite is confirmed to fail, and the file is restored.
   of a ~1 GB shared quota. Counting the new row would need its size, which
   `storage.objects` does not have at that point. The browser refuses at 300 MB
   long before the policy does.
+- **A transfer does not resume.** Cancelling, or a dropped connection, is clean
+  — the part-written file is discarded and no row is written — but starting
+  again starts from the beginning. Real resumption would need the partial file
+  and its byte offset to survive a tear-down, which the File System Access path
+  could manage and the Blob path could not, so it would work on a laptop and
+  not on a phone. That asymmetry was not worth shipping; "cancel is safe" is.
+- **One transfer at a time**, deliberately. Two 2 GB transfers over one Wi-Fi
+  link are slower than two in sequence, and on a phone they are two ways to run
+  out of memory instead of one. A second offer is declined with a reason rather
+  than ignored.
+- **Mobile data will not work**, and cannot be made to without a TURN relay —
+  which would have to be paid for and would carry every byte of every video.
+  The 15-second timeout says so in words and points at LocalSend. This is a
+  design decision, not a bug, but it is the thing most likely to be mistaken
+  for one.
+- **The private channel's authorisation is only half-proved.** The RLS suite
+  sets `realtime.topic()` and exercises the real gate, and reads the policies
+  back out of `pg_policies` — but whether the Realtime *server* consults them
+  can only be shown by two real devices, one of which is signed in as somebody
+  else. That test has not been run.
 
 Two things that were unknown until the first deploy, now settled: the
 `jsr:@supabase/supabase-js@2` import resolves, and `--use-api` does bundle the
@@ -610,6 +783,8 @@ Two things that were unknown until the first deploy, now settled: the
 | `npx supabase secrets list` | names and hashes of the secrets | logged in, linked |
 | `npx supabase functions deploy vr-import --use-api` | deploy a function without Docker | logged in, linked |
 
+There are four functions to deploy: `vr-import`, `vr-generate`,
+`vr-refresh-trends`, `vr-purge-project-files`.
 
 Environment: Node 24, Supabase CLI 2.120.0, PostgreSQL 17.6, project
 `tracebug` (shared with another app), region `ap-south-1`.

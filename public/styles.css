@@ -255,6 +255,29 @@ tr:last-child td { border-bottom: 0; }
 .item-link { overflow-wrap: anywhere; font-size: .92rem; }
 .item-image { max-width: 100%; max-height: 320px; border-radius: 8px; display: block; background: var(--surface-2); }
 
+/* A video transfer in progress. Fixed, because it has to survive moving
+   between screens: a half-hour transfer must not be killed by tapping Radar. */
+.transfer {
+  position: fixed; z-index: 70; left: 50%; transform: translateX(-50%);
+  bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px) + 12px);
+  width: min(92vw, 460px);
+}
+.transfer-card {
+  background: var(--surface); border: 1px solid var(--accent); border-radius: var(--radius);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .28); padding: 14px; display: grid; gap: 10px;
+}
+.transfer-card.good { border-color: var(--good); }
+.transfer-card.bad { border-color: var(--bad); }
+.transfer-card h3 { margin: 0; font-size: .98rem; }
+.transfer-card p { margin: 0; }
+.transfer-card .digest { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; font-size: .72rem; }
+.peer { display: grid; gap: 4px; }
+.peer .notice { font-size: .8rem; }
+
+/* The progress bar, which is the only thing to look at for half an hour */
+.bar { height: 10px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.bar .fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width .2s; }
+
 /* How full ViralRadar's slice of the shared project is */
 .meter { height: 8px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
 .meter .fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width .2s; }

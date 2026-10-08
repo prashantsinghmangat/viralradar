@@ -42,8 +42,34 @@ function simulate(check, leak = 'none') {
   // governs. The 25 MB per-file limit lives there and nowhere else in SQL.
   if (as === 'owner') {
     if (sim === 'bucket-config') return rows([{ is_public: false, limit_bytes: 26214400 }]);
+    // The signalling policies, read out of the catalogue. Configuration again:
+    // this is the one check that says a migration was really applied.
+    if (sim === 'signal-policies') {
+      return rows([
+        { policyname: 'vr_devices_read', cmd: 'SELECT' },
+        { policyname: 'vr_devices_write', cmd: 'INSERT' },
+      ]);
+    }
+    if (sim === 'signal-policy-text') return rows([{ n: 2 }]);
     throw new Error(`the model does not know the owner-role sim "${sim}"`);
   }
+
+  // ---- the private signalling channel ----
+  // The topic is the authorisation, so the answer depends only on whose
+  // channel it is and whether they are on the allowlist — not on any policy
+  // this model can break, which is why no leak changes these.
+  if (sim.startsWith('signal-')) {
+    if (sim === 'signal-own') return rows([{ allowed: as !== 'C' }]);
+    return rows([{ allowed: false }]);
+  }
+
+  // ---- videos, recorded but never stored ----
+  // These are constraints, not policies: a row that belongs to the right person
+  // and still describes something impossible.
+  if (sim === 'video-ref-own') return rows(as === 'C' ? [] : [{ id: 'fresh' }]);
+  if (['video-ref-stored', 'video-ref-undigested', 'video-ref-nowhere'].includes(sim)) return err('23514');
+  if (sim === 'video-ref-not-allowed') return err('42501');
+  if (sim === 'video-totals-other') return rows(canSeeAs(as, 'B', leak) ? [{ videos: 1 }] : []);
 
   // ---- files in Storage ----
   // Checked before the anon and noclaims shortcuts below, because
@@ -227,10 +253,23 @@ test('every assertion in the plan is well formed and uniquely named', () => {
     // anything about isolation, which it could not do.
     assert.ok(['A', 'B', 'C', 'anon', 'noclaims', 'owner'].includes(c.as), `${c.name}: bad "as" value ${c.as}`);
     if (c.as === 'owner') {
+      // The owner bypasses RLS, so it can prove nothing about isolation. It is
+      // allowed only for reading configuration that no policy governs: the
+      // bucket's own settings, and whether the signalling policies exist.
       assert.match(c.sql.trim(), /^select /i, 'the owner role bypasses RLS, so it may only ever read');
-      assert.equal(c.sim, 'bucket-config', `${c.name}: the owner role is only for reading the bucket settings`);
+      assert.ok(['bucket-config', 'signal-policies', 'signal-policy-text'].includes(c.sim),
+        `${c.name}: the owner role is only for reading configuration, not for ${c.sim}`);
     }
-    assert.ok(c.sql && /^(select|insert|update|delete)/i.test(c.sql.trim()), `${c.name}: missing or odd sql`);
+    // "with" is here for the signalling checks, which have to put the channel
+    // name on the connection before reading the gate that depends on it — a
+    // materialized CTE is the only way to make that order certain in one
+    // statement. Everything else is a plain verb.
+    assert.ok(c.sql && /^(select|insert|update|delete|with)/i.test(c.sql.trim()), `${c.name}: missing or odd sql`);
+    if (/^with/i.test(c.sql.trim())) {
+      assert.match(c.sql, /\bselect\b/i, `${c.name}: a CTE here must end in a read`);
+      assert.ok(!/\b(insert|update|delete)\s+(into|from|viralradar)/i.test(c.sql),
+        `${c.name}: a CTE must not be a way to smuggle a write past this check`);
+    }
     assert.ok(Array.isArray(c.params), `${c.name}: params must be an array`);
     assert.ok(c.sim, `${c.name}: missing sim label`);
     const keys = Object.keys(c.expect);
@@ -342,6 +381,60 @@ test('the plan covers the 300 MB cap, the 25 MB limit and the 14-day cleanup', (
   // The row-shape constraints, which RLS says nothing about.
   for (const sim of ['item-foreign-folder', 'item-bad-path', 'item-bad-digest', 'second-inbox']) {
     assert.ok(sims.has(sim), `missing "${sim}": a row can belong to you and still be wrong`);
+  }
+});
+
+test('the plan covers videos being recorded but never stored', () => {
+  const plan = buildPlan({ A, B, C });
+  const sims = new Set(plan.map((c) => c.sim));
+
+  // The row that says a 2 GB video exists is the whole output of Part 2, and
+  // the things that could go wrong with it are all constraints rather than
+  // policies — so they need checking by name.
+  for (const sim of ['video-ref-own', 'video-ref-stored', 'video-ref-undigested',
+    'video-ref-nowhere', 'video-ref-not-allowed', 'video-totals-other']) {
+    assert.ok(sims.has(sim), `videos are not covered: missing "${sim}"`);
+  }
+
+  // The one that matters most: a video_ref of two gigabytes must be allowed,
+  // or the feature cannot record its own result.
+  const big = plan.find((c) => c.sim === 'video-ref-own');
+  assert.match(big.sql, /2147483648/, 'the test should use a genuinely large size');
+  assert.deepEqual(big.expect, { rowCount: 1 });
+  // And a file of that size must still be refused, which is the other half.
+  const file = plan.find((c) => c.sim === 'item-too-big');
+  assert.deepEqual(file.expect, { errorCode: '23514' });
+});
+
+test('the plan covers the private channel the two devices signal on', () => {
+  const plan = buildPlan({ A, B, C });
+  const signalling = plan.filter((c) => c.table === 'realtime.messages');
+  assert.ok(signalling.length >= 6, `expected the channel to be covered, found ${signalling.length}`);
+
+  for (const sim of ['signal-own', 'signal-other', 'signal-junk', 'signal-not-allowed',
+    'signal-policies', 'signal-policy-text']) {
+    assert.ok(signalling.some((c) => c.sim === sim), `signalling: missing "${sim}"`);
+  }
+
+  // Both directions, like every other table. A session description carries both
+  // devices' IP addresses, so being able to guess the name of someone else's
+  // channel has to buy nothing.
+  for (const [me, them] of [['A', 'B'], ['B', 'A']]) {
+    const own = signalling.find((c) => c.as === me && c.sim === 'signal-own');
+    const other = signalling.find((c) => c.as === me && c.sim === 'signal-other');
+    assert.ok(own && other, `signalling: ${me} is not checked in both directions`);
+    assert.deepEqual(own.expect, { rows: [{ allowed: true }] });
+    assert.deepEqual(other.expect, { rows: [{ allowed: false }] });
+    assert.ok(other.params.some((p) => String(p).includes(uid[them])),
+      `signalling: ${me}'s cross-channel check must name ${them}'s channel`);
+  }
+
+  // The gate has to be the real one: auth.uid() and is_allowed(), not a
+  // hard-coded answer.
+  for (const c of signalling.filter((x) => x.as !== 'owner')) {
+    assert.match(c.sql, /auth\.uid\(\)/, `${c.name}: must compare against the real session`);
+    assert.match(c.sql, /is_allowed\(\)/, `${c.name}: must include the allowlist gate`);
+    assert.match(c.sql, /realtime\.topic\(\)/, `${c.name}: must read the topic the way the policy does`);
   }
 });
 

@@ -32,7 +32,8 @@ installable on your phone's home screen like an app.
   your phone to your laptop or back. Drop in the reference screenshots, the link
   to the tool, the thumbnail draft, and the line you thought of on the bus.
   Whatever you add appears on your other device a second later, saying which
-  device it came from. **Open project** on any script makes its folder.
+  device it came from. **Open project** on any script makes its folder. Videos
+  go device to device from here, with the copy checked byte for byte.
 - **Results** — totals, posting streak, your top 5, and what actually works
   broken down by format, hook, length and CTA.
 - **Import** — paste or upload a Shorts Studio export.
@@ -86,9 +87,62 @@ full it is, and an upload past either limit is refused with a message saying
 which limit and by how much.
 
 **Raw video is never uploaded.** A single export is bigger than the whole slice.
-Part 2 of this feature sends video straight from one device to the other with
-nothing in the middle; until then a folder holds everything about a video except
-the video.
+Video goes straight from one device to the other instead — see below.
+
+---
+
+## Sending a video to your other device
+
+Inside a project folder there is **Send a video**. Pick the export, pick which
+of your devices to send it to, and the file goes **straight from one device to
+the other** — it never touches a server, so its size does not matter and nothing
+is re-encoded, resized or compressed.
+
+Both devices need to be:
+
+- signed in to the same account, with ViralRadar open
+- **on the same network.** Mobile data almost never works — it needs a relay
+  server in the middle and there is no free one. Same Wi-Fi is the usual answer;
+  with no Wi-Fi to hand, **connect your laptop to your phone's hotspot** — then
+  the two devices are on the same network by definition. If they cannot find
+  each other within fifteen seconds ViralRadar says so, suggests both of those,
+  and points at [LocalSend](https://localsend.org) as a last resort.
+
+### "Identical to the original" is checked, not claimed
+
+As the file goes past, both ends work out its real **SHA-256** and compare them.
+If every byte matches you get **✓ Identical to original**; if a single byte is
+wrong the file is thrown away and it says so. Nothing half-right is ever saved —
+a video that is 99.9% right is a video that stops playing in the middle.
+
+The digest is the file's actual SHA-256, so you can check it yourself:
+
+```
+Windows   certutil -hashfile video.mp4 SHA256
+macOS     shasum -a 256 video.mp4
+Linux     sha256sum video.mp4
+```
+
+### While it runs
+
+A progress bar with the speed and the time left, and a **Stop** button that
+works immediately. Stopping is clean: the part-written file is discarded and
+nothing is recorded. It does not resume, though — starting again starts from the
+beginning.
+
+The panel stays put while you move between screens, so tapping **Radar** half
+way through a twenty-minute transfer does not kill it.
+
+### Where it lands
+
+- **On a laptop** the video is written straight to the file you chose, a piece
+  at a time, so a 4 GB file needs no more memory than a 4 KB one.
+- **On Android** there is no such API, so the whole file has to be held in
+  memory and then downloaded. ViralRadar warns before sending anything over 1 GB
+  to a phone, because that is where it tends to fail.
+
+Afterwards the folder holds a note — the name, the size, the digest and which
+devices have it. **Not the video.** That is the whole point.
 
 ---
 
@@ -139,6 +193,13 @@ the POST that Android makes when you share something into ViralRadar. The site
 is static and has no server, so without the worker there would be nothing to
 receive it.
 
+A video transfer involves no server at all. The two devices exchange a few
+kilobytes of handshake over a private Realtime channel — one per account, and
+the database policies tie it to your own user id — and then open a **WebRTC data
+channel** and talk to each other directly. Google's public STUN servers help
+them work out their own addresses; no video goes anywhere near them. There is
+deliberately no TURN relay, which is why both devices have to be on the same
+network.
 
 **More detail:** [PROJECT.md](PROJECT.md) — architecture, the data model, the
 security model, decisions, mistakes worth knowing, and current status.
@@ -152,7 +213,7 @@ deploys and the phone. It assumes nothing and says why each step exists.
 
 ```
 npm install
-npm test            # 316 tests. No network, no database, no keys needed.
+npm test            # 374 tests. No network, no database, no keys needed.
 npm run build       # builds the site into dist/ (Netlify runs this)
 ```
 
@@ -160,7 +221,7 @@ Other commands:
 
 | | |
 |---|---|
-| `npm run test:rls` | 292 assertions against the real database, proving nobody can read your rows |
+| `npm run test:rls` | 306 assertions against the real database, proving nobody can read your rows |
 | `npm run inspect:db` | what the live database actually looks like right now |
 | `npm run sync:shared` | copies `shared/` out to the function and browser folders |
 | `npm run icons` | regenerates the app icons |

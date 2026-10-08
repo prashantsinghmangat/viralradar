@@ -18,7 +18,7 @@
 --   back, on success the users are deleted explicitly.
 --
 -- THE MORE THOROUGH VERSION
---   `npm run test:rls` runs 292 assertions plus seven proofs that the test can
+--   `npm run test:rls` runs 306 assertions plus seven proofs that the test can
 --   actually detect a broken policy. This file is the quick version you can run
 --   from a browser with no tools installed.
 
@@ -381,6 +381,64 @@ begin
     when unique_violation then raise notice 'PASS  a second Inbox is refused';
   end;
 
+  -- ---------- a video is recorded, never stored ----------
+  -- A video_ref is the one row here that makes a claim about something this
+  -- database cannot see, so it is the most tightly constrained.
+  begin
+    insert into viralradar.project_items
+      (user_id, id, project_id, kind, file_name, size_bytes, sha256, devices)
+    values (a, gen_random_uuid(), proj_a, 'video_ref', 'export.mp4', 2147483648,
+            repeat('a', 64), array['Laptop', 'Phone']);
+    raise notice 'PASS  a two gigabyte video can be recorded, because no bytes are stored';
+  exception
+    when check_violation then
+      failures := failures + 1;
+      raise notice 'FAIL  a video cannot be recorded, so Part 2 cannot write down its own result';
+  end;
+
+  begin
+    insert into viralradar.project_items
+      (user_id, id, project_id, kind, file_name, size_bytes, sha256, devices, storage_path)
+    values (a, gen_random_uuid(), proj_a, 'video_ref', 'export.mp4', 2147483648,
+            repeat('a', 64), array['Laptop'], a || '/' || proj_a || '/export.mp4');
+    failures := failures + 1;
+    raise notice 'FAIL  a video_ref was allowed to point at a file in Storage';
+  exception
+    when check_violation then raise notice 'PASS  a video_ref cannot point at Storage, so it cannot smuggle 2 GB past the size limit';
+  end;
+
+  begin
+    insert into viralradar.project_items
+      (user_id, id, project_id, kind, file_name, size_bytes, devices)
+    values (a, gen_random_uuid(), proj_a, 'video_ref', 'export.mp4', 100, array['Laptop']);
+    failures := failures + 1;
+    raise notice 'FAIL  a video with no digest was recorded as verified';
+  exception
+    when check_violation then raise notice 'PASS  a video with no digest is refused, because it would claim to be verified';
+  end;
+
+  -- ---------- the private channel the two devices signal on ----------
+  -- realtime.topic() reads a setting the Realtime server puts on the
+  -- connection, so it can be set here and the gate the policy applies really is
+  -- exercised. What this cannot show is that Realtime consults the policy at
+  -- all — only two real devices can.
+  perform set_config('realtime.topic', 'vr-devices-' || a, true);
+  if realtime.topic() = 'vr-devices-' || auth.uid()::text and viralradar.is_allowed() then
+    raise notice 'PASS  A is allowed on A''s own signalling channel';
+  else
+    failures := failures + 1;
+    raise notice 'FAIL  A is not allowed on A''s own signalling channel, so no transfer could start';
+  end if;
+
+  perform set_config('realtime.topic', 'vr-devices-' || b, true);
+  if realtime.topic() = 'vr-devices-' || auth.uid()::text and viralradar.is_allowed() then
+    failures := failures + 1;
+    raise notice 'FAIL  A is allowed on B''s signalling channel, which carries both devices'' IP addresses';
+  else
+    raise notice 'PASS  A is not allowed on B''s signalling channel';
+  end if;
+  perform set_config('realtime.topic', '', true);
+
   -- ---------- a browser with no session gets nothing ----------
   perform set_config('role', 'anon', true);
   begin
@@ -470,6 +528,17 @@ begin
    where id = 'vr-project-files' and public = false and file_size_limit = 26214400;
   if n = 1 then raise notice 'PASS  the bucket is private and limits one file to 25 MB';
   else failures := failures + 1; raise notice 'FAIL  the vr-project-files bucket is missing, public, or has the wrong file size limit'; end if;
+
+  -- The signalling policies really exist, read from the catalogue rather than
+  -- taken on trust from the migration file. This is the only check here that
+  -- says the migration was actually applied.
+  select count(*) into n from pg_policies
+   where schemaname = 'realtime' and tablename = 'messages'
+     and policyname in ('vr_devices_read', 'vr_devices_write')
+     and (coalesce(qual, '') || coalesce(with_check, '')) like '%vr-devices-%'
+     and (coalesce(qual, '') || coalesce(with_check, '')) like '%is_allowed%';
+  if n = 2 then raise notice 'PASS  both signalling policies exist and tie the channel to the caller';
+  else failures := failures + 1; raise notice 'FAIL  expected 2 vr_devices policies on realtime.messages, found %', n; end if;
 
   -- ---------- clean up ----------
   -- Storage rows do not hang off auth.users, so the cascade below does not

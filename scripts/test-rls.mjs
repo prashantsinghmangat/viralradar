@@ -273,6 +273,15 @@ async function createProjectFixtures() {
   await db`insert into storage.objects (bucket_id, name, metadata)
            values (${BUCKET}, ${objectPath(uid.B, PROJECT_ID.B, 'huge.bin')},
                    ${db.json({ size: FIXTURE_BYTES.B_HUGE })})`;
+
+  // A video B transferred between its own devices: two gigabytes recorded, and
+  // not one byte of it in the bucket. B has to have one for "A cannot see how
+  // many videos B has" to be a statement about the policies rather than about
+  // an empty table.
+  await db`insert into viralradar.project_items
+             (user_id, id, project_id, kind, file_name, size_bytes, sha256, devices, from_device)
+           values (${uid.B}, ${ITEM_ID.B_VIDEO}, ${PROJECT_ID.B}, 'video_ref',
+                   'b-export.mp4', 2147483648, ${'b'.repeat(64)}, array['Laptop', 'Phone'], 'Laptop')`;
 }
 
 /**

@@ -108,7 +108,9 @@ test('user text is escaped wherever it is put into HTML', () => {
   // Values that escape for themselves, or that cannot carry user text.
   // Builders that escape whatever they are given, so their output is markup on
   // purpose rather than by accident.
-  const safe = /^(esc\(|fmt\(|compact\(|ago\(|when\(|copyBtn\(|hbars\(|format\(|renderEditPlan\(|PASTE_BUTTON\(|makeButton\(|GENERATING\[|KIND_ICON|SOURCE|LIVE_LABEL|STAGES|LENGTHS|DEFAULT_AI_ORDER)/;
+  // devicesLine() is in here with the other builders because it escapes every
+  // value it interpolates — see the test below, which holds it to that.
+  const safe = /^(esc\(|fmt\(|compact\(|ago\(|when\(|copyBtn\(|hbars\(|format\(|renderEditPlan\(|PASTE_BUTTON\(|makeButton\(|devicesLine\(|GENERATING\[|KIND_ICON|SOURCE|LIVE_LABEL|STAGES|LENGTHS|DEFAULT_AI_ORDER)/;
   const bad = [];
   for (const literal of htmlLiterals) {
     for (const m of literal.matchAll(/\$\{([^{}]*)\}/g)) {
@@ -116,7 +118,7 @@ test('user text is escaped wherever it is put into HTML', () => {
       if (!expr || safe.test(expr)) continue;
       // Nested templates, conditionals and loops are assembled from pieces that
       // are themselves checked; numbers and booleans cannot inject markup.
-      if (/\?|&&|\|\||\.map\(|\.join\(|\.filter\(|\.length|\.toFixed|\.slice|\+ 1|=== |!== |^\d/.test(expr)) continue;
+      if (/\?|&&|\|\||\.map\(|\.join\(|\.filter\(|\.length|\.toFixed|\.slice|Math\.|\+ 1|=== |!== |^\d/.test(expr)) continue;
       if (/^[a-zA-Z0-9_.[\]]+$/.test(expr) && !/\.(title|name|label|message|error|summary|topic|hook|email|url|id)\b/.test(expr)) continue;
       bad.push(expr);
     }
@@ -247,6 +249,111 @@ test('files are never served from a public URL', () => {
   // A public bucket would mean a URL that works for anyone who has it, forever.
   assert.match(datajs, /createSignedUrl/);
   assert.ok(!/getPublicUrl/.test(datajs + appjs), 'a public URL would outlive every policy in the database');
+});
+
+// ---------- sending a video between devices ----------
+
+test('devicesLine escapes every value it puts in markup', () => {
+  // It is on the safe list above, which is only true while this holds: a device
+  // name is typed by a person and goes straight into HTML.
+  const fn = appjs.slice(appjs.indexOf('function devicesLine'), appjs.indexOf('actions.setProjectStatus'));
+  const interpolations = [...fn.matchAll(/\$\{([^{}]*)\}/g)].map((m) => m[1].trim());
+  assert.ok(interpolations.length >= 2, 'expected to find the values it interpolates');
+  for (const expr of interpolations) {
+    const safe = expr.startsWith('esc(') || /\.map\(|\.join\(|\?/.test(expr);
+    assert.ok(safe, `devicesLine puts ${expr} into HTML without escaping it`);
+  }
+  assert.match(fn, /esc\(p\.device\)/, 'a device name is typed by a person');
+  assert.match(fn, /esc\(state\.deviceError\)/);
+});
+
+test('the video never touches Storage, and the row never claims it does', () => {
+  // The whole reason Part 2 exists: a 2 GB video does not fit in a 300 MB slice
+  // of a shared project. A stray upload call here would undo the point of it.
+  const section = appjs.slice(appjs.indexOf('// ================= SENDING A VIDEO'), appjs.indexOf('// ---------- things shared into'));
+  assert.ok(!/addFile|storage\.from|upload\(/.test(section), 'a video must never be uploaded');
+  assert.match(section, /addVideoRef/, 'only a note is saved');
+  // And the note is written with the digest the two ends agreed on, never before.
+  const sendTo = section.slice(section.indexOf('actions.sendVideoTo'), section.indexOf('// ---- receiving'));
+  assert.ok(sendTo.indexOf('await sendTo(') < sendTo.indexOf('addVideoRef'),
+    'the note must be written after the transfer, with the verified digest');
+  assert.match(sendTo, /sha256: result\.sha256/);
+});
+
+test('a transfer survives moving between screens', () => {
+  // render() replaces #view wholesale. A progress panel inside it would be
+  // destroyed by tapping Radar half way through a half-hour transfer.
+  const html = fs.readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
+  assert.match(html, /<div id="transfer"/, 'the panel needs to live outside #view');
+  const view = html.indexOf('id="view"');
+  const panel = html.indexOf('id="transfer"');
+  assert.ok(view !== -1 && panel > view, 'the panel must be a sibling of the view, not inside it');
+  assert.ok(!/<div id="transfer"[\s\S]*?<\/main>/.test(html));
+  // And it draws itself rather than being drawn by a route.
+  assert.match(appjs, /function drawTransfer/);
+  assert.ok(!/routes = \{[^}]*transfer/.test(appjs), 'a transfer is not a screen you can navigate away from');
+});
+
+test('stopping a transfer is a flag both ends poll, so it is never ignored', () => {
+  // A receiver only acts on an incoming message, so with a sender that has gone
+  // quiet there is no other moment at which Stop could be noticed.
+  assert.match(appjs, /cancelled: \(\) => transfer\.cancelled/);
+  const transferjs = fs.readFileSync(path.join(PUBLIC, 'transfer.js'), 'utf8');
+  assert.match(transferjs, /function watchForStop/);
+  assert.match(transferjs, /receiver\.stop\(/, 'stopping must abort the sink, not just stop reading');
+  // Both phases: waiting to connect is the one most likely to be stopped.
+  assert.match(transferjs, /offering: true, cancelled/);
+  assert.match(transferjs, /offering: false, cancelled/);
+});
+
+test('the digest is never computed by the browser file, only used by it', () => {
+  // Every decision a transfer makes is in shared/, which is tested in Node.
+  // public/transfer.js cannot be, so anything that decides something there
+  // would be untested by construction.
+  const transferjs = fs.readFileSync(path.join(PUBLIC, 'transfer.js'), 'utf8');
+  assert.ok(!/createSha256|sha256Of/.test(transferjs), 'hashing belongs in shared/, where it is tested');
+  assert.ok(!/compareDigests/.test(transferjs), 'the comparison belongs in shared/, where it is tested');
+  assert.match(transferjs, /from '\.\/shared\/transfer\.mjs'/);
+  // The chunk size and the backpressure thresholds are decisions too.
+  assert.ok(!/= 16 \* 1024|= 1024 \* 1024/.test(transferjs), 'the limits belong in shared/transfer.mjs');
+});
+
+test('there is no TURN server anywhere in the browser code', () => {
+  // A relay would carry every byte of every video and would have to be paid
+  // for. Its absence is a design decision, and the honest consequence — mobile
+  // data usually will not connect — is what the failure message says.
+  const transferjs = fs.readFileSync(path.join(PUBLIC, 'transfer.js'), 'utf8');
+  assert.ok(!/turn:|turns:|credential/.test(transferjs + appjs));
+  assert.match(transferjs, /ICE_SERVERS/, 'the STUN list comes from shared/, in one place');
+});
+
+test('a received file is streamed to disk where that is possible', () => {
+  const transferjs = fs.readFileSync(path.join(PUBLIC, 'transfer.js'), 'utf8');
+  const sink = transferjs.slice(transferjs.indexOf('export async function pickSink'), transferjs.indexOf('// ---------- the connection'));
+  // On a desktop, each chunk goes straight to the file, so a 4 GB video needs
+  // no more memory than a 4 KB one.
+  assert.match(sink, /showSaveFilePicker/);
+  assert.match(sink, /createWritable/);
+  assert.match(sink, /writable\.abort/, 'abandoning a transfer must leave no partial file');
+  // On Android there is no such API, so the pieces are collected — which is
+  // exactly why the sender warns above 1 GB.
+  assert.match(sink, /new Blob\(parts/);
+  assert.match(sink, /kind: 'memory'/);
+  assert.match(appjs, /BIG_FILE_BYTES/, 'the warning has to be shown somewhere');
+});
+
+test('every way of sending or receiving a video is reachable from a screen', () => {
+  for (const action of ['sendVideo', 'sendVideoTo', 'acceptVideo', 'declineVideo', 'cancelVideo', 'closeTransfer']) {
+    assert.ok(appjs.includes(`actions.${action} =`), `actions.${action} is not defined`);
+    assert.ok(appjs.includes(`data-action="${action}"`), `nothing on screen calls ${action}`);
+  }
+  // Choosing a video must not start a transfer: the size and the warnings have
+  // to be seen first.
+  const chooserAt = appjs.indexOf("const video = $('#videoFile')");
+  assert.ok(chooserAt > 0, 'the video file input is never wired up');
+  const chooser = appjs.slice(chooserAt, appjs.indexOf("const box = $('#sendBox')", chooserAt));
+  assert.match(chooser, /stage = 'offering'/);
+  assert.ok(!/sendTo\(/.test(chooser), 'picking a file must not begin sending');
 });
 
 test('every way of asking the AI is reachable from a screen', () => {

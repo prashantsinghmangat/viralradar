@@ -179,16 +179,28 @@ test('the build output is never committed', () => {
   assert.match(ignore, /^dist\/$/m, 'dist/ holds a generated env.js and must stay out of git');
 });
 
-test('the shared modules the browser gets are self-contained', async () => {
-  // There is no bundler: the browser fetches these files exactly as they are.
-  // If one of them imports something that was not copied, the page 404s at
-  // runtime with nothing useful in the console, so check it here instead.
+test('every shared module the browser gets can resolve its own imports', async () => {
+  // There is no bundler: the browser fetches these files exactly as they are,
+  // all of them side by side in /shared/. So one may import another — the
+  // transfer protocol needs the digest and the storage limits — but only one
+  // that was also copied. An import of something that was not is a 404 at
+  // runtime with nothing useful in the console, so it is caught here instead.
   const { BROWSER_SHARED } = await import('../scripts/build.mjs');
   assert.ok(BROWSER_SHARED.length >= 3);
+  const shipped = new Set(BROWSER_SHARED);
+
   for (const name of BROWSER_SHARED) {
     const source = fs.readFileSync(path.join(ROOT, 'shared', name), 'utf8');
-    const relative = [...source.matchAll(/from\s+['"](\.[^'"]+)['"]/g)].map((m) => m[1]);
-    assert.deepEqual(relative, [], `shared/${name} imports ${relative.join(', ')}, which the browser would not have`);
+    for (const match of source.matchAll(/from\s+['"](\.[^'"]+)['"]/g)) {
+      const spec = match[1];
+      // Flat, because the copies all land directly in /shared/. A path that
+      // climbed out of that folder would not exist on the site at all.
+      assert.match(spec, /^\.\/[^/]+\.mjs$/,
+        `shared/${name} imports ${spec}; browser modules sit flat in /shared/, so only "./name.mjs" can resolve`);
+      const target = spec.replace('./', '');
+      assert.ok(shipped.has(target),
+        `shared/${name} imports ${spec}, which is not in BROWSER_SHARED — the browser would 404 on it`);
+    }
   }
 });
 

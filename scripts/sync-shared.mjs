@@ -35,7 +35,14 @@ export const BROWSER_DIR = join(ROOT, 'public', 'shared');
 //   edit-plan the shooting plan a script can carry, read out of raw
 //   projects  the two storage limits, the path layout and the device naming —
 //             the browser enforces the same numbers the database does
-export const BROWSER_SHARED = ['stats.mjs', 'defaults.mjs', 'time.mjs', 'tokens.mjs', 'edit-plan.mjs', 'projects.mjs'];
+//   sha256    a digest computed a chunk at a time, so a 2 GB video can be
+//             verified without ever being in memory in one piece
+//   transfer  the device-to-device protocol: every decision a transfer makes,
+//             kept away from the untestable WebRTC wiring
+export const BROWSER_SHARED = [
+  'stats.mjs', 'defaults.mjs', 'time.mjs', 'tokens.mjs', 'edit-plan.mjs',
+  'projects.mjs', 'sha256.mjs', 'transfer.mjs',
+];
 
 const BANNER = [
   '// GENERATED FILE - DO NOT EDIT.',

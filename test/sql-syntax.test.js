@@ -133,10 +133,17 @@ test('the migrations touch nothing outside the viralradar schema', () => {
       assert.ok(['storage.objects', 'storage.buckets', 'storage.foldername'].includes(m),
         `${f}: only storage.objects, storage.buckets and storage.foldername() may be referenced, found ${m}`);
     }
-    // The schema and the table are the Storage extension's. Adding a policy is
-    // additive and safe; changing the table is not.
-    assert.ok(!/\balter table storage\.|\bcreate schema storage\b/i.test(code),
-      `${f}: must not alter Storage's own tables`);
+    // Realtime is shared the same way. Two things are needed from it: the
+    // messages table, to put a policy on, and the function that says which
+    // channel is being joined.
+    for (const m of code.match(/realtime\.\w+/g) || []) {
+      assert.ok(['realtime.messages', 'realtime.topic'].includes(m),
+        `${f}: only realtime.messages and realtime.topic() may be referenced, found ${m}`);
+    }
+    // The schemas and tables are the extensions'. Adding a policy is additive
+    // and safe; changing the table is not.
+    assert.ok(!/\balter table (storage|realtime)\.|\bcreate schema (storage|realtime)\b/i.test(code),
+      `${f}: must not alter Storage's or Realtime's own tables`);
     assert.ok(!/\b(alter|drop) policy\b/i.test(code),
       `${f}: must not change or remove a policy, which in storage.objects may belong to the other app`);
   }
@@ -241,15 +248,262 @@ test('every table created in the schema is locked down in the RLS migration', ()
     assert.ok(using < check, `${name}: USING must come before WITH CHECK`);
   }
 
-  // Nothing may have a policy except the viralradar tables and the one storage
-  // table the file feature needs. This is the line that stops a future
-  // migration quietly attaching a policy to something the other app owns.
+  // Nothing may have a policy except the viralradar tables and the two shared
+  // extension tables the features genuinely need — storage.objects for files,
+  // realtime.messages for the private signalling channel. This is the line that
+  // stops a future migration quietly attaching a policy to something the other
+  // app owns. Each of the two has its own test below, with its own rules.
+  const SHARED_TABLES = ['storage.objects', 'realtime.messages'];
   for (const p of allPolicies) {
     const target = p.match(/create policy \w+ on ([\w.]+)/);
     assert.ok(target, `could not read what this policy is on: ${p.slice(0, 60)}`);
-    assert.ok(['storage.objects'].includes(target[1]) || target[1].startsWith('viralradar.'),
+    assert.ok(SHARED_TABLES.includes(target[1]) || target[1].startsWith('viralradar.'),
       `a policy is attached to ${target[1]}, which is not ViralRadar's to change`);
+    // On a shared table, an unprefixed name could collide with the other app's.
+    if (SHARED_TABLES.includes(target[1])) {
+      assert.match(p.match(/create policy (\w+)/)[1], /^vr_/,
+        `a policy on the shared ${target[1]} must be prefixed vr_`);
+    }
   }
+});
+
+// The two devices have to exchange WebRTC offers, answers and ICE candidates
+// before they can connect, and those carry both devices' IP addresses. The
+// channel they go over is therefore a private one, and these policies are the
+// only thing that makes "private" mean anything.
+test('the signalling channel is one per user, and nobody else can be on it', () => {
+  const sql = allMigrations();
+  const policies = [...sql.matchAll(/create policy (\w+) on realtime\.messages[\s\S]*?;/g)].map((m) => m[0]);
+  assert.equal(policies.length, 2, 'one to read the channel, one to write to it');
+
+  const verbs = policies.map((p) => p.match(/for (select|insert)/)[1]).sort();
+  assert.deepEqual(verbs, ['insert', 'select'],
+    'reading without writing is a device that cannot answer; writing without reading is one that cannot hear');
+
+  for (const p of policies) {
+    const name = p.match(/create policy (\w+)/)[1];
+    assert.match(name, /^vr_/, `${name}: realtime.messages is shared, so the name must be prefixed`);
+    assert.match(p, /to authenticated/, `${name}: a channel for your own devices needs a session`);
+    assert.ok(!/using \(true\)|with check \(true\)/.test(p), `${name}: must not allow every topic`);
+
+    const clauses = policyClauses(p);
+    assert.ok(clauses.length >= 1, `${name}: no USING or WITH CHECK clause found`);
+    for (const c of clauses) {
+      // The topic IS the authorisation. An obscure name would not be enough:
+      // this project's auth.users is shared with another app, so another
+      // account could sit on a guessable channel and read the addresses.
+      assert.match(c.body, /realtime\.topic\(\) = 'vr-devices-' \|\| auth\.uid\(\)::text/,
+        `${name}: the ${c.kind.toUpperCase()} clause does not tie the topic to the caller`);
+      assert.match(c.body, /is_allowed\(\)/,
+        `${name}: the ${c.kind.toUpperCase()} clause is missing the allowlist gate`);
+    }
+  }
+
+  // The topic the policies allow has to be the one the browser asks for.
+  const transfer = fs.readFileSync(path.join(ROOT, 'shared', 'transfer.mjs'), 'utf8');
+  const topic = transfer.match(/deviceTopic = \(userId\) => `([^`$]*)/);
+  assert.ok(topic, 'shared/transfer.mjs should name the topic in one place');
+  assert.equal(topic[1], 'vr-devices-',
+    'the browser and the policy would be naming different channels, and nothing would ever connect');
+});
+
+test('a video is recorded as a row, and can never be a file', () => {
+  const sql = allMigrations();
+
+  // The kind list has to accept it...
+  const kinds = sql.match(/check \(kind in \(([^)]*'video_ref'[^)]*)\)\)/);
+  assert.ok(kinds, "'video_ref' is never added to the kind check");
+
+  // ...and the shape has to forbid it having bytes anywhere. A 2 GB video in a
+  // 300 MB slice of a shared project is the entire reason Part 2 exists.
+  const shape = sql.slice(sql.lastIndexOf('add constraint project_items_shape'));
+  const body = shape.slice(0, shape.indexOf(');'));
+  assert.match(body, /when 'video_ref' then[\s\S]*?storage_path is null/,
+    'a video_ref with a storage_path would be a download button pointing at nothing');
+  // It claims "verified identical" forever, so the claim has to be structural.
+  for (const [column, why] of [
+    ['sha256 is not null', 'without a digest, "verified identical" is a guess'],
+    ['size_bytes is not null', 'a video with no size cannot be described'],
+    ['file_name is not null', 'a video with no name cannot be found again'],
+    ['cardinality(devices) > 0', 'a video held by no device is not a note worth keeping'],
+  ]) {
+    assert.ok(body.includes(column), `video_ref must require ${column}: ${why}`);
+  }
+
+  // And the 25 MB limit must not apply to it, or a video could never be
+  // recorded at all.
+  const size = sql.slice(sql.lastIndexOf('add constraint project_items_size'));
+  assert.match(size.slice(0, size.indexOf(');')), /storage_path is null or size_bytes <= 26214400/,
+    'the 25 MB limit is about Storage, so it must only apply to rows that have bytes there');
+
+  // Replacing a constraint by name would depend on a name PostgreSQL chose.
+  assert.match(sql, /con\.contype = 'c'/, 'the kind check was named by PostgreSQL, so it is found by what it does');
+  assert.match(sql, /conname not in \('project_items_path_prefix', 'project_items_sha256'\)/,
+    'the constraints that are not being changed must be kept by name');
+});
+
+// Files live in Storage, which is shared with the other app in this project:
+// one storage.objects table, one set of policies, several apps' buckets. So
+// these get their own test rather than being bent into the shape of the ones
+// above, which assume a user_id column that storage.objects does not have.
+test('the storage policies cover one bucket, one prefix per user, and the 300 MB cap', () => {
+  const sql = allMigrations();
+  const policies = [...sql.matchAll(/create policy (\w+) on storage\.objects[\s\S]*?;/g)].map((m) => m[0]);
+  assert.equal(policies.length, 4, 'one policy per verb, for the same reason the tables have four');
+
+  const verbs = policies.map((p) => p.match(/for (select|insert|update|delete)/)[1]).sort();
+  assert.deepEqual(verbs, ['delete', 'insert', 'select', 'update']);
+
+  for (const p of policies) {
+    const name = p.match(/create policy (\w+)/)[1];
+    // The name has to be unmistakably ours: storage.objects holds the other
+    // app's policies too, and two policies with one name cannot both exist.
+    assert.match(name, /^vr_/, `${name}: a policy on a shared table must be prefixed, or it can collide`);
+    assert.match(p, /to authenticated/, `${name}: must be limited to the authenticated role`);
+    assert.ok(!/using \(true\)|with check \(true\)/.test(p), `${name}: must not allow every row`);
+
+    // Every clause, not just the first: an update policy has two, and gating
+    // one while forgetting the other is the easy mistake to make.
+    const clauses = policyClauses(p);
+    assert.ok(clauses.length >= 1, `${name}: no USING or WITH CHECK clause found`);
+    for (const c of clauses) {
+      assert.match(c.body, /bucket_id = 'vr-project-files'/,
+        `${name}: the ${c.kind.toUpperCase()} clause does not pin the bucket, so it could reach the other app's files`);
+      assert.match(c.body, /\(storage\.foldername\(name\)\)\[1\] = auth\.uid\(\)::text/,
+        `${name}: the ${c.kind.toUpperCase()} clause does not check that the first folder is the caller`);
+      assert.match(c.body, /array_length\(storage\.foldername\(name\), 1\) = 2/,
+        `${name}: the ${c.kind.toUpperCase()} clause does not pin the <user>/<project>/<file> shape`);
+      assert.match(c.body, /is_allowed\(\)/,
+        `${name}: the ${c.kind.toUpperCase()} clause is missing the allowlist gate`);
+    }
+  }
+
+  // Only uploading is capped. Reading, renaming and deleting have to keep
+  // working once the cap is reached, or being full would mean being stuck.
+  const insert = policies.find((p) => /for insert/.test(p));
+  assert.match(insert, /storage_under_cap\(\)/, 'the insert policy is what enforces the 300 MB slice');
+  for (const p of policies.filter((x) => !/for insert/.test(x))) {
+    assert.ok(!/storage_under_cap\(\)/.test(p),
+      `${p.match(/create policy (\w+)/)[1]}: being over the cap must not stop reading or deleting`);
+  }
+});
+
+test('the bucket is private, and limits one file to 25 MB', () => {
+  const sql = allMigrations();
+  const insert = sql.match(/insert into storage\.buckets[\s\S]*?;/);
+  assert.ok(insert, 'the bucket should be created by a migration, not only by hand in the dashboard');
+
+  assert.match(insert[0], /'vr-project-files'/);
+  assert.match(insert[0], /false/, 'a public bucket would serve every file to anyone with the URL');
+  assert.ok(!/\btrue\b/.test(insert[0].split('on conflict')[0].replace(/vr-project-files/g, '')),
+    'nothing about this bucket should be true: public must be false');
+  // 25 MB. The same number as MAX_FILE_BYTES in shared/projects.mjs and as the
+  // CHECK on project_items.size_bytes; test/projects.test.js ties the three
+  // together.
+  assert.match(insert[0], /26214400/, 'the Storage API is the only one of the three limits that can refuse before the upload');
+  assert.match(insert[0], /on conflict \(id\) do update/, 'applying the migration twice must be harmless');
+
+  // Only ViralRadar's own bucket is ever touched.
+  const buckets = [...sql.matchAll(/storage\.buckets[\s\S]{0,200}?;/g)].map((m) => m[0]);
+  for (const b of buckets) {
+    assert.ok(!/\bdelete\b|\bupdate storage\.buckets\b/i.test(b), 'a migration must not remove or rewrite buckets in a shared project');
+  }
+});
+
+test('the 300 MB cap is computed from what the bucket really holds', () => {
+  const sql = allMigrations();
+  const used = sql.slice(sql.indexOf('function viralradar.storage_used'));
+  const body = used.slice(0, used.indexOf('$$;') + 3);
+
+  // Summing project_items.size_bytes would under-count: an upload that
+  // succeeded while its row insert failed still occupies the shared quota.
+  assert.match(body, /from storage\.objects/, 'the cap must be measured against the bucket, not against our own rows');
+  assert.ok(!/project_items/.test(body), 'our own rows are not the authority on how many bytes exist');
+
+  // SECURITY DEFINER is needed because this is called from inside a policy on
+  // storage.objects. That makes the owner filter in the body the only thing
+  // keeping it honest, so it has to be there.
+  assert.match(body, /security definer/);
+  assert.match(body, /set search_path = ''/, "a SECURITY DEFINER function without a pinned search_path can be tricked");
+  assert.match(body, /\(storage\.foldername\(o\.name\)\)\[1\] = auth\.uid\(\)::text/,
+    'without this filter, an elevated function would total up everyone');
+  assert.match(body, /bucket_id = 'vr-project-files'/, 'the other app\'s files are not ours to count');
+  assert.match(body, /is_allowed\(\)/);
+  assert.match(sql, /revoke all on function viralradar\.storage_used\(\) from public, anon;/);
+
+  const cap = sql.slice(sql.indexOf('function viralradar.storage_under_cap'));
+  assert.match(cap.slice(0, cap.indexOf('$$;')), /314572800/, '300 MB, matching TOTAL_BYTES_CAP');
+});
+
+test('the 14-day cleanup rule is written once, and the job only asks for it', () => {
+  const sql = allMigrations();
+
+  const due = sql.slice(sql.indexOf('function viralradar.project_files_due'));
+  const body = due.slice(0, due.indexOf('$$;') + 3);
+  assert.match(body, /p_days integer default 14/, 'the retention period belongs in one place');
+  assert.match(body, /status = 'posted'/, 'only posted projects are cleaned up');
+  assert.match(body, /posted_at < now\(\) - make_interval/);
+  assert.match(body, /storage_path is not null/, 'notes and links cost nothing and are never deleted');
+  assert.match(body, /i\.user_id = p_user_id/, 'the service role bypasses RLS, so the owner filter has to be explicit');
+  assert.match(body, /security invoker/, 'called as a user, the policies must still apply');
+
+  // posted_at has to be maintained by the database, or the cleanup can read a
+  // date from a project that is no longer posted at all.
+  assert.match(sql, /create trigger projects_touch_posted_at before insert or update on viralradar\.projects/);
+  const touch = sql.slice(sql.indexOf('function viralradar.touch_posted_at'));
+  assert.match(touch.slice(0, touch.indexOf('$$;')), /new\.posted_at = null/,
+    'un-posting a project must clear the clock, or its files are deleted while it is back in use');
+
+  // Deleting the storage.objects row would leave the bytes in the bucket,
+  // still counted against this project's quota and now unreachable. Only the
+  // Storage API really removes a file, so the job calls a function.
+  const request = sql.slice(sql.indexOf('function viralradar.request_project_file_purge'));
+  const purge = request.slice(0, request.indexOf('$$;') + 3);
+  assert.ok(!/delete from storage\.objects/i.test(sql),
+    'deleting the row leaves the bytes behind: the Storage API has to do it');
+  assert.match(purge, /net\.http_post/);
+  assert.match(purge, /purge_function_url/);
+  assert.match(purge, /vault\.decrypted_secrets/, 'the secret is read from Vault at the moment it is used');
+  assert.match(purge, /is null then[\s\S]*?return;/, 'with nothing configured the job must do nothing, not guess a URL');
+
+  const job = [...sql.matchAll(/cron\.schedule\(\s*'([^']+)',\s*'([^']+)'/g)].map((m) => [m[1], m[2]]);
+  const cleanup = job.find(([name]) => /purge/.test(name));
+  assert.ok(cleanup, 'the cleanup should be scheduled by a migration, not by hand');
+  assert.match(cleanup[0], /^viralradar-/, 'the job name must not collide with the other app\'s');
+  // Half an hour after the morning refresh, so the two never overlap.
+  assert.equal(cleanup[1], '0 2 * * *');
+  const refresh = job.find(([name]) => /refresh/.test(name));
+  assert.notEqual(cleanup[1], refresh[1], 'two jobs at the same minute would compete for the same connection');
+});
+
+test('project folders are shaped so an item can never sit in someone else\'s folder', () => {
+  const sql = allMigrations();
+  const items = sql.slice(sql.indexOf('create table viralradar.project_items'));
+  const body = items.slice(0, items.indexOf('\n);'));
+
+  // A plain (project_id) foreign key would let an item point at a folder with
+  // a different owner. The composite one cannot: projects' primary key is the
+  // same pair, so item and folder always share an owner.
+  assert.match(body, /foreign key \(user_id, project_id\)[\s\S]*?references viralradar\.projects \(user_id, id\) on delete cascade/,
+    'the foreign key must be on the pair, or an item can belong to another user\'s folder');
+
+  // A path that claims to be somewhere it is not would survive RLS, because
+  // RLS only decides which rows you may write — not whether their contents
+  // make sense.
+  assert.match(body, /storage_path like \(user_id::text \|\| '\/' \|\| project_id::text \|\| '\/%'\)/,
+    'a stored path must be inside the folder the row says it is in');
+  assert.match(body, /26214400/, 'the 25 MB limit belongs in the database too, not only in the browser');
+  assert.match(body, /\^\[0-9a-f\]\{64\}\$/, 'a digest in mixed case would never compare equal to a lowercase one');
+
+  // Exactly one Inbox per user, said in the database rather than hoped for.
+  assert.match(sql, /create unique index projects_one_inbox_idx on viralradar\.projects \(user_id\) where is_inbox/);
+
+  // The folder link to a script is deliberately not a foreign key, for the
+  // same reason results.script_id is not.
+  const projects = sql.slice(sql.indexOf('create table viralradar.projects'));
+  const projectBody = projects.slice(0, projects.indexOf('\n);'));
+  assert.ok(!/script_id[^,]*references/.test(projectBody),
+    'script_id must not be a foreign key: deleting a script would take the folder with it');
 });
 
 test('every user-owned table defaults user_id to auth.uid() and refuses a null owner', () => {

@@ -33,6 +33,10 @@
 
   <main id="view" class="view" tabindex="-1"></main>
 
+  <!-- A video transfer can take half an hour and must survive moving between
+       screens, so its panel lives outside #view, which every render replaces. -->
+  <div id="transfer" class="transfer" aria-live="polite" hidden></div>
+
   <div id="toasts" class="toasts" aria-live="polite"></div>
 
   <!-- Configuration written at build time, then the vendored Supabase library.
