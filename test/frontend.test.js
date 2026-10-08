@@ -108,11 +108,14 @@ test('user text is escaped wherever it is put into HTML', () => {
   // Values that escape for themselves, or that cannot carry user text.
   // Builders that escape whatever they are given, so their output is markup on
   // purpose rather than by accident.
-  // devicesLine(), renderAngles() and ANGLES_BUTTON() are in here with the
-  // other builders because they escape every value they interpolate — see the
-  // tests below, which hold them to that. renderAngles in particular puts
-  // model-written text on screen, so it is the one that matters most.
-  const safe = /^(esc\(|fmt\(|compact\(|ago\(|when\(|copyBtn\(|hbars\(|format\(|renderEditPlan\(|PASTE_BUTTON\(|makeButton\(|devicesLine\(|renderAngles\(|ANGLES_BUTTON\(|GENERATING\[|KIND_ICON|SOURCE|LIVE_LABEL|STAGES|LENGTHS|DEFAULT_AI_ORDER)/;
+  // devicesLine(), renderAngles(), renderPack() and the two BUTTON helpers are
+  // in here with the other builders because they escape every value they
+  // interpolate — see the
+  // tests below, which hold them to that. renderAngles and renderPack put
+  // model-written text on screen, so they are the ones that matter most.
+  // encodeURIComponent() is on the list for a different reason: it percent-
+  // encodes, so its output cannot be markup at all.
+  const safe = /^(esc\(|fmt\(|compact\(|ago\(|when\(|copyBtn\(|hbars\(|format\(|renderEditPlan\(|PASTE_BUTTON\(|makeButton\(|devicesLine\(|renderAngles\(|ANGLES_BUTTON\(|renderPack\(|RESEARCH_BUTTON\(|packLink\(|packList\(|liveBadge\(|encodeURIComponent\(|GENERATING\[|KIND_ICON|SOURCE|LIVE_LABEL|STAGES|LENGTHS|DEFAULT_AI_ORDER)/;
   const bad = [];
   for (const literal of htmlLiterals) {
     for (const m of literal.matchAll(/\$\{([^{}]*)\}/g)) {
@@ -251,6 +254,106 @@ test('files are never served from a public URL', () => {
   // A public bucket would mean a URL that works for anyone who has it, forever.
   assert.match(datajs, /createSignedUrl/);
   assert.ok(!/getPublicUrl/.test(datajs + appjs), 'a public URL would outlive every policy in the database');
+});
+
+// ---------- research pack ----------
+
+test('every value a pack puts on screen is escaped', () => {
+  // A pack is model-written prose about pages that were fetched from the open
+  // web. Both halves of that are other people's text. It is on the safe list
+  // above, which is only true while this holds.
+  const fn = appjs.slice(appjs.indexOf('let pack = null'), appjs.indexOf('actions.closePack'));
+  // Only the templates that actually contain markup. The others build a line
+  // for the clipboard, where escaping would be wrong rather than missing.
+  const htmlLiterals = [...fn.matchAll(/`[^`]*`/g)].map((m) => m[0]).filter((t) => /<[a-z][a-z0-9-]*[\s>/]/i.test(t));
+  const interpolations = htmlLiterals.flatMap((t) => [...t.matchAll(/\$\{([^{}]*)\}/g)].map((m) => m[1].trim()));
+  assert.ok(interpolations.length >= 15, `expected the values it interpolates, found ${interpolations.length}`);
+  for (const expr of interpolations) {
+    const ok = /^(esc\(|copyBtn\(|packLink\(|packList\(|liveBadge\(|encodeURIComponent\()/.test(expr)
+      || expr === 'facts' || /\.map\(|\.join\(|\?|&&/.test(expr)
+      // A count cannot carry markup.
+      || /^p\.downgraded_count$/.test(expr);
+    assert.ok(ok, `renderPack puts ${expr} into HTML without escaping it`);
+  }
+  // The URL is the one field a reader is invited to click, so it is also the
+  // one worth naming here: "javascript:" in an href is not stopped by escaping.
+  assert.match(fn, /esc\(url\)/, 'a source URL goes into an href');
+  assert.match(fn, /rel="noopener noreferrer"/, 'a fetched page is not trusted with the opener');
+  for (const field of ['tool.name', 'tool.what_it_does', 'a.name', 'f.claim', 'f.source_url']) {
+    assert.ok(fn.includes(`esc(${field}`), `${field} comes from the model and must be escaped`);
+  }
+});
+
+test('a badge says what the fetch found, never what the model claimed', () => {
+  // The whole feature rests on this. If "Live" could come from the model's own
+  // JSON, an invented page would be presented as one that loaded.
+  const fn = appjs.slice(appjs.indexOf('const liveBadge'), appjs.indexOf('function renderPack'));
+  assert.match(fn, /reachable \?/, 'the badge is driven by the reachable flag');
+  assert.match(fn, /Live/);
+  assert.match(fn, /Not reachable/);
+
+  // And reachable is set by the server from the fetch result, not copied from
+  // the model — see normalisePack in shared/research.mjs, where it is enforced.
+  const research = fs.readFileSync(path.join(ROOT, 'shared', 'research.mjs'), 'utf8');
+  assert.match(research, /reachable: known\(/, 'reachable has to come from the pages that loaded');
+});
+
+test('a verified claim and an unverified one cannot look the same', () => {
+  // Showing an unverified claim is deliberate: it is the thing to go and check
+  // before recording. Showing it as if it were a fact is the failure this
+  // whole feature exists to prevent, so the two must be styled apart.
+  const fn = appjs.slice(appjs.indexOf('function renderPack'), appjs.indexOf('actions.closePack'));
+  // One of two literal class names, never the model's own string: a class
+  // attribute assembled from JSON is not worth trusting twice.
+  assert.match(fn, /class="fact \$\{f\.status === 'verified' \? 'verified' : 'unverified'\}"/,
+    'the status has to reach the markup, as one of two known names');
+  assert.match(fn, /badge good.*Verified/s);
+  assert.match(fn, /badge warn.*Unverified/s);
+
+  const css = fs.readFileSync(path.join(PUBLIC, 'styles.css'), 'utf8');
+  assert.match(css, /\.fact\.verified/, 'a verified claim needs its own look');
+  assert.match(css, /\.fact\.unverified/, 'and an unverified one must differ from it');
+});
+
+test('Research Pack is offered on a trend, an idea and in the free-text box', () => {
+  // The three places a subject arrives from. A trend carries its own URL, so
+  // nothing has to be guessed there.
+  const radar = appjs.slice(appjs.indexOf('async function renderRadar'));
+  assert.match(radar.slice(0, radar.indexOf('\n}')), /RESEARCH_BUTTON\([^\n]*t\.url\)/,
+    'a trend has a URL; using it means no page is guessed');
+
+  for (const screen of ['async function renderIdeas', 'function renderScripts']) {
+    const start = appjs.indexOf(screen);
+    assert.ok(start > 0, `${screen} not found`);
+    const body = appjs.slice(start, appjs.indexOf('\n}', start));
+    assert.ok(/RESEARCH_BUTTON\(|data-action="researchFromBox"/.test(body), `${screen} has no way to research`);
+    assert.match(body, /renderPack\(\)/, `${screen} never shows the pack it asked for`);
+  }
+  assert.ok(appjs.includes('actions.researchPack ='));
+  assert.ok(appjs.includes('actions.researchFromBox ='));
+  assert.ok(appjs.includes('data-action="researchPack"'));
+});
+
+test('what a pack hands on to a script is the verified half only', () => {
+  // packSummary() drops every unverified claim. If the raw pack were sent
+  // instead, a script could repeat something that was never on any page.
+  const block = appjs.slice(appjs.indexOf('let pack = null'), appjs.indexOf('// ================= ANGLES'));
+  for (const action of ['anglesFromPack', 'scriptFromPack']) {
+    const fn = block.slice(block.indexOf(`actions.${action}`));
+    assert.match(fn.slice(0, fn.indexOf('};')), /research: packSummary\(pack\.data\)/,
+      `${action} must pass the summary, not the pack`);
+  }
+  assert.ok(!/research: pack\.data|research: JSON\.stringify\(pack/.test(appjs),
+    'the unverified claims must never reach a prompt');
+
+  // Writing a script from an angle that came out of a pack carries the facts
+  // too — the angles on screen were written from them.
+  const write = appjs.slice(appjs.indexOf('actions.writeAngle'));
+  assert.match(write.slice(0, write.indexOf('};')), /packSummary\(pack\.data\)/);
+
+  const research = fs.readFileSync(path.join(ROOT, 'shared', 'research.mjs'), 'utf8');
+  const summary = research.slice(research.indexOf('export function packSummary'));
+  assert.match(summary, /status === 'verified'/, 'the summary is the verified claims and nothing else');
 });
 
 // ---------- angles ----------

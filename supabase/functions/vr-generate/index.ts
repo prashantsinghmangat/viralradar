@@ -176,6 +176,12 @@ Deno.serve(async (req: Request) => {
     const lesson = await lessonFor(client, userId);
     const topic = String(body.topic ?? '').trim();
 
+    // Verified facts from a Research Pack, when the creator made one for this
+    // subject. Only the verified half ever reaches here — the browser sends
+    // packSummary(), which drops every unverified claim. Capped because it is
+    // creator-supplied text going into a prompt, not because it is untrusted.
+    const research = String(body.research ?? '').trim().slice(0, 6000) || null;
+
     // ---- angles: ways into a subject, before any script exists ----
     //
     // Deliberately not stored. An angle is a choice the creator makes on the
@@ -187,7 +193,7 @@ Deno.serve(async (req: Request) => {
 
       const result = await generateJson({
         ...ask,
-        prompt: anglesPrompt({ topic, language, length, count: Math.min(Math.max(Number(body.count) || 5, 3), 7), today, lesson }),
+        prompt: anglesPrompt({ topic, language, length, count: Math.min(Math.max(Number(body.count) || 5, 3), 7), today, lesson, research }),
       });
       await countCall(client, userId, result.provider);
 
@@ -239,7 +245,7 @@ Deno.serve(async (req: Request) => {
         today,
         lesson,
       })
-      : scriptPrompt({ topic, language, length, today, angle, lesson });
+      : scriptPrompt({ topic, language, length, today, angle, lesson, research });
 
     const result = await generateJson({ ...ask, prompt });
     await countCall(client, userId, result.provider);

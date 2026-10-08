@@ -421,6 +421,15 @@ npx supabase secrets set "OPENROUTER_API_KEY=sk-or-your-real-key"
 npx supabase secrets set "YOUTUBE_API_KEY=your-youtube-key"
 ```
 
+**`SEARCH_API_KEY` is optional and you can ignore it.** With it, a Research Pack
+finds its pages through a search API; without it, it uses the AI's own candidate
+URLs and then checks them. Either way every page is fetched and verified before
+anything is written. If you do want one, a Brave Search free-tier key works:
+
+```powershell
+npx supabase secrets set "SEARCH_API_KEY=your-brave-key"
+```
+
 Check it worked:
 
 ```powershell
@@ -460,11 +469,12 @@ any name starting with `SUPABASE_` anyway.
   the whole reason the AI calls happen in an Edge Function instead of in the
   app.
 
-## Step 10. Deploy the four functions
+## Step 10. Deploy the five functions
 
 ```powershell
 npx supabase functions deploy vr-import --use-api
 npx supabase functions deploy vr-generate --use-api
+npx supabase functions deploy vr-research --use-api
 npx supabase functions deploy vr-refresh-trends --use-api
 npx supabase functions deploy vr-purge-project-files --use-api
 ```
@@ -687,6 +697,51 @@ Then try the awkward cases, which are the ones worth knowing about:
   getting through carrier NAT needs a relay server, a relay carries every byte
   of every video, and there is no free one.
 
+### Step 14d. Check a Research Pack against a page you can see
+
+The migration and the function are new, so do these two first:
+
+```powershell
+cd D:\Project\viralradar
+npx supabase db push
+npx supabase functions deploy vr-research --use-api
+```
+
+`db push` adds `20261008000700_research.sql`, which only widens two check
+constraints on `project_items` so a pack can be stored. Nothing is dropped.
+
+Then the part worth actually doing — **pick a page you can read yourself**, so
+you can tell whether the pack is true:
+
+1. **Scripts** screen. In the top box type what the tool is, and in the second
+   box paste its real URL. Press **🔍 Research Pack**.
+2. Open that URL in another tab and keep it next to the pack.
+3. Check three things, in this order:
+   - the source shows a green **● Live** badge, and the URL is the one you gave
+     (or the one it redirected to);
+   - every green **✓ Verified** fact is genuinely on the page you are looking
+     at. This is the claim the whole feature rests on;
+   - anything tagged yellow **⚠ Unverified** is something you now go and check —
+     that tag is the feature working, not failing.
+4. Press **✍️ Write script from this**. The script must not contain any limit,
+   price or watermark claim that was not in the verified list. If it does, the
+   pack is fine and the prompt is not — tell me, because that is a real bug.
+5. Open **📁 Its folder**. The pack is saved there as a 🔍 item. Check
+   **Settings → Project files**: the figure must not have moved, because a pack
+   is JSON in a row, not a file.
+
+Then one deliberate failure, which is quicker than it sounds:
+
+- Put a URL that does not exist (`https://not-a-real-tool-xyz.example`) in the
+  second box and press it. You should get an error saying nothing was written —
+  **not** a pack. A pack with no sources would be guesswork, so the function
+  refuses to write one.
+
+And one without a URL at all: type just a subject and leave the URL box empty.
+It then finds candidate pages itself and checks them, and the pack says so with
+a yellow badge reading *URLs were the AI's guesses, then checked*. Expect this
+to be slower and less reliable than giving it the link.
+
 ## Step 15. Close the door (optional)
 
 **ViralRadar is already closed** without this step. The allowlist from Step 6b
@@ -825,6 +880,10 @@ watcher is a convenience, not a requirement.
 | A shared screenshot never appears in the Inbox | Open the app directly — a share waits on the device until the app next opens with a connection, and that is when it is uploaded. |
 | **Settings → Project files** says it cannot read how much is used | `storage_used()` was not created, or `viralradar` is missing from Exposed schemas. `npm run inspect:db` distinguishes the two. |
 | **Clean up now** says the function is not deployed | `npx supabase functions deploy vr-purge-project-files --use-api` (Step 10). |
+| **Research Pack** says the function is not deployed | `npx supabase functions deploy vr-research --use-api` (Step 10). |
+| **Research Pack** fails with a message about `kind` or a constraint | The migration has not been applied. `npx supabase db push` (Step 14d). |
+| A Research Pack comes back with nothing verified | The page loaded but the model could not match its claims to the text — often a site that renders everything in JavaScript, where there is no text to read server-side. The pack is honest about it rather than guessing. Paste a plainer page, such as the tool's pricing or docs page. |
+| Every source says **✕ Not reachable** | The site refused the fetch, or took more than ten seconds. Open the URL yourself to check it is alive; some sites block anything that is not a real browser. Nothing is written when nothing loads, which is the intended behaviour. |
 | **Your devices** says nothing else is online, but the other device is open | Both have to be signed in to the *same account* and have finished loading. If it persists, the `realtime.messages` policies did not get applied — see Step 3 → "If `db push` fails on a policy outside the viralradar schema". `npm run test:rls` says which. |
 | "Could not open the channel your devices use to find each other" | The two `vr_devices_*` policies are missing, so Realtime refuses the private channel. Same fix as above. Nothing else in the app is affected. |
 | A transfer gets stuck on "Connecting…" and then gives up after 15 seconds | The two devices are not on the same network. Mobile data essentially never works — it needs a relay server and there is no free one. Same Wi-Fi; or connect your laptop to your phone's hotspot, which puts them on one network; or use LocalSend. |

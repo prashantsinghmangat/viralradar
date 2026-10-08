@@ -172,6 +172,55 @@ test('with nothing learned yet, the prompts are byte-for-byte what they were', a
   }
 });
 
+test('verified research reaches the two prompts that write from it', async () => {
+  const { anglesPrompt, scriptPrompt, ideasPrompt, editPlanPrompt } = require('../shared/prompts.mjs');
+  const { packSummary } = await import('../shared/research.mjs');
+
+  const pack = {
+    grounded: true,
+    main_tool: { name: 'Bgless', url: 'https://bgless.example', what_it_does: 'removes backgrounds' },
+    fact_check: [
+      { claim: 'free tier gives 5 images a day', status: 'verified', source_url: 'https://bgless.example' },
+      { claim: 'there is no watermark', status: 'unverified', source_url: 'https://bgless.example' },
+    ],
+  };
+  const research = packSummary(pack);
+  const args = { topic: 'a background remover', language: 'English', length: '30s', today: '2026-10-08' };
+
+  for (const [name, prompt] of [
+    ['angles', anglesPrompt({ ...args, research })],
+    ['script', scriptPrompt({ ...args, research })],
+  ]) {
+    assert.match(prompt, /Use these facts and no others/, `${name} does not carry the research`);
+    assert.match(prompt, /free tier gives 5 images a day/, `${name} does not carry the verified claim`);
+    assert.match(prompt, /Do NOT state any limit, price/, `${name} does not forbid inventing the rest`);
+    // The unverified claim is the whole point: it is a thing to check before
+    // recording, and a script written from it is the failure being prevented.
+    assert.ok(!/there is no watermark/.test(prompt), `${name} carries an unverified claim into a script`);
+  }
+
+  // Ideas are written before any subject is chosen, and an edit plan is about
+  // a script that already exists. Neither has a pack to work from.
+  for (const build of [ideasPrompt, editPlanPrompt]) {
+    const prompt = build({ script: { title: 'x', beats: [] }, ...args, research });
+    assert.ok(!/Use these facts and no others/.test(prompt), 'research has nothing to say here');
+  }
+});
+
+test('with no research, the prompts are byte-for-byte what they were', () => {
+  const { anglesPrompt, scriptPrompt } = require('../shared/prompts.mjs');
+  const args = { topic: 'a tool', language: 'English', length: '30s', today: '2026-10-08' };
+
+  // No pack means no heading about research. An empty one would be a
+  // question the model has to interpret, and it tends to answer it.
+  for (const build of [anglesPrompt, scriptPrompt]) {
+    const none = build({ ...args });
+    assert.equal(build({ ...args, research: '' }), none, 'an empty pack must change nothing');
+    assert.equal(build({ ...args, research: null }), none);
+    assert.ok(!/Use these facts and no others|Research:/.test(none));
+  }
+});
+
 test('the JSON repair prompt includes the broken text and asks for JSON only', () => {
   const p = fixJsonPrompt('{"a": 1,}');
   assert.match(p, /\{"a": 1,\}/);

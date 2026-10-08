@@ -72,9 +72,15 @@ test('the service worker caches the shell and nothing else', () => {
     assert.ok(shell.includes(needed), `${needed} is part of the app shell and should be cached`);
   }
   // Every shared module the browser imports has to be in there too, or the app
-  // will not start with no connection.
-  for (const name of ['stats', 'defaults', 'time', 'tokens', 'edit-plan', 'projects', 'sha256', 'transfer', 'learning']) {
-    assert.ok(shell.includes(`/shared/${name}.mjs`), `shared/${name}.mjs is imported but never cached`);
+  // will not start with no connection. Read off the imports rather than listed
+  // here: a hand-kept list silently stops covering the next module added.
+  const appjs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
+  const datajs = fs.readFileSync(path.join(PUBLIC, 'data.js'), 'utf8');
+  const imported = [...`${appjs}
+${datajs}`.matchAll(/from '\.\/shared\/([a-z0-9-]+\.mjs)'/g)].map((m) => m[1]);
+  assert.ok(imported.length >= 8, `expected the shared imports, found ${imported.length}`);
+  for (const name of new Set(imported)) {
+    assert.ok(shell.includes(`/shared/${name}`), `shared/${name} is imported but never cached`);
   }
   // app.js imports this one directly, so it is part of the shell too.
   assert.ok(shell.includes('/transfer.js'), 'transfer.js is imported by app.js but never cached');

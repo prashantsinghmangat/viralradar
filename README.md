@@ -21,10 +21,11 @@ installable on your phone's home screen like an app.
 
 - **Radar** — today's trends, fastest-growing first, refreshed automatically at
   **7:00 AM IST**. *Copy for Shorts Studio* copies a title, link and one-line
-  summary ready to paste; *Write script* and *Find angles* turn one into a video.
+  summary ready to paste; *Write script*, *Find angles* and *Research Pack* turn
+  one into a video.
 - **Ideas** — your ideas by day. Mark each **Picked** or **Skip**. *Write ideas
-  with AI* adds fresh ones for your niche, and every card has *Write script* and
-  *Find angles*.
+  with AI* adds fresh ones for your niche, and every card has *Write script*,
+  *Find angles* and *Research Pack*.
 - **Scripts** — a board running *To shoot → Shot → Edited → Posted*. Drag cards
   on the laptop, tap the arrow on the phone. Open one for the big-text
   **teleprompter**, one-tap copy for every caption and hashtag, and the **edit
@@ -164,6 +165,32 @@ This is the difference between making the video somebody else already made and
 making your own. Angles are not saved: an angle is a decision on the way to a
 script, not something to keep.
 
+### Research Pack, so you only have to record
+
+On any trend or idea, and in the box on the Scripts screen, there is
+**🔍 Research Pack**. It reads the actual pages first, then writes you
+everything you need to film: what the tool does, how it works in one plain
+sentence, the steps, prompts worth trying, what the free tier *really* gives
+you, alternatives, how to prove it on camera, and a checklist.
+
+The point is that **nothing in it is invented**:
+
+- Every source carries a green **● Live** or red **✕ Not reachable** badge, and
+  that badge comes from the fetch — not from the AI's opinion of it.
+- Every fact carries the URL it was read from. Anything that cannot be matched
+  to a page that actually loaded is tagged yellow **⚠ Unverified**, which means
+  *go and check this before you record*.
+- If nothing at all could be read, you get an error rather than a pack. A pack
+  with no sources would be guesswork.
+
+Then **🎯 Find angles from this** and **✍️ Write script from this** are given
+the **verified** facts only — so a script cannot repeat a limit or a price that
+was never on the page.
+
+From a trend card it uses the trend's own link, so nothing is guessed. From an
+idea or the free-text box it finds candidate pages and checks them, which is
+slower and less certain — paste the URL in the second box if you have it.
+
 ### It learns from your own results
 
 Once you have **5 logged videos**, every generation reads your Results first and
@@ -198,9 +225,10 @@ directly.
 ```
 Netlify  — the site, static files, installable as a PWA
 Supabase — Postgres (your data), Auth (your login), Storage (project files),
-           and four Edge Functions
+           and five Edge Functions
              vr-import               takes a Shorts Studio export
              vr-generate             holds the AI keys
+             vr-research             reads the live pages, then writes from them
              vr-refresh-trends       holds the YouTube and GitHub keys
              vr-purge-project-files  deletes files from projects posted 14 days ago
            pg_cron runs the trend refresh at 01:30 UTC = 07:00 IST
@@ -241,7 +269,7 @@ deploys and the phone. It assumes nothing and says why each step exists.
 
 ```
 npm install
-npm test            # 396 tests. No network, no database, no keys needed.
+npm test            # 432 tests. No network, no database, no keys needed.
 npm run build       # builds the site into dist/ (Netlify runs this)
 ```
 

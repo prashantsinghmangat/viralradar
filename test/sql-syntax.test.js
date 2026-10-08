@@ -307,6 +307,22 @@ test('the signalling channel is one per user, and nobody else can be on it', () 
     'the browser and the policy would be naming different channels, and nothing would ever connect');
 });
 
+test('a research pack is a row of its own kind, and carries its JSON', () => {
+  const sql = allMigrations();
+
+  const kinds = sql.match(/check \(kind in \(([^)]*'research'[^)]*)\)\)/);
+  assert.ok(kinds, "'research' is never added to the kind check, so no pack could be saved");
+
+  // A pack is JSON in `content`. It has no bytes anywhere, so a storage_path
+  // on one would be a download button pointing at nothing.
+  const shape = sql.slice(sql.lastIndexOf('add constraint project_items_shape'));
+  const body = shape.slice(0, shape.indexOf(');'));
+  assert.match(body, /when 'research' then[\s\S]*?content is not null/,
+    'a research row with no content is an empty pack');
+  assert.match(body, /when 'research' then[\s\S]*?storage_path is null/,
+    'a pack is JSON, never a file');
+});
+
 test('a video is recorded as a row, and can never be a file', () => {
   const sql = allMigrations();
 

@@ -54,6 +54,7 @@ and the source for the one-time data migration.
    │  Edge Functions (Deno):                                         │
    │     vr-import          JWT or vr_ token                         │
    │     vr-generate        holds GEMINI / OPENROUTER keys           │
+   │     vr-research        fetches live pages, then writes from them │
    │     vr-refresh-trends  holds YOUTUBE / GITHUB keys              │
    │     vr-purge-project-files  deletes files posted 14 days ago    │
    │  Storage  — private bucket "vr-project-files", 300 MB of ~1 GB  │
@@ -69,7 +70,10 @@ and the source for the one-time data migration.
 - **Browser**: everything that is just reading and writing your own rows. Safe
   because of Row Level Security, which is what makes the anon key safe to ship.
 - **Edge Functions**: only the things that cannot be in a browser — holding API
-  keys, and fetching from sites that would refuse a cross-origin request.
+  keys, and fetching from sites that would refuse a cross-origin request. The
+  Research Pack is the clearest case of the second: a browser cannot read
+  another site's page at all, so only something server-side can fetch a tool's
+  homepage and hand the text to a model.
 - **Laptop**: only the Downloads folder watcher, because only the laptop can see
   the Downloads folder. It needs no database and no server. Not built — the
   clipboard button covers the same need from either device.
@@ -85,8 +89,9 @@ decisions:
 - **Its own schema.** Everything is in `viralradar.*`, never `public`, so no
   table name can collide. The Data API has `viralradar` added to *Exposed
   schemas*, and the frontend uses `createClient(url, key, { db: { schema: 'viralradar' } })`.
-- **Prefixed function names** — `vr-import`, `vr-generate`, `vr-refresh-trends`,
-  `vr-purge-project-files` — because function names are global to a project.
+- **Prefixed function names** — `vr-import`, `vr-generate`, `vr-research`,
+  `vr-refresh-trends`, `vr-purge-project-files` — because function names are
+  global to a project.
   Storage policy names are prefixed `vr_` for the same reason: they all live on
   one shared `storage.objects`.
 - **A fixed slice of the file quota.** The whole project gets about 1 GB of
@@ -353,8 +358,9 @@ supabase/
     _shared/cors.ts    allow-list of origins, no wildcard
     _shared/auth.ts    JWT vs vr_ token, and the storage port
     _shared/core/      GENERATED copy of shared/*.mjs — see below
-    vr-import/         all four are deployed
+    vr-import/         all five are deployed
     vr-generate/
+    vr-research/       fetches the pages, then writes only from what loaded
     vr-refresh-trends/
     vr-purge-project-files/   deletes files from projects posted 14 days ago
 
@@ -373,7 +379,7 @@ public/              the whole frontend — no build step, no framework
 
 scripts/             build, sync-shared, inspect-db, test-rls, rls-plan,
                      db-url, make-icons
-test/                27 files, 396 tests
+test/                28 files, 432 tests
 ```
 
 **Why `_shared/core/` is a copy.** A deployed Edge Function only receives files
@@ -413,8 +419,8 @@ kept; the cloud version changes where the data comes from and adds the AI.
 
 | Screen | Today | Cloud version adds |
 |---|---|---|
-| **Radar** | trend cards by source, velocity score, Refresh now | **Write script** and **Find angles** on any trend card |
-| **Ideas** | grouped by day, Picked / Skip, filters | **Generate ideas**, and **Write script** / **Find angles** on every idea |
+| **Radar** | trend cards by source, velocity score, Refresh now | **Write script**, **Find angles** and **Research Pack** on any trend card — research uses the trend's own URL, so no page is guessed |
+| **Ideas** | grouped by day, Picked / Skip, filters | **Generate ideas**, and **Write script** / **Find angles** / **Research Pack** on every idea |
 | **Scripts** | board: To shoot → Shot → Edited → Posted, drag or arrows; detail view with teleprompter and copy buttons | arrives live when generated or imported elsewhere; the **edit plan** below the teleprompter, and **Make edit plan** when a script has none |
 | **Projects** | *new* | a folder per video: notes, links and files that reach the other device in a second. **Open project** from any script, an **Inbox** for anything shared in from Android, a per-item note saying which device it came from, and **Send a video** — straight to the other device over WebRTC, with the copy checked byte for byte |
 | **Results** | totals, avg views, save rate, streak, bars by format/hook/len/CTA, top 5, full table | same numbers, computed in the browser |
@@ -469,6 +475,8 @@ except the optional folder watcher.
 | 10. README rewrite | **done** |
 | 11. Project folders + files | **done, migration applied, verified against the real database** |
 | 12. Device-to-device video transfer | **built and deployed; the database half verified, the two-device half NOT yet run** |
+| 13. Angles, and learning from results | **done** |
+| 14. Research Pack | **built and tested; migration NOT yet pushed, function NOT yet deployed** |
 
 Phase 10 originally also contained a SQLite → Postgres migration. It was
 dropped, not skipped: no local database ever held any data, so there was
@@ -508,13 +516,21 @@ and all seven screens read and write the real database:
   and *Open project* on any script. The schema and policies behind it are
   verified against the real database; the two-device flows are not yet (below).
 
+- **YouTube arrives in the Radar.** The key was rejected by Google for a while
+  — "API key not valid", a console problem rather than a code one. It was fixed
+  and the last refresh brought **58 rows**, top one at 135,558 views, for 14
+  requests and 1,412 of the 10,000 daily quota units. All four sources now
+  return results.
+- **Angles and learning from results** — both written and tested. Learning is
+  inert until there are 5 logged results, which is the honest state: `results`
+  is still empty, so no generation has been personalised yet.
+
 ### What does not work yet
 
-- **YouTube is missing from the Radar.** The `YOUTUBE_API_KEY` secret is
-  rejected by Google: "API key not valid". This is a key problem in the Google
-  Cloud console, not a code problem — the YouTube source itself is written and
-  tested. Hacker News, Reddit and GitHub all return results, so the Radar is
-  useful without it.
+- **The Research Pack has never been run.** Every guard is tested in Node
+  against injected fetches, and 27 tamper cases are caught, but the migration
+  has not been pushed and `vr-research` has not been deployed — so no real page
+  has ever been fetched by it.
 - **No folder watcher.** Phase 9, optional. *Paste from Shorts Studio* does the
   same job in one tap and works on the phone, which a watcher never could.
 - **Video transfer has never run between two real devices.** The protocol is
@@ -664,6 +680,58 @@ asserts — personalisation has to be invisible on a new channel rather than an
 empty heading the model has to interpret. The edit-plan prompt is deliberately
 left out: past results have nothing to say about how to film a script that
 already exists.
+
+### The Research Pack, and what "grounded" can actually mean
+
+For any subject, `vr-research` produces everything needed to record: what the
+tool does, how it works in one plain sentence, the steps, prompts worth trying,
+what the free tier really gives you, alternatives, a test plan, and a checklist.
+It is saved as a `project_item` of kind `research` in that video's folder, so it
+sits next to the screenshots and links for the same video.
+
+It runs server-side for two reasons, and the second is the real one. The AI keys
+live there, as they do for `vr-generate`. But **a browser cannot read another
+site's page** — cross-origin rules stop it, which is the whole point of them. So
+only something server-side can fetch a homepage and hand the text to a model,
+and that is what makes the feature possible at all.
+
+**What is asked for, and what is enforced.** The prompt says "state only what is
+in the fetched text; anything else is unverified". That is an instruction, and an
+instruction is not a guarantee: a model can ignore it, and the times it does are
+exactly the times it matters. So the prompt asks, and `normalisePack()` in
+`shared/research.mjs` enforces what can be enforced:
+
+| Asked for in the prompt | Enforced in code |
+|---|---|
+| cite the source URL for every fact | a claim citing a page that did not load is **forced to `unverified`**, and the count of downgrades is reported |
+| never invent pricing, limits or features | the script prompt is given the **verified claims only**, with "use these facts and no others" |
+| say which pages you read | `sources` is set to **what actually loaded**, never to the model's list |
+| don't present a dead page as working | `reachable` on the tool and every alternative comes from the **fetch result**, never from the model's JSON |
+
+That table is the feature. Everything in the right-hand column is what the
+tamper tests bite on: 27 deliberate mistakes, each confirmed to fail the suite —
+the model trusted about its own verdicts, an unreachable page counted as live,
+`sources` taken from the JSON, the unverified half reaching a script prompt, the
+10-second timeout removed, the byte cap removed, a page that lies about its
+`Content-Length` streaming forever.
+
+**A pack with nothing live is refused, not written.** If no URL could be read,
+the function returns 422 and writes nothing. A pack assembled from zero sources
+would be entirely invented, which is the one thing this feature must never
+produce.
+
+**An unverified claim is still shown.** Hiding it would lose the thing worth
+checking before recording; dressing it as a fact would be the failure. So the UI
+shows it with a yellow **Unverified** tag and a green/red badge on every source,
+and the two are styled apart in CSS — which has its own test, because "they look
+different" is the entire guarantee a reader gets.
+
+**Where the URLs come from**, in order of trust: a URL the creator gave (a
+trend's own link, or pasted into the box), then a free-tier search API if
+`SEARCH_API_KEY` is set, then the AI's own candidates — capped at three and
+labelled on screen as guesses that were then checked. Only the first is known to
+be about the right thing. Search is skipped silently when no key is set, which
+is the normal state: the feature works without it.
 
 ### Testing the half that cannot be tested
 
@@ -905,7 +973,7 @@ everything not ViralRadar's is unchanged either side of the migration.
 | `npx supabase secrets list` | names and hashes of the secrets | logged in, linked |
 | `npx supabase functions deploy vr-import --use-api` | deploy a function without Docker | logged in, linked |
 
-There are four functions to deploy: `vr-import`, `vr-generate`,
+There are five functions to deploy: `vr-import`, `vr-generate`, `vr-research`,
 `vr-refresh-trends`, `vr-purge-project-files`.
 
 Environment: Node 24, Supabase CLI 2.120.0, PostgreSQL 17.6, project

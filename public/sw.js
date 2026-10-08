@@ -40,6 +40,7 @@ const SHELL = [
   '/shared/learning.mjs',
   '/shared/sha256.mjs',
   '/shared/transfer.mjs',
+  '/shared/research.mjs',
   '/transfer.js',
   '/manifest.webmanifest',
   '/icons/icon-192.png',

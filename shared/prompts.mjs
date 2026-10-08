@@ -31,6 +31,16 @@ const rulesBlock = () => RULES.map((r, i) => `${i + 1}. ${r}`).join('\n');
  */
 const lessonBlock = (lesson) => (lesson && lesson.summary ? `\n${lesson.summary}\n` : '');
 
+/**
+ * Facts read off live pages, when a Research Pack was made for this subject.
+ *
+ * Only the verified half ever gets this far — see packSummary() in
+ * shared/research.mjs. An unverified claim is a thing to check before
+ * recording, not a thing to put in a script, and a script written from one is
+ * the mistake the whole research feature exists to prevent.
+ */
+const researchBlock = (research) => (research ? `\n${research}\n` : '');
+
 // A shape carries the real date rather than a "YYYY-MM-DD (today)" placeholder:
 // a smaller model copied that parenthetical straight into its answer and the
 // import died on "invalid input syntax for type date".
@@ -108,7 +118,7 @@ const ANGLE_SHAPE = `{
   "twist": "what makes this different from simply showing the tool"
 }`;
 
-export function anglesPrompt({ topic, language = 'English', length = '30s', count = 5, today, lesson = null } = {}) {
+export function anglesPrompt({ topic, language = 'English', length = '30s', count = 5, today, lesson = null, research = null } = {}) {
   const types = ANGLE_TYPES.map(([name, what]) => `- ${name}: ${what}`).join('\n');
   return `A creator who demos free tools and useful websites has found this subject:
 
@@ -126,11 +136,11 @@ same thing, replace one of them.
 
 Rules the eventual script will have to follow:
 ${rulesBlock()}
-${lessonBlock(lesson)}
+${lessonBlock(lesson)}${researchBlock(research)}
 ${jsonOnly(ANGLE_SHAPE, '{ "angles": [ SHAPE ] }')}`;
 }
 
-export function scriptPrompt({ topic, language = 'English', length = '30s', today, angle = null, lesson = null } = {}) {
+export function scriptPrompt({ topic, language = 'English', length = '30s', today, angle = null, lesson = null, research = null } = {}) {
   // An angle chosen from the angles screen. The topic alone would produce the
   // plainest possible treatment of it, which is the one everybody else made.
   const angleBlock = angle && (angle.type || angle.title) ? `
@@ -149,7 +159,7 @@ Spoken language: ${language}. Today is ${today}.
 ${angleBlock}
 Rules:
 ${rulesBlock()}
-${lessonBlock(lesson)}
+${lessonBlock(lesson)}${researchBlock(research)}
 Beats must cover the whole ${length} with timecodes that add up to it (for example 0-3s, 3-10s, 10-22s, 22-30s).
 The spoken lines together must be readable aloud within ${length}.
 

@@ -753,6 +753,15 @@ export function createData(client) {
 
   const ai = {
     generate: (options) => callFunction('vr-generate', options, 'write that'),
+    /**
+     * Read the live pages for a subject and write the pack.
+     *
+     * The fetching has to happen server-side: a browser cannot read another
+     * site's page, which is the whole point of cross-origin rules. So this is
+     * the one generator that could not have lived in the page even if the keys
+     * were not a problem.
+     */
+    research: (options) => callFunction('vr-research', options, 'research that'),
   };
 
   // ---------- live updates ----------

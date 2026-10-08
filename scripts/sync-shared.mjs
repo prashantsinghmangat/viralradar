@@ -43,7 +43,7 @@ export const BROWSER_DIR = join(ROOT, 'public', 'shared');
 //             personalised, and both ends agree on the thresholds
 export const BROWSER_SHARED = [
   'stats.mjs', 'defaults.mjs', 'time.mjs', 'tokens.mjs', 'edit-plan.mjs',
-  'projects.mjs', 'sha256.mjs', 'transfer.mjs', 'learning.mjs',
+  'projects.mjs', 'sha256.mjs', 'transfer.mjs', 'learning.mjs', 'research.mjs',
 ];
 
 const BANNER = [

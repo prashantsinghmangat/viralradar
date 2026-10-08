@@ -10,6 +10,7 @@ import { newToken, hashToken } from './shared/tokens.mjs';
 import { LENGTHS, DEFAULT_AI_ORDER } from './shared/defaults.mjs';
 import { readEditPlan, editPlanText } from './shared/edit-plan.mjs';
 import { lessonLabel } from './shared/learning.mjs';
+import { packLabel, packSummary } from './shared/research.mjs';
 import {
   MAX_FILE_BYTES, POSTED_RETENTION_DAYS, TOTAL_BYTES_CAP,
   checkUpload, cleanDeviceName, downloadUrl, formatBytes, guessDeviceName, itemPreview, usageSummary,
@@ -378,6 +379,7 @@ async function renderRadar() {
           <a class="btn sm" href="${esc(t.url)}" target="_blank" rel="noopener noreferrer">Open ↗</a>
           <button type="button" class="btn sm primary" data-action="writeScript" data-topic="${esc([t.title, t.summary].filter(Boolean).join(' — ').slice(0, 300))}">✍️ Write script</button>
           ${ANGLES_BUTTON([t.title, t.summary].filter(Boolean).join(' — ').slice(0, 300))}
+          ${RESEARCH_BUTTON([t.title, t.summary].filter(Boolean).join(' — ').slice(0, 300), t.url)}
           ${copyBtn(copy, 'Copy', 'sm')}
         </div>
       </div>
@@ -393,6 +395,7 @@ async function renderRadar() {
       ${day ? `<span>Collected ${esc(day)}</span>` : '<span>Not run yet. Tap “Refresh now”, or wait for 7:00 AM IST.</span>'}
       <span class="badge accent" title="search.list costs 100 units, videos.list costs 1">YouTube today: ${yt.requests} searches · ${fmt(yt.units)} units</span>
     </div>
+    ${renderPack()}
     ${renderAngles()}
     <div class="chips" style="margin-bottom:14px">
       ${[['', 'All'], ...Object.entries(SOURCE).map(([k, v]) => [k, v.label])].map(([k, l]) =>
@@ -412,6 +415,170 @@ actions.refreshRadar = async (btn) => {
   } catch (e) { toast(e.message, true); }
   render();
 };
+
+// ================= RESEARCH PACK =================
+//
+// Everything needed to record a video about one tool, read off the tool's own
+// live pages rather than remembered.
+//
+// WHY THE BADGES MATTER MORE THAN THEY LOOK
+//   A pack is useful exactly to the extent that it is trustworthy, so the
+//   screen never presents the two kinds of statement the same way. Every URL
+//   carries Live or Not reachable, taken from the fetch and not from the model.
+//   Every unverified claim carries a yellow tag and its link, so the check of
+//   last resort — a person clicking through — is always one tap away.
+//
+//   An unverified claim is deliberately still shown. Hiding it would lose the
+//   thing worth checking before recording; dressing it as fact would be the
+//   failure this whole feature exists to prevent.
+
+let pack = null; // { topic, data, projectId, provider, urlsFrom }
+
+const liveBadge = (url, reachable) => (url
+  ? `<span class="badge ${reachable ? 'good' : 'bad'}">${reachable ? '● Live' : '✕ Not reachable'}</span>`
+  : '');
+
+const packLink = (url, reachable) => (url
+  ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" class="pack-url">${esc(url)}</a> ${liveBadge(url, reachable)}`
+  : '<span class="muted small">no URL</span>');
+
+const packList = (title, items) => (items && items.length
+  ? `<section class="card stack">
+      <div class="out-head"><h3>${esc(title)}</h3>${copyBtn(items.join('\n'))}</div>
+      <ol class="pack-steps">${items.map((x) => `<li>${esc(x)}</li>`).join('')}</ol>
+    </section>`
+  : '');
+
+function renderPack() {
+  if (!pack) return '';
+  const p = pack.data;
+  const tool = p.main_tool || {};
+  const free = tool.free_details || {};
+
+  const freeRows = [
+    ['Signup', free.signup], ['Watermark', free.watermark],
+    ['Free limits', free.limits], ['Export quality', free.export_quality],
+  ].filter(([, v]) => v);
+
+  // Verified and unverified are never styled the same. A yellow tag beside a
+  // claim is the difference between a fact and a thing to go and check.
+  const facts = (p.fact_check || []).map((f) => `
+    <li class="fact ${f.status === 'verified' ? 'verified' : 'unverified'}">
+      <div>${esc(f.claim)}</div>
+      <div class="muted small">
+        ${f.status === 'verified'
+          ? '<span class="badge good">✓ Verified</span>'
+          : '<span class="badge warn">⚠ Unverified</span>'}
+        ${f.source_url ? `<a href="${esc(f.source_url)}" target="_blank" rel="noopener noreferrer">${esc(f.source_url)}</a>` : 'no source'}
+      </div>
+    </li>`).join('');
+
+  return `
+    <section class="pack-block">
+      <div class="page-head" style="margin-bottom:8px">
+        <h2 style="margin:0;font-size:1rem">🔍 Research: ${esc(p.topic || pack.topic)}</h2>
+        <span class="badge accent">${esc(packLabel(p))}</span>
+        ${pack.urlsFrom === 'ai' ? '<span class="badge warn">URLs were the AI\'s guesses, then checked</span>' : ''}
+        <button type="button" class="sm ghost" data-action="closePack">✕ Close</button>
+      </div>
+
+      ${p.grounded ? '' : '<div class="notice">Nothing could be read, so nothing here is verified.</div>'}
+      ${p.downgraded_count ? `<div class="notice">${p.downgraded_count} claim${p.downgraded_count === 1 ? '' : 's'}
+        cited a page that did not load, so ${p.downgraded_count === 1 ? 'it was' : 'they were'} moved to unverified.</div>` : ''}
+
+      <section class="card stack">
+        <div class="out-head"><h3>${esc(tool.name || 'The tool')}</h3>${copyBtn(tool.url || '')}</div>
+        <div>${packLink(tool.url, tool.reachable)}</div>
+        ${tool.what_it_does ? `<p class="small">${esc(tool.what_it_does)}</p>` : ''}
+        ${tool.how_it_works_simple ? `<p class="muted small">${esc(tool.how_it_works_simple)}</p>` : ''}
+        ${freeRows.length ? `<dl>${freeRows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` : ''}
+      </section>
+
+      ${packList('Steps', tool.steps)}
+      ${packList('Prompts to try', tool.prompts)}
+      ${packList('Best inputs for a good demo', tool.best_inputs)}
+      ${packList('Settings worth changing', tool.settings)}
+
+      ${(p.alternatives || []).length ? `<section class="card stack">
+        <h3>Alternatives</h3>
+        <ul class="log">${p.alternatives.map((a) => `<li>
+          <span class="msg"><b>${esc(a.name)}</b> — ${esc(a.one_line)}</span>
+          <span class="when">${packLink(a.url, a.reachable)}</span>
+        </li>`).join('')}</ul>
+      </section>` : ''}
+
+      ${facts ? `<section class="card stack">
+        <div class="out-head"><h3>Fact check</h3>${copyBtn((p.fact_check || []).map((f) => `[${f.status}] ${f.claim} — ${f.source_url}`).join('\n'))}</div>
+        <ul class="facts">${facts}</ul>
+      </section>` : ''}
+
+      ${packList('How to prove it on camera', p.test_plan)}
+      ${packList('Before you record', p.recording_checklist)}
+
+      ${(p.sources || []).length ? `<section class="card stack">
+        <div class="out-head"><h3>Sources read</h3>${copyBtn((p.sources || []).join('\n'))}</div>
+        <ul class="log">${p.sources.map((u) => `<li><span class="msg">${packLink(u, true)}</span></li>`).join('')}</ul>
+      </section>` : ''}
+
+      ${(p.unreachable || []).length ? `<section class="card stack">
+        <h3>Could not be read</h3>
+        <ul class="log">${p.unreachable.map((u) => `<li>
+          <span class="msg">${esc(u.url)}</span><span class="when">${esc(u.error)}</span></li>`).join('')}</ul>
+      </section>` : ''}
+
+      <div class="row">
+        <button type="button" class="primary" data-action="anglesFromPack">🎯 Find angles from this</button>
+        <button type="button" class="primary" data-action="scriptFromPack">✍️ Write script from this</button>
+        ${pack.projectId ? `<a class="btn sm" href="#/projects/${encodeURIComponent(pack.projectId)}">📁 Its folder</a>` : ''}
+      </div>
+      <p class="muted small">Both of those are given the <b>verified</b> claims only, so a script cannot
+        repeat something that was never on the page.</p>
+    </section>`;
+}
+
+actions.closePack = () => { pack = null; render(); };
+
+/** Research a subject. The button carries the topic and, where there is one, a URL. */
+actions.researchPack = async (btn) => {
+  const topic = btn.dataset.topic;
+  if (!topic) { toast('Nothing to research.', true); return; }
+  const urls = btn.dataset.url ? [btn.dataset.url] : [];
+  const result = await askAi(btn, { kind: 'research', topic, urls });
+  if (!result) return;
+  pack = {
+    topic,
+    data: result.pack,
+    projectId: result.project_id || '',
+    provider: result.provider || '',
+    urlsFrom: result.urls_from || 'given',
+  };
+  if (result.warning) toast(result.warning, true, 9000);
+  angles = null; // one panel at a time, or the screen is unreadable
+  render();
+  window.scrollTo(0, 0);
+};
+
+actions.anglesFromPack = async (btn) => {
+  if (!pack) return;
+  const result = await askAi(btn, { kind: 'angles', topic: pack.topic, research: packSummary(pack.data) });
+  if (!result) return;
+  angles = {
+    topic: pack.topic,
+    items: result.angles || [],
+    personalised: result.personalised === true,
+    resultsCount: result.results_count || 0,
+  };
+  render();
+};
+
+actions.scriptFromPack = (btn) => {
+  if (!pack) return;
+  return askAi(btn, { kind: 'script', topic: pack.topic, research: packSummary(pack.data) });
+};
+
+/** "🔍 Research Pack" — on anything that could become a video. */
+const RESEARCH_BUTTON = (topic, url = '') =>
+  `<button type="button" class="btn sm" data-action="researchPack" data-topic="${esc(topic)}"${url ? ` data-url="${esc(url)}"` : ''}>🔍 Research Pack</button>`;
 
 // ================= ANGLES =================
 //
@@ -476,8 +643,11 @@ actions.findAngles = async (btn) => {
 actions.writeAngle = (btn) => {
   const angle = angles && angles.items[Number(btn.dataset.i)];
   if (!angle) { toast('That angle is no longer there.', true); return; }
-  // The topic goes with it: the angle says how, the topic says what.
-  return askAi(btn, { kind: 'script', topic: angles.topic, angle });
+  // The topic goes with it: the angle says how, the topic says what. And if a
+  // pack is open for the same subject, its verified facts go too — the angles
+  // on screen were written from them, so the script should be as well.
+  const research = pack && pack.topic === angles.topic ? packSummary(pack.data) : '';
+  return askAi(btn, { kind: 'script', topic: angles.topic, angle, research });
 };
 
 /** "🎯 Find angles" — on anything that could become a video. */
@@ -516,12 +686,14 @@ async function renderIdeas() {
           <div class="actions">
             <button type="button" class="sm primary" data-action="writeScript" data-topic="${esc([i.title, i.hook, i.tool].filter(Boolean).join(' — ').slice(0, 300))}">✍️ Write script</button>
             ${ANGLES_BUTTON([i.title, i.hook, i.tool].filter(Boolean).join(' — ').slice(0, 300))}
+            ${RESEARCH_BUTTON([i.title, i.hook, i.tool].filter(Boolean).join(' — ').slice(0, 300))}
           </div>
         </article>`).join('')}</div>
     </section>`).join('');
 
   return `
     <div class="page-head"><h1>Ideas</h1><button type="button" class="primary" data-action="generateIdeas">✨ Generate ideas</button>${PASTE_BUTTON()}</div>
+    ${renderPack()}
     ${renderAngles()}
     <div class="chips" style="margin-bottom:14px">
       ${[['all', 'All'], ['new', 'New'], ['picked', 'Picked'], ['skipped', 'Skipped']].map(([k, l]) =>
@@ -560,10 +732,20 @@ async function renderScripts(params) {
   }).join('');
   return `
     <div class="page-head"><h1>Scripts</h1><span class="muted small">${canDrag ? 'Drag cards between columns, or use the arrows.' : 'Tap the arrow to move a script.'}</span>${PASTE_BUTTON()}</div>
-    <div class="card row" style="margin-bottom:14px;gap:8px">
-      <input type="text" id="scriptTopic" placeholder="Write a script about…  e.g. a free site that removes image backgrounds" style="flex:1">
-      <button type="button" class="primary" data-action="writeScriptFromBox">✍️ Write script</button>
+    <div class="card stack" style="margin-bottom:14px">
+      <div class="row" style="gap:8px">
+        <input type="text" id="scriptTopic" placeholder="Write a script about…  e.g. a free site that removes image backgrounds" style="flex:1">
+        <button type="button" class="primary" data-action="writeScriptFromBox">✍️ Write script</button>
+      </div>
+      <div class="row" style="gap:8px">
+        <input type="text" id="researchUrl" placeholder="Its URL, if you have one — then nothing is guessed" style="flex:1" spellcheck="false">
+        <button type="button" data-action="researchFromBox">🔍 Research Pack</button>
+      </div>
+      <p class="muted small" style="margin:0">Research reads the live pages first, so a script can only use what
+        was really there. With no URL it finds candidates and checks them — which is slower and less certain.</p>
     </div>
+    ${renderPack()}
+    ${renderAngles()}
     ${scripts.length ? `<div class="board">${cols}</div>` : '<div class="empty"><span class="big">🎬</span>No scripts yet. Write one above, paste an export, or generate an idea first.</div>'}`;
 }
 actions.openScript = (card) => { location.hash = `#/scripts/${encodeURIComponent(card.dataset.id)}`; };
@@ -1703,6 +1885,8 @@ async function renderImport() {
 const GENERATING = {
   ideas: 'Writing ideas… up to 40 sec',
   angles: 'Finding angles… up to 40 sec',
+  // Longer than the rest: this one fetches real pages before writing anything.
+  research: 'Reading the live pages… up to 60 sec',
   script: 'Writing script… up to 40 sec',
   edit_plan: 'Planning the edit… up to 40 sec',
 };
@@ -1712,7 +1896,11 @@ async function askAi(btn, body) {
   btn.disabled = true;
   btn.innerHTML = `<span class="spin"></span> ${esc(GENERATING[body.kind] || 'Working…')}`;
   try {
-    const result = await data.ai.generate(body);
+    // Research is its own function, because it fetches pages as well as asking
+    // a model — and a browser cannot fetch another site's page at all.
+    const result = body.kind === 'research'
+      ? await data.ai.research(body)
+      : await data.ai.generate(body);
     const by = result.provider ? ` (by ${result.provider})` : '';
     // Say when the creator's own results shaped it. Silent when they did not,
     // which is the honest state until there are five logged videos.
@@ -1744,6 +1932,31 @@ actions.writeScriptFromBox = (btn) => {
 };
 
 actions.makeEditPlan = (btn) => askAi(btn, { kind: 'edit_plan', script_id: btn.dataset.id });
+
+/** Research whatever is in the free-text box, with its URL if one was given. */
+actions.researchFromBox = async (btn) => {
+  const input = $('#scriptTopic');
+  const topic = input.value.trim();
+  if (!topic) {
+    toast('What should I research? Type a line first.', true);
+    input.focus();
+    return;
+  }
+  const url = ($('#researchUrl').value || '').trim();
+  const result = await askAi(btn, { kind: 'research', topic, urls: url ? [url] : [] });
+  if (!result) return;
+  pack = {
+    topic,
+    data: result.pack,
+    projectId: result.project_id || '',
+    provider: result.provider || '',
+    urlsFrom: result.urls_from || 'given',
+  };
+  if (result.warning) toast(result.warning, true, 9000);
+  angles = null;
+  render();
+  window.scrollTo(0, 0);
+};
 
 // ---- paste from Shorts Studio ----
 //
