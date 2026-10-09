@@ -104,11 +104,14 @@ Both devices need to be:
 
 - signed in to the same account, with ViralRadar open
 - **on the same network.** Mobile data almost never works — it needs a relay
-  server in the middle and there is no free one. Same Wi-Fi is the usual answer;
-  with no Wi-Fi to hand, **connect your laptop to your phone's hotspot** — then
-  the two devices are on the same network by definition. If they cannot find
-  each other within fifteen seconds ViralRadar says so, suggests both of those,
-  and points at [LocalSend](https://localsend.org) as a last resort.
+  server in the middle and there is no free one. With no Wi-Fi to share,
+  **connect your laptop to your phone's hotspot** — then the two devices are on
+  the same network by definition, and the transfer itself still spends none of
+  the mobile data the hotspot runs on. If they cannot find each other within
+  fifteen seconds ViralRadar says so and suggests that. For two devices that
+  are genuinely not in the same place — nothing local-network can fix that —
+  send the video to yourself instead: as a **File** on Telegram (not as a
+  video, which gets recompressed), or through the Google Drive app.
 
 ### "Identical to the original" is checked, not claimed
 

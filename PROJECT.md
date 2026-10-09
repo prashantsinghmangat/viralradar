@@ -866,7 +866,13 @@ introduced on purpose, the suite is confirmed to fail, and the file is restored.
   produce proves nothing to anyone.
 - **No TURN relay, and the consequence stated rather than hidden.** It would
   cost money and would carry every byte of every video. Mobile data therefore
-  does not work, so the failure message says exactly that and names LocalSend.
+  does not work, so the failure message says exactly that — the hotspot trick
+  for two devices that are close but share no Wi-Fi, Telegram-as-a-File or
+  Google Drive for two that are not even in the same place. LocalSend was
+  dropped from that message: it has the identical same-network requirement
+  this transfer does, so naming it as the fix for "different networks" would
+  have sent someone straight back to the same failure with a second app
+  installed.
 
 **Mistakes found, and by what**
 
@@ -943,6 +949,19 @@ introduced on purpose, the suite is confirmed to fail, and the file is restored.
   have written a date nobody typed; the test caught it on its first run, which
   is why it checks the digits survive the round trip rather than only that
   parsing succeeded.
+- *A dropped ICE candidate read as a network failure.* `connect()` swallowed
+  `addIceCandidate()` errors with `.catch(() => {})`, treating "no remote
+  description yet" as a harmless race. It is not: trickle ICE starts the
+  moment a local description is set, which on a fast local network can be
+  before the other device has applied the offer (or before the offerer has
+  applied the answer) — and the candidate lost that way can be the one the two
+  devices actually needed. The symptom was indistinguishable from a real
+  connectivity failure: stuck on "Connecting…", then the 15-second timeout,
+  on two devices confirmed to be on the same Wi-Fi. Found during the first
+  live two-device test (`public/transfer.js` cannot be unit-tested — see
+  §10 — so this is the one class of bug that testing against fakes could
+  never have surfaced). Fixed by holding an early candidate and applying it
+  once `setRemoteDescription()` resolves, instead of discarding it.
 
 ---
 
@@ -1002,9 +1021,11 @@ introduced on purpose, the suite is confirmed to fail, and the file is restored.
   than ignored.
 - **Mobile data will not work**, and cannot be made to without a TURN relay —
   which would have to be paid for and would carry every byte of every video.
-  The 15-second timeout says so in words and points at LocalSend. This is a
-  design decision, not a bug, but it is the thing most likely to be mistaken
-  for one.
+  The 15-second timeout says so in words, and names the fixes that actually
+  apply: the hotspot, for two devices with no Wi-Fi to share; Telegram as a
+  File, or Google Drive, for two devices that are not even in the same room —
+  where no local-network trick could help at all. This is a design decision,
+  not a bug, but it is the thing most likely to be mistaken for one.
 - **The private channel's authorisation is only half-proved.** The RLS suite
   sets `realtime.topic()` and exercises the real gate, and reads the policies
   back out of `pg_policies` — both of which now pass against the live database.

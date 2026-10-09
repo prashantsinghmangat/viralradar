@@ -693,9 +693,10 @@ Then try the awkward cases, which are the ones worth knowing about:
 - **Big to a phone.** It should warn you *before* starting that the phone has to
   hold the whole thing in memory. Believe the warning.
 - **Both devices on mobile data.** Expect it to fail after fifteen seconds with
-  a message about same Wi-Fi and LocalSend. That is the design, not a fault:
-  getting through carrier NAT needs a relay server, a relay carries every byte
-  of every video, and there is no free one.
+  a message suggesting the phone's hotspot, and Telegram-as-a-File or Google
+  Drive for when the two devices are not even in the same place. That is the
+  design, not a fault: getting through carrier NAT needs a relay server, a
+  relay carries every byte of every video, and there is no free one.
 
 ### Step 14d. Check a Research Pack against a page you can see
 
@@ -851,7 +852,8 @@ watcher is a convenience, not a requirement.
   reason as storage: one shared table, and the others are tracebug's.
 - **Adding a TURN server to make mobile data work.** A relay carries every byte
   of every video, which is both a bill and a thing standing between your two
-  devices. Same Wi-Fi, or LocalSend.
+  devices. The hotspot trick, or — when the two devices are not even in the
+  same place — send it to yourself another way instead.
 
 ---
 
@@ -889,7 +891,7 @@ watcher is a convenience, not a requirement.
 | Every source says **✕ Not reachable** | The site refused the fetch, or took more than ten seconds. Open the URL yourself to check it is alive; some sites block anything that is not a real browser. Nothing is written when nothing loads, which is the intended behaviour. |
 | **Your devices** says nothing else is online, but the other device is open | Both have to be signed in to the *same account* and have finished loading. If it persists, the `realtime.messages` policies did not get applied — see Step 3 → "If `db push` fails on a policy outside the viralradar schema". `npm run test:rls` says which. |
 | "Could not open the channel your devices use to find each other" | The two `vr_devices_*` policies are missing, so Realtime refuses the private channel. Same fix as above. Nothing else in the app is affected. |
-| A transfer gets stuck on "Connecting…" and then gives up after 15 seconds | The two devices are not on the same network. Mobile data essentially never works — it needs a relay server and there is no free one. Same Wi-Fi; or connect your laptop to your phone's hotspot, which puts them on one network; or use LocalSend. |
+| A transfer gets stuck on "Connecting…" and then gives up after 15 seconds | The two devices are not on the same network. Mobile data essentially never works — it needs a relay server and there is no free one. Connect your laptop to your phone's hotspot, which puts them on one network and spends none of its data on the transfer itself. If the two devices are genuinely not in the same place, no local-network trick helps — send the video to yourself as a **File** on Telegram (not as a video, which gets recompressed), or through the Google Drive app. |
 | "The copy does not match the original" | Some bytes arrived wrong and the file was thrown away, which is correct. Try again. If it happens twice on the same file, tell me — that is worth looking at. |
 | A big transfer to a phone dies near the end | The phone has to hold the whole file in memory before it can save it; ViralRadar warns about this before starting. Send to a laptop instead. |
 | The incoming video card never appears on the other device | It is already busy with another transfer (one at a time, by design) — or that device's app is on an old service worker. Reload it. |

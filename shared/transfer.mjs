@@ -451,11 +451,18 @@ export function connectionFailureMessage(seconds = Math.round(CONNECT_TIMEOUT_MS
   return `Could not connect the two devices within ${seconds} seconds.`
     + ' This usually means they are on different networks — mobile data in particular almost never works,'
     + ' because it needs a relay server and there is no free one.'
-    + ' Put both devices on the same Wi-Fi and try again.'
-    // The fix that works when there is no Wi-Fi to share: the hotspot becomes
-    // the network, and the two devices are then on the same one by definition.
-    + ' No Wi-Fi to hand? Connect your laptop to your phone\'s hotspot so both are on the same network.'
-    + ' If that still fails, LocalSend (localsend.org) does the same job over Wi-Fi with no account at all.';
+    // The fix for "no Wi-Fi to share": the hotspot becomes the network, so the
+    // two devices are on the same one by definition — and the transfer still
+    // goes straight between them, so turning this on spends none of the data
+    // the hotspot itself runs on.
+    + ' Turn on your phone\'s hotspot and connect the laptop to it, then try again — that still uses none of your mobile data.'
+    // The other fix is for when they cannot share a network at all — two
+    // locations, not two devices in one room — where no local-network trick
+    // helps. LocalSend does not either: it has the same same-network
+    // requirement this transfer does, so naming it here would send someone
+    // straight back to this message with a second app installed.
+    + ' If the devices are too far apart for that, send it to yourself instead: on Telegram, send it as a File, not as a video'
+    + ' (a video gets compressed) — or upload it through the Google Drive app.';
 }
 
 /** The row that records a video exists, without the video. */

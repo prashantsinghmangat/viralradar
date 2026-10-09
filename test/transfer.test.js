@@ -473,14 +473,21 @@ test('a connection that never happens says what to do about it', async () => {
   const message = connectionFailureMessage();
   assert.match(message, new RegExp(`${CONNECT_TIMEOUT_MS / 1000} seconds`));
   // The real cause is usually the network, and what actually helps is naming
-  // the fixes rather than the fault. All three, in increasing order of "but I
-  // have not got that": same Wi-Fi, the phone's own hotspot, another app.
+  // the fix rather than the fault: the hotspot, for two devices that are
+  // close but have no Wi-Fi to share, and then — since nothing local-network
+  // can help two devices that are not local to each other at all — sending it
+  // to yourself another way.
   assert.match(message, /mobile data/);
-  assert.match(message, /same Wi-Fi/);
-  assert.match(message, /hotspot/, 'the hotspot is the fix when there is no Wi-Fi to share');
-  assert.match(message, /same network/);
-  assert.match(message, /LocalSend/);
-  assert.match(message, /localsend\.org/);
+  assert.match(message, /hotspot/);
+  assert.match(message, /none of your mobile data/, 'the hotspot fix must not sound like it spends the data it runs on');
+  assert.match(message, /Telegram/);
+  assert.match(message, /as a File/, 'sent as a video it would be recompressed, which is what this feature exists to avoid');
+  assert.match(message, /Google Drive/);
+  // LocalSend has the exact same same-network requirement this transfer does,
+  // so naming it here — "the thing that just failed because of your network,
+  // try this other thing with the same network requirement" — would send
+  // someone right back to this message with a second app installed.
+  assert.ok(!/LocalSend/.test(message), 'LocalSend needs the same network too, so it is not a fix for being on different ones');
 });
 
 test('there is no TURN server, and the STUN servers never see the video', async () => {
