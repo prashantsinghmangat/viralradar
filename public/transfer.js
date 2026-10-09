@@ -184,6 +184,15 @@ export function connect({ signaling, transferId, me, peer, offering, cancelled, 
   let stopWatching = () => {};
   let resolveChannel;
   let rejectChannel;
+  // A candidate can genuinely arrive before the description it belongs to —
+  // trickle ICE starts the moment a local description is set, which on a fast
+  // local network can be before this device has even sent its own offer, let
+  // alone before the other device has processed it. addIceCandidate() throws
+  // if there is no remote description yet, and the fix is not to ignore that
+  // (losing the candidate for good, which can be the one candidate the two
+  // devices actually needed) but to hold it until setRemoteDescription()
+  // resolves, exactly as both SDP messages below do when they arrive.
+  const pendingIce = [];
 
   const channel = new Promise((resolve, reject) => { resolveChannel = resolve; rejectChannel = reject; });
 
@@ -238,11 +247,19 @@ export function connect({ signaling, transferId, me, peer, offering, cancelled, 
     });
   }
 
+  /** Any ICE candidate that arrived before there was a remote description to add it to. */
+  const flushPendingIce = async () => {
+    while (pendingIce.length) {
+      await pc.addIceCandidate(pendingIce.shift()).catch(() => {});
+    }
+  };
+
   /** Signalling messages for this transfer, handed in by the caller. */
   const handle = async (message) => {
     try {
       if (message.type === SIGNAL.OFFER && message.sdp) {
         await pc.setRemoteDescription(message.sdp);
+        await flushPendingIce();
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         signaling.send({ type: SIGNAL.ANSWER, transferId, from: me, to: peer, sdp: pc.localDescription.toJSON() });
@@ -250,12 +267,18 @@ export function connect({ signaling, transferId, me, peer, offering, cancelled, 
       }
       if (message.type === SIGNAL.ANSWER && message.sdp) {
         await pc.setRemoteDescription(message.sdp);
+        await flushPendingIce();
         return;
       }
       if (message.type === SIGNAL.ICE && message.ice) {
-        // A candidate can arrive before the description it belongs to; that is
-        // normal and not worth failing over.
-        await pc.addIceCandidate(message.ice).catch(() => {});
+        if (pc.remoteDescription) {
+          await pc.addIceCandidate(message.ice).catch(() => {});
+        } else {
+          // Held until the offer or answer it arrived ahead of is applied —
+          // see pendingIce above. Dropping it here is how a connection that
+          // would otherwise have worked quietly never does.
+          pendingIce.push(message.ice);
+        }
         return;
       }
       if (message.type === SIGNAL.CANCEL) {
