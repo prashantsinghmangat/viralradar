@@ -151,6 +151,45 @@ devices have it. **Not the video.** That is the whole point.
 
 ---
 
+## A real folder on your laptop
+
+Chrome or Edge on a laptop or desktop can also mirror part of a project onto
+an actual folder, for whatever editing software you cut video in. In
+**Settings**, *Choose content folder…* once, and from then on every project
+gets a subfolder of its own:
+
+```
+2026-10-09 A background remover tool/
+  01-research/   research-pack.md, and one file per note
+  02-script/     script.md, captions.txt
+  03-raw/        drop your footage in here — nothing in it is ever touched
+  04-edit/       edit-plan.md
+  05-final/      your finished cut
+  06-cover/      your thumbnail
+```
+
+The research pack, the script and the captions are written and kept up to
+date automatically. **Everything else in the folder is yours** — raw footage,
+a half-finished edit, a screenshot dragged in by hand — ViralRadar only ever
+writes or deletes the five files named above, never anything it did not make
+itself.
+
+Open a project and it shows a checklist — research, script, edit plan, how
+much raw footage and how big, final video, cover — read straight off the
+folder, with a **Rescan** button. Once a final video appears in `05-final`,
+it offers to move the script to **Edited**. And if a video arrives from your
+other device while this one's folder is connected, it saves straight into
+`03-raw` with no dialog at all.
+
+Thirty days after a project is marked **Posted**, it offers — never does it by
+itself — to delete `03-raw`'s contents and says how much space that frees.
+`05-final` is never touched by this.
+
+Not available anywhere the File System Access API doesn't exist — which today
+means everywhere except Chrome and Edge on a computer.
+
+---
+
 ## Writing with AI
 
 **Ideas**, **angles**, **Scripts** and the **edit plan** can each be written for
@@ -272,7 +311,7 @@ deploys and the phone. It assumes nothing and says why each step exists.
 
 ```
 npm install
-npm test            # 453 tests. No network, no database, no keys needed.
+npm test            # 490 tests. No network, no database, no keys needed.
 npm run build       # builds the site into dist/ (Netlify runs this)
 ```
 

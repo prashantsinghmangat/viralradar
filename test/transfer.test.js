@@ -440,6 +440,32 @@ test('an invite carries a cleaned-up file name', async () => {
   const message = invite({ transferId: 't1', from: 'a', to: 'b', name: '../../etc/video.mp4', size: 10, mime: 'video/mp4' });
   assert.equal(message.name, 'video.mp4');
   assert.equal(message.size, 10);
+  assert.equal(message.projectId, '', 'absent by default, not undefined — it travels as JSON');
+});
+
+test('an invite can name which project a video is for, as an id the receiver resolves itself', async () => {
+  const { invite, readSignal } = await load();
+  const message = invite({
+    transferId: 't1', from: 'a', to: 'b', name: 'x.mp4', size: 10, mime: 'video/mp4', projectId: 'proj-123',
+  });
+  assert.equal(message.projectId, 'proj-123');
+  const read = readSignal(message, 'b');
+  assert.equal(read.projectId, 'proj-123', 'the receiver must be able to read it back');
+});
+
+test('readSignal never carries a folder name — only an id ever travels on the wire', async () => {
+  // The whole guarantee rests on this: readSignal() builds its return value
+  // field by field, so a forged or legacy "projectFolder" in the raw payload
+  // — malicious, or from an older build that still sent one — is silently
+  // absent from what the rest of the app ever sees, never merely untrusted.
+  const { readSignal, SIGNAL } = await load();
+  const read = readSignal({
+    type: SIGNAL.INVITE, from: 'b', to: 'a', transferId: 't1', name: 'x.mp4', size: 10, mime: 'video/mp4',
+    projectId: 'proj-123',
+    projectFolder: '../../../../Windows/System32',
+  }, 'a');
+  assert.equal(read.projectId, 'proj-123');
+  assert.equal(read.projectFolder, undefined, 'there is no such field any more — a folder name never arrives on the wire at all');
 });
 
 // ---------- the warnings ----------

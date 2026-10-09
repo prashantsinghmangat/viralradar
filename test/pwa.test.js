@@ -84,6 +84,7 @@ ${datajs}`.matchAll(/from '\.\/shared\/([a-z0-9-]+\.mjs)'/g)].map((m) => m[1]);
   }
   // app.js imports this one directly, so it is part of the shell too.
   assert.ok(shell.includes('/transfer.js'), 'transfer.js is imported by app.js but never cached');
+  assert.ok(shell.includes('/localfolder.js'), 'localfolder.js is imported by app.js but never cached');
 });
 
 // ---------- Web Share Target ----------

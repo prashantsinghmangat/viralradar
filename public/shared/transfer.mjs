@@ -128,6 +128,13 @@ export function readSignal(raw, myDeviceId) {
     mime: str(raw.mime),
     reason: str(raw.reason),
     canStream: raw.canStream === true,
+    // Which project this video is for, if the sender attached one to it — an
+    // id, never a folder name. The receiver looks up its OWN copy of that
+    // project (the same row, since both devices share one account) and reads
+    // ITS OWN local_folder_name off it; nothing about where the file lands on
+    // this device is ever taken from the signal itself. See
+    // shared/localfolder.mjs and actions.acceptVideo in public/app.js.
+    projectId: str(raw.projectId),
     // sdp and ice are handed to the browser as they are; there is nothing
     // useful to validate about them here beyond their being present.
     sdp: raw.sdp && typeof raw.sdp === 'object' ? raw.sdp : null,
@@ -136,7 +143,7 @@ export function readSignal(raw, myDeviceId) {
 }
 
 /** The offer of a file, which the other device has to accept before anything else happens. */
-export const invite = ({ transferId, from, to, name, size, mime, canStream }) => ({
+export const invite = ({ transferId, from, to, name, size, mime, canStream, projectId }) => ({
   type: SIGNAL.INVITE,
   transferId,
   from,
@@ -145,6 +152,7 @@ export const invite = ({ transferId, from, to, name, size, mime, canStream }) =>
   size: num(size),
   mime: str(mime),
   canStream: canStream === true,
+  projectId: str(projectId),
 });
 
 /**

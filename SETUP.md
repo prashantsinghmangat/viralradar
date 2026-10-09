@@ -746,6 +746,50 @@ It then finds candidate pages itself and checks them, and the pack says so with
 a yellow badge reading *URLs were the AI's guesses, then checked*. Expect this
 to be slower and less reliable than giving it the link.
 
+### Step 14e. Connect a local project folder (Chrome or Edge, desktop only)
+
+This needs the migration pushed first, same as Step 14d:
+
+```powershell
+cd D:\Project\viralradar
+npx supabase db push
+```
+
+That adds `local_folder_name` to `projects` — nothing else, and nothing to
+deploy, since the feature is entirely in the browser.
+
+1. **Settings → Local project folders → Choose content folder…** Pick an empty
+   folder, or a new one made for this.
+2. Open any project. It should make a subfolder named `<date> <title>` inside
+   the one you chose, with six subfolders in it, and a checklist appears
+   showing which of them have something in them yet.
+3. Add a note to the project, or make a Research Pack for it, then **Rescan**
+   (or just leave and come back). `01-research/research-pack.md` and/or a
+   `note-....md` file should appear with the content you'd expect.
+4. **The part worth actually checking** — drop a file of your own into
+   `03-raw` by hand (Explorer, not ViralRadar), one that is not named anything
+   on the generated list. Rescan. It must still be there, and the raw count in
+   the checklist must include it. Then edit the note you added in step 3 and
+   rescan again: its file in `01-research` should update in place, and your
+   own file in `03-raw` should be completely untouched throughout.
+5. If the project has a script (**🎬 Its script** on the project's own
+   screen), rescan and check that `02-script/script.md` and
+   `02-script/captions.txt` reflect it; if the script carries an edit plan,
+   `04-edit/edit-plan.md` too.
+6. Drop any file into `05-final`. The checklist should show a final video, and
+   — if the script is not already Edited or Posted — offer to move it there.
+7. Rename the project's title and rescan. The folder on disk must **not**
+   rename or duplicate; it keeps the name it was given the first time.
+8. **Settings → Reconnect / Forget this folder.** Forgetting it and choosing
+   it again should pick up exactly where it left off — nothing on disk is
+   touched by forgetting a folder, only the browser's memory of which one it
+   was.
+
+If you have a second device nearby, **send a video** from it into a project
+whose folder is connected here: it should save straight into that project's
+`03-raw` with no save dialog, and the checksum check still runs exactly as
+it does without a local folder.
+
 ## Step 15. Close the door (optional)
 
 **ViralRadar is already closed** without this step. The allowlist from Step 6b
@@ -894,6 +938,10 @@ watcher is a convenience, not a requirement.
 | A transfer gets stuck on "Connecting…" and then gives up after 15 seconds | The two devices are not on the same network. Mobile data essentially never works — it needs a relay server and there is no free one. Connect your laptop to your phone's hotspot, which puts them on one network and spends none of its data on the transfer itself. If the two devices are genuinely not in the same place, no local-network trick helps — send the video to yourself as a **File** on Telegram (not as a video, which gets recompressed), or through the Google Drive app. |
 | "The copy does not match the original" | Some bytes arrived wrong and the file was thrown away, which is correct. Try again. If it happens twice on the same file, tell me — that is worth looking at. |
 | A big transfer to a phone dies near the end | The phone has to hold the whole file in memory before it can save it; ViralRadar warns about this before starting. Send to a laptop instead. |
+| "Choose content folder…" is not in Settings, or does nothing | This needs Chrome or Edge on a laptop or desktop — the File System Access API does not exist anywhere else, including Safari and Firefox. |
+| A project's local folder never gets its files | Settings must show **Connected** for the chosen folder. If it says permission is needed again, press **Reconnect** — browsers forget this after a while, by design. |
+| A generated file (research-pack.md, script.md, ...) is missing or stale | Press **Rescan** on the project. It is also resynced automatically every time the project screen opens, so leaving and coming back does the same thing. |
+| "Could not read the folder" on a project | The chosen root folder was moved, renamed, or is on a drive that is not connected right now (an external drive, say). Reconnect it from the same location, or choose a different root in Settings. |
 | The incoming video card never appears on the other device | It is already busy with another transfer (one at a time, by design) — or that device's app is on an old service worker. Reload it. |
 | Where did my video go? | Nowhere near Supabase — that is the point. On a laptop, where you chose to save it; on Android, Downloads. The folder keeps only a 📹 note about it. |
 

@@ -120,7 +120,7 @@ maintained by a trigger.
 | `settings` | `user_id` | `niche_keywords[]`, language, default_length, `ai_order[]`, gemini_model, openrouter_model |
 | `usage` | `(user_id, date, provider)` | units, requests — YouTube quota and AI call counts |
 | `import_tokens` | `id` | `token_hash` (SHA-256 only), label, last_used_at |
-| `projects` | `(user_id, id)` | title, `script_id`, `status` active/posted/archived, `is_inbox`, `posted_at` |
+| `projects` | `(user_id, id)` | title, `script_id`, `status` active/posted/archived, `is_inbox`, `posted_at`, `local_folder_name` |
 | `project_items` | `(user_id, id)` | `project_id`, `kind` text/link/image/file/video_ref/research, content, storage_path, file_name, mime, size_bytes, sha256, `devices[]`, `external_id` (an import's own id, for re-import upsert), from_device, `preview` (generated) |
 | `allowed_users` | `user_id` | who may use ViralRadar at all |
 
@@ -379,7 +379,7 @@ public/              the whole frontend — no build step, no framework
 
 scripts/             build, sync-shared, inspect-db, test-rls, rls-plan,
                      db-url, make-icons
-test/                29 files, 453 tests
+test/                30 files, 490 tests
 ```
 
 **Why `_shared/core/` is a copy.** A deployed Edge Function only receives files
@@ -540,10 +540,11 @@ except the optional folder watcher.
 | 9. Watcher as a standalone script | **not started** — optional, may be skipped |
 | 10. README rewrite | **done** |
 | 11. Project folders + files | **done, migration applied, verified against the real database** |
-| 12. Device-to-device video transfer | **built and deployed; the database half verified, the two-device half NOT yet run** |
+| 12. Device-to-device video transfer | **built and deployed; database half verified; the first live two-device run failed to connect (an ICE-candidate race — see §11), now fixed and pushed but not yet re-confirmed live** |
 | 13. Angles, and learning from results | **done** |
-| 14. Research Pack | **built and tested; migration NOT yet pushed, function NOT yet deployed** |
-| 15. Import research packs and notes; forward-compatible bundles | **built and tested; the `external_id` migration NOT yet pushed** |
+| 14. Research Pack | **done, migration pushed, `vr-research` deployed** |
+| 15. Import research packs and notes; forward-compatible bundles | **done, migration pushed, `vr-import` redeployed** |
+| 16. Local project folders, mirrored onto disk | **built and tested; migration NOT yet pushed; the File System Access half (choosing a folder, a real write, a real receive-to-folder) NOT yet run live — same untested category as phase 12, see "Testing the half that cannot be tested"** |
 
 Phase 10 originally also contained a SQLite → Postgres migration. It was
 dropped, not skipped: no local database ever held any data, so there was
@@ -594,39 +595,50 @@ and all seven screens read and write the real database:
 
 ### What does not work yet
 
-- **The Research Pack has never been run.** Every guard is tested in Node
-  against injected fetches, and 27 tamper cases are caught, but the migration
-  has not been pushed and `vr-research` has not been deployed — so no real page
-  has ever been fetched by it.
+- **The Research Pack is deployed but not yet exercised against a real page.**
+  Every guard is tested in Node against injected fetches, and 27 tamper cases
+  are caught; the migration is pushed and `vr-research` is deployed, but
+  nobody has yet pressed the button against a real tool's homepage.
 - **No folder watcher.** Phase 9, optional. *Paste from Shorts Studio* does the
   same job in one tap and works on the phone, which a watcher never could.
-- **Video transfer has never run between two real devices.** The protocol is
-  tested end to end in Node — corrupted byte, cancel, backpressure, digest
-  mismatch — but `RTCPeerConnection` has never actually opened here, so the
-  handshake, presence, and the File System Access save path are unexercised.
-  This is the largest untested surface in the project and it needs two devices
-  on one Wi-Fi to clear. SETUP.md Step 14c is the procedure.
+- **Video transfer's first live run failed, and the fix has not been
+  re-confirmed.** Same Wi-Fi, both devices, and it still gave up at the
+  15-second timeout — not a network problem but a real bug: `connect()` in
+  `public/transfer.js` was silently discarding an ICE candidate that arrived
+  before the offer or answer it belonged to, which trickle ICE can produce on
+  a fast local network before either side has caught up. Fixed by holding an
+  early candidate and applying it once `setRemoteDescription()` resolves
+  (§11 has the detail); pushed, but the two-device run has not been repeated
+  since. SETUP.md Step 14c is the procedure.
+- **Local project folders have never touched a real folder.** Every decision
+  is tested against a fake directory handle — naming, content, the
+  never-touch-anything-else guarantee, the checklist, 12 tamper cases all
+  caught — but `showDirectoryPicker()`, a real write, and a real
+  receive-straight-into-03-raw have not happened. Chrome or Edge on a laptop,
+  needed to clear it.
 - **The nightly file cleanup has not fired.** `vr-purge-project-files` is
-  written and its rule is verified against real dates, but it still needs
-  deploying and `cron_config.purge_function_url` set. *Clean up now* in Settings
-  runs it on demand, which is how to check it without waiting a fortnight.
+  deployed and its rule is verified against real dates, but
+  `cron_config.purge_function_url` still needs setting. *Clean up now* in
+  Settings runs it on demand, which is how to check it without waiting a
+  fortnight.
 - **The phone flows have not been walked.** A note and a file in both
   directions, and Android's Share menu into the Inbox. All of it is wired and
   the Realtime half is the same machinery that already works for imports, but
   the Share Target in particular only appears once the installed PWA has
   activated the new service worker.
 
-**Done by hand:** all seven migrations pushed, schema exposed to the Data API,
-account created with a password and added to the allowlist, the three API keys
-(Gemini, OpenRouter, YouTube) in Supabase secrets, `ALLOWED_ORIGINS` and
-`CRON_SECRET` set, the cron secret also in Vault, code on GitHub,
-Netlify deploying from `main`, three of the four functions deployed, PWA
-installed on the phone, and the before/after policy fingerprint taken to show
-the other app was untouched.
+**Done by hand:** every migration pushed up to and including research packs
+and notes, schema exposed to the Data API, account created with a password and
+added to the allowlist, the three API keys (Gemini, OpenRouter, YouTube) in
+Supabase secrets, `ALLOWED_ORIGINS` and `CRON_SECRET` set, the cron secret also
+in Vault, code on GitHub, Netlify deploying from `main`, all five functions
+deployed, PWA installed on the phone, and the before/after policy fingerprint
+taken to show the other app was untouched.
 
-**Still to do by hand:** deploy `vr-purge-project-files`, set
-`cron_config.purge_function_url`, and reload the installed PWA on the phone so
-its service worker picks up the Share Target.
+**Still to do by hand:** push the local-folder migration, set
+`cron_config.purge_function_url`, reload the installed PWA on the phone so its
+service worker picks up the Share Target, and re-run SETUP.md Step 14c now
+that the ICE-candidate fix is live.
 
 ---
 
@@ -799,6 +811,65 @@ trend's own link, or pasted into the box), then a free-tier search API if
 labelled on screen as guesses that were then checked. Only the first is known to
 be about the right thing. Search is skipped silently when no key is set, which
 is the normal state: the feature works without it.
+
+### Local project folders, mirrored onto disk
+
+Chrome and Edge on desktop can give a website write access to a folder a person
+chose — the File System Access API — and that is the second, optional half of
+a project folder: one subfolder on the laptop per project (`01-research`
+through `06-cover`), kept in step with the research pack, the script, the
+captions and the edit plan that already live in the database. Everywhere else
+the API does not exist, and Settings says so rather than showing a dead button.
+
+**Same split as video transfer, for the same reason.** A real
+`FileSystemDirectoryHandle` cannot run in Node, so nothing written next to one
+can be tested. Every decision — what a folder is called, which files get
+written, which of those are ever safe to delete again, what a rescan should
+show — lives in `shared/localfolder.mjs`, written against an object *shaped
+like* the handle (`getDirectoryHandle`, `getFileHandle`, `removeEntry`, an
+async `values()` iterator) rather than a real one. `test/localfolder.test.js`
+runs all of it, including the driver functions, against a fake built from
+plain `Map`s. `public/localfolder.js` is only `showDirectoryPicker()` itself
+and the IndexedDB handle that survives between visits.
+
+**The one rule that matters most: never touch a file the app did not make.**
+A sync only ever writes or deletes a name on a fixed list —
+`research-pack.md`, `note-<id>.md`, `script.md`, `captions.txt`,
+`edit-plan.md` — and `isGeneratedName()` is the single gate every write and
+delete goes through. Raw footage, a half-finished edit, a screenshot dragged
+in by hand: none of it matches, so none of it is ever at risk. This is the
+property the tamper tests bite hardest on — widening the pattern to "anything
+ending in `.md`", or letting a sync delete any name instead of only ones
+`isGeneratedName()` allows, both fail the suite immediately.
+
+**The folder name is fixed at creation, not recomputed.** `"<date> <title>"`,
+sanitised to a single Windows-safe path segment (the forbidden characters,
+trailing dots and spaces, the reserved device names like `CON`), is computed
+once and stored on the project as `local_folder_name`. Renaming the title
+afterwards does not create a second folder next to the one that already holds
+the research — it just stops matching a name nothing recomputes any more.
+
+**Video transfer gets a third destination.** The `invite` signal carries the
+project's **id**, never a folder name — the sender attaches it, but the
+receiver is the one who decides what it means. `resolveTransferFolder()` looks
+that id up through its own RLS-scoped `projects.get()` (the same row on both
+devices, since they share one account) and reads **its own**
+`local_folder_name` off it, making one if there is none yet. A folder name
+never travels on the wire at all: `readSignal()` builds its return value field
+by field, so even a forged or stale `projectFolder` string in the raw payload
+is simply absent from what the rest of the app ever sees. If the receiving
+laptop has its own folder connected and permitted, `rawSink()` then writes the
+incoming video straight into that project's `03-raw`, no save dialog; a
+project this account does not have, or no local folder connected at all,
+falls back to the save dialog exactly as before. The SHA-256 check is
+unaffected either way — it lives in `shared/transfer.mjs`, which has no idea
+where the bytes end up.
+
+**Cleanup is offered, never automatic.** Thirty days after a project is marked
+posted, the Projects screen offers to delete `03-raw`'s contents and says how
+much that would free — `05-final` is a different subfolder `deleteRawFiles()`
+never even opens, so a final cut is structurally safe from this regardless of
+what the raw footage cleanup does.
 
 ### Testing the half that cannot be tested
 

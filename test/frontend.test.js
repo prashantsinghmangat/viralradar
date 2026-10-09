@@ -115,7 +115,7 @@ test('user text is escaped wherever it is put into HTML', () => {
   // model-written text on screen, so they are the ones that matter most.
   // encodeURIComponent() is on the list for a different reason: it percent-
   // encodes, so its output cannot be markup at all.
-  const safe = /^(esc\(|fmt\(|compact\(|ago\(|when\(|copyBtn\(|hbars\(|format\(|renderEditPlan\(|PASTE_BUTTON\(|makeButton\(|devicesLine\(|renderAngles\(|ANGLES_BUTTON\(|renderPack\(|RESEARCH_BUTTON\(|packLink\(|packList\(|liveBadge\(|factClass\(|encodeURIComponent\(|GENERATING\[|KIND_ICON|SOURCE|LIVE_LABEL|STAGES|LENGTHS|DEFAULT_AI_ORDER)/;
+  const safe = /^(esc\(|fmt\(|compact\(|ago\(|when\(|copyBtn\(|hbars\(|format\(|formatBytes\(|renderEditPlan\(|PASTE_BUTTON\(|makeButton\(|devicesLine\(|renderAngles\(|ANGLES_BUTTON\(|renderPack\(|RESEARCH_BUTTON\(|packLink\(|packList\(|liveBadge\(|factClass\(|renderLocalFolderSettings\(|encodeURIComponent\(|GENERATING\[|KIND_ICON|SOURCE|LIVE_LABEL|STAGES|LENGTHS|DEFAULT_AI_ORDER)/;
   const bad = [];
   for (const literal of htmlLiterals) {
     for (const m of literal.matchAll(/\$\{([^{}]*)\}/g)) {
@@ -448,6 +448,82 @@ test('the video never touches Storage, and the row never claims it does', () => 
   assert.ok(sendTo.indexOf('await sendTo(') < sendTo.indexOf('addVideoRef'),
     'the note must be written after the transfer, with the verified digest');
   assert.match(sendTo, /sha256: result\.sha256/);
+});
+
+// ---------- local project folders ----------
+
+test('the local folder is offered only where the API actually exists', () => {
+  const section = appjs.slice(appjs.indexOf('function renderLocalFolderSettings'), appjs.indexOf('actions.chooseLocalFolder'));
+  assert.match(section, /isLocalFolderSupported\(\)/, 'unsupported browsers must see a message, not a dead button');
+  assert.match(section, /Chrome or Edge/i);
+});
+
+test('every value the local-folder panels put on screen is escaped', () => {
+  for (const [start, end] of [
+    ['function renderLocalFolderSettings', 'actions.chooseLocalFolder'],
+    ['async function localFolderSection', 'actions.rescanLocalFolder'],
+  ]) {
+    const fn = appjs.slice(appjs.indexOf(start), appjs.indexOf(end));
+    const interpolations = [...fn.matchAll(/\$\{([^{}]*)\}/g)].map((m) => m[1].trim());
+    assert.ok(interpolations.length >= 3, `expected ${start} to interpolate something, found ${interpolations.length}`);
+    for (const expr of interpolations) {
+      const ok = /^(esc\(|formatBytes\(|item\()/.test(expr)
+        // Assembled from pieces checked individually, or a constant/number
+        // that cannot carry markup.
+        || /\.map\(|\.join\(|\?|&&|\.count\b|LOCAL_RAW_RETENTION_DAYS|LOCAL_SUBFOLDERS/.test(expr);
+      assert.ok(ok, `${start} puts ${expr} into HTML without escaping it`);
+    }
+  }
+});
+
+test('a chosen local folder name is persisted once, never recomputed from a renamed title', () => {
+  const fn = appjs.slice(appjs.indexOf('async function ensureFolderName'), appjs.indexOf('async function resolveTransferFolder'));
+  assert.match(fn, /if \(project\.local_folder_name\) return project\.local_folder_name;/, 'an existing folder name must win over recomputing one');
+  assert.match(fn, /setLocalFolderName/, 'a freshly computed name has to be saved, or this check never helps again');
+  // Both localFolderSection() (opening a project) and resolveTransferFolder()
+  // (a video arriving for one) go through this single function, so neither
+  // can drift from the other's idea of what a project's folder is called.
+  const section = appjs.slice(appjs.indexOf('async function localFolderSection'), appjs.indexOf('actions.rescanLocalFolder'));
+  assert.match(section, /ensureFolderName\(project\)/);
+  const resolve = appjs.slice(appjs.indexOf('async function resolveTransferFolder'), appjs.indexOf('async function localFolderSection'));
+  assert.match(resolve, /ensureFolderName\(project\)/);
+});
+
+test('syncing a project folder never deletes anything outside the generated files', () => {
+  // The whole guarantee lives in shared/localfolder.mjs (isGeneratedName,
+  // diffGeneratedFiles) and is proved there against a fake handle; this just
+  // confirms the browser wiring calls the function that carries it rather
+  // than reaching into a directory handle directly.
+  const fn = appjs.slice(appjs.indexOf('async function localFolderSection'), appjs.indexOf('actions.rescanLocalFolder'));
+  assert.match(fn, /syncGeneratedFiles\(/);
+  assert.ok(!/removeEntry|getFileHandle/.test(fn), 'file-level writes and deletes belong in shared/localfolder.mjs, not here');
+});
+
+test('a video received for a project resolves its folder from this device\'s own data, never from the sender', () => {
+  const section = appjs.slice(appjs.indexOf('// ================= SENDING A VIDEO'), appjs.indexOf('// ---------- things shared into'));
+  const accept = section.slice(section.indexOf('actions.acceptVideo'));
+  assert.match(accept, /resolveTransferFolder\(message\.projectId\)/,
+    'the only thing taken from the message is an id; everything else about the folder comes from this device\'s own lookup');
+  assert.match(accept, /rawSink\(/, 'the local-folder sink must be offered as an alternative to the save dialog');
+  assert.match(accept, /rawSink\(state\.localRoot, localFolderName,/,
+    'the folder name passed to rawSink must be the resolved local variable, not anything read off the message');
+  assert.ok(!/message\.projectFolder|message\.folder/.test(accept),
+    'no field read straight off the message may ever be used as a folder name');
+
+  // resolveTransferFolder() itself is where the real guarantee lives: an id
+  // resolved through this account's own RLS-scoped projects.get(), never a
+  // name taken from the signal.
+  const resolve = appjs.slice(appjs.indexOf('async function resolveTransferFolder'), appjs.indexOf('async function localFolderSection'));
+  assert.match(resolve, /data\.projects\.get\(projectId\)/);
+  assert.match(resolve, /ensureFolderName\(project\)/);
+  assert.ok(!/projectFolder/.test(resolve), 'nothing here may read a folder name off anything but its own database row');
+});
+
+test('sending a video passes this project\'s id along as a hint, never a requirement', () => {
+  const section = appjs.slice(appjs.indexOf('// ================= SENDING A VIDEO'), appjs.indexOf('// ---------- things shared into'));
+  const sendTo = section.slice(section.indexOf('actions.sendVideoTo'), section.indexOf('// ---- receiving'));
+  assert.match(sendTo, /projectId,/, 'the id travels; a folder name never does');
+  assert.ok(!/data\.projects\.get\(/.test(sendTo), 'the sender has no reason to look anything up — it already has the id');
 });
 
 test('a transfer survives moving between screens', () => {

@@ -412,6 +412,16 @@ export function createData(client) {
     },
 
     /**
+     * Fix this project's local folder name in place, the first time its local
+     * folder is made. Set once and never recomputed from the title afterwards
+     * — see the migration and shared/localfolder.mjs's projectFolderName().
+     */
+    setLocalFolderName: (id, name) => run(
+      client.from('projects').update({ local_folder_name: name }).eq('id', id).select('id, local_folder_name'),
+      'remember that folder name',
+    ),
+
+    /**
      * Delete a folder and everything in it.
      *
      * The files go first. Deleting the rows first would work and look fine,

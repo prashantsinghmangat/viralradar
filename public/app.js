@@ -20,6 +20,15 @@ import {
   acceptPrompt, formatDuration, sendWarning, videoRefSummary,
 } from './shared/transfer.mjs';
 import { canStreamToDisk, newPeerId, pickSink, receiveFrom, sendTo } from './transfer.js';
+import {
+  LOCAL_RAW_RETENTION_DAYS, SUBFOLDERS as LOCAL_SUBFOLDERS,
+  deleteRawFiles, ensureProjectFolder, projectChecklist, projectFolderName, rawCleanupDue, rawSink,
+  scanProject, syncGeneratedFiles, wantedFiles,
+} from './shared/localfolder.mjs';
+import {
+  chooseRootFolder, forgetRootFolder, checkPermission, isSupported as isLocalFolderSupported,
+  loadRootHandle, requestPermission,
+} from './localfolder.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -113,6 +122,11 @@ const state = {
   // The device channel, this tab's peer id, and which of my other devices are
   // online. See the video transfer section.
   devices: null, peerId: null, peers: [], deviceError: '',
+  // The local project-folders root, if one has been chosen on this device —
+  // see the "Local project folders" section. localPermission is one of
+  // 'unsupported' (not Chrome/Edge desktop), 'none' (nothing chosen yet),
+  // 'prompt' (chosen before, but the browser wants to ask again) or 'granted'.
+  localRoot: null, localRootName: '', localPermission: 'none',
 };
 const userId = () => state.session?.user?.id ?? null;
 
@@ -1194,6 +1208,8 @@ async function renderProjectDetail(id) {
     data.projects.items(id),
     data.storage.usage(),
   ]);
+  const script = project.script_id ? await data.scripts.get(project.script_id).catch(() => null) : null;
+  const localFolder = await localFolderSection(project, list, script);
 
   // Signed URLs, because nothing in this bucket is public. They last five
   // minutes, which is longer than anyone looks at a screen before reloading,
@@ -1278,6 +1294,8 @@ async function renderProjectDetail(id) {
     </div>
     ${project.status === 'posted' ? `<div class="notice">Posted${project.posted_at ? ` ${esc(ago(project.posted_at))}` : ''}.
       Its files are deleted ${POSTED_RETENTION_DAYS} days after that; notes and links stay.</div>` : ''}
+
+    ${localFolder}
 
     <div class="card stack" style="margin-bottom:16px">
       <div>
@@ -1376,6 +1394,133 @@ actions.deleteItem = async (btn) => {
     render();
   } catch (e) { toast(e.message, true); }
 };
+
+// ---------- this project's local folder ----------
+//
+// Nothing here unless a folder is connected on THIS device — the database
+// knows nothing about it, so opening the same project on a different laptop
+// shows none of this. Every time the project screen is opened (which is also
+// what "rescan" means — see the button below) the folder's generated files
+// are brought up to date and then read back, so the checklist always
+// describes what is on disk right now rather than what the app last wrote.
+const CHECKLIST_LABEL = {
+  research: 'Research', script: 'Script', editPlan: 'Edit plan',
+  final: 'Final video', cover: 'Cover image',
+};
+
+/**
+ * This project's folder name, making one (and saving it) if it has none yet.
+ * The one place that logic lives — used when opening the project screen and
+ * when a video arrives for it, so the rule in shared/localfolder.mjs's
+ * projectFolderName() about never recomputing an existing name is honoured
+ * from both.
+ */
+async function ensureFolderName(project) {
+  if (project.local_folder_name) return project.local_folder_name;
+  const folderName = projectFolderName({ title: project.title, date: (project.origin_at || project.created_at || '').slice(0, 10) });
+  await data.projects.setLocalFolderName(project.id, folderName);
+  project.local_folder_name = folderName;
+  return folderName;
+}
+
+/**
+ * Where an incoming video for `projectId` should be saved, or '' to fall back
+ * to the save dialog. The id comes from the other device, over a signal — see
+ * shared/transfer.mjs's invite(). Nothing about the FOLDER does: it is always
+ * read off THIS device's own copy of that project, fetched by id through the
+ * normal RLS-scoped query, so a project id that is wrong, stale, or placed
+ * there by something other than this app's own sender resolves to either one
+ * of this account's own real projects or nothing at all — never a name
+ * invented from the message.
+ */
+async function resolveTransferFolder(projectId) {
+  if (!projectId || !state.localRoot || state.localPermission !== 'granted') return '';
+  try {
+    const project = await data.projects.get(projectId);
+    const folderName = await ensureFolderName(project);
+    await ensureProjectFolder(state.localRoot, folderName);
+    return folderName;
+  } catch {
+    return '';
+  }
+}
+
+async function localFolderSection(project, items, script) {
+  if (!state.localRoot) return '';
+  if (state.localPermission !== 'granted') {
+    return `<div class="card stack" style="margin-bottom:16px">
+      <h2 style="margin:0;font-size:1rem">📂 Local folder</h2>
+      <p class="muted small" style="margin:0">Permission to “${esc(state.localRootName)}” needs to be given again
+        before this project's folder can be kept in sync.</p>
+      <div><button type="button" class="sm" data-action="reconnectLocalFolder">Reconnect</button></div>
+    </div>`;
+  }
+
+  let folderName;
+  let checklist;
+  let failure = '';
+  try {
+    folderName = await ensureFolderName(project);
+    await ensureProjectFolder(state.localRoot, folderName);
+    await syncGeneratedFiles(state.localRoot, folderName, wantedFiles({ items, script }));
+    const scan = await scanProject(state.localRoot, folderName);
+    checklist = projectChecklist(scan, { scriptStage: script?.stage });
+  } catch (e) {
+    failure = e.message;
+    folderName = folderName || project.local_folder_name || project.title;
+    checklist = projectChecklist();
+  }
+
+  const rawLabel = `Raw footage${checklist.raw.count ? ` (${checklist.raw.count}, ${formatBytes(checklist.raw.bytes)})` : ''}`;
+  const item = (ok, label) => `<li class="check ${ok ? 'ok' : ''}">${ok ? '✓' : '✗'} ${esc(label)}</li>`;
+
+  const cleanupDue = rawCleanupDue(project) && checklist.raw.count > 0;
+
+  return `<div class="card stack" style="margin-bottom:16px">
+    <div class="row" style="justify-content:space-between">
+      <h2 style="margin:0;font-size:1rem">📂 ${esc(folderName)}</h2>
+      <button type="button" class="sm ghost" data-action="rescanLocalFolder">↻ Rescan</button>
+    </div>
+    ${failure ? `<div class="notice">Could not read the folder: ${esc(failure)}</div>` : `
+      <ul class="checklist">
+        ${['research', 'script', 'editPlan'].map((k) => item(checklist[k], CHECKLIST_LABEL[k])).join('')}
+        ${item(checklist.raw.count > 0, rawLabel)}
+        ${['final', 'cover'].map((k) => item(checklist[k], CHECKLIST_LABEL[k])).join('')}
+      </ul>
+      ${checklist.offerMoveToEdited ? `<div class="notice">A final video is in 05-final.
+        <button type="button" class="sm" data-action="moveScriptToEdited" data-id="${esc(project.script_id)}">Move script to Edited</button></div>` : ''}
+      ${cleanupDue ? `<div class="notice">This project was posted ${LOCAL_RAW_RETENTION_DAYS}+ days ago. Its raw footage
+        in 03-raw (${checklist.raw.count}, ${formatBytes(checklist.raw.bytes)}) can be deleted to free the space —
+        05-final is never touched.
+        <button type="button" class="sm" data-action="deleteLocalRaw" data-id="${esc(project.id)}" data-v="${esc(folderName)}">Delete raw footage</button></div>` : ''}
+    `}
+  </div>`;
+}
+
+actions.rescanLocalFolder = () => render();
+
+actions.moveScriptToEdited = async (btn) => {
+  try {
+    await data.scripts.setStage(btn.dataset.id, 'edited');
+    toast('Moved to Edited.');
+    render();
+  } catch (e) { toast(e.message, true); }
+};
+
+actions.deleteLocalRaw = async (btn) => {
+  if (btn.dataset.armed !== '1') {
+    btn.dataset.armed = '1';
+    btn.textContent = 'Tap again to delete';
+    btn.classList.add('copied');
+    return;
+  }
+  try {
+    const { count, bytes } = await deleteRawFiles(state.localRoot, btn.dataset.v);
+    toast(count ? `Deleted ${count} file${count === 1 ? '' : 's'}, freed ${formatBytes(bytes)}.` : 'Nothing to delete.');
+    render();
+  } catch (e) { toast(e.message, true); }
+};
+
 
 /**
  * Upload the chosen files, one at a time, saying where it has got to.
@@ -1522,14 +1667,21 @@ function drawTransfer() {
   // ---- an offer arriving from the other device ----
   if (transfer.stage === 'invited') {
     const { ask, warning } = acceptPrompt(transfer.invite);
+    // Whether this actually lands in a local folder is not known until
+    // Accept resolves it — see resolveTransferFolder() — because that needs
+    // an id looked up against this device's own projects, not a guess made
+    // from anything the invite itself carries.
+    const mayUseLocalFolder = !!(transfer.invite.projectId && state.localRoot && state.localPermission === 'granted');
     panel.innerHTML = `
       <div class="transfer-card">
         <h3>📹 Incoming video</h3>
         <p class="small">${esc(ask)}</p>
         ${warning ? `<div class="notice">${esc(warning)}</div>` : ''}
-        <p class="muted small">${canStreamToDisk()
-          ? 'You will be asked where to save it before it starts.'
-          : 'It will download when it finishes, so it has to fit in memory first.'}</p>
+        <p class="muted small">${mayUseLocalFolder
+          ? 'If this project has a local folder connected here, it will be saved straight into its 03-raw, no dialog.'
+          : canStreamToDisk()
+            ? 'You will be asked where to save it before it starts.'
+            : 'It will download when it finishes, so it has to fit in memory first.'}</p>
         <div class="row">
           <button type="button" class="primary" data-action="acceptVideo">Accept</button>
           <button type="button" data-action="declineVideo">No thanks</button>
@@ -1641,6 +1793,12 @@ actions.sendVideoTo = async (btn) => {
       me: state.peerId,
       peer,
       file,
+      // An id, not a folder name — the receiver resolves ITS OWN copy of
+      // this project and reads ITS OWN local_folder_name off it, so a
+      // receiving laptop with its own folder connected can save straight
+      // into 03-raw instead of asking where to put the file. A folder name
+      // is never taken from the other device; see resolveTransferFolder().
+      projectId,
       cancelled: () => transfer.cancelled,
       onStage: (stage) => {
         transfer.stage = stage === 'asking' ? 'asking' : stage === 'connecting' ? 'connecting' : 'sending';
@@ -1714,12 +1872,18 @@ actions.acceptVideo = async (btn) => {
   if (!message) { resetTransfer(); return; }
   btn.disabled = true;
 
-  // Where it goes is chosen NOW, while this click still counts as a gesture:
-  // showSaveFilePicker() needs one, and there will not be another twenty
-  // minutes into a transfer.
+  // Straight into this project's 03-raw, no dialog at all, when this device
+  // has its own folder connected AND that project turns out to be one this
+  // account actually owns — resolveTransferFolder() is the only place a
+  // folder name comes from, and it is never the invite. Otherwise exactly as
+  // before: showSaveFilePicker() chosen NOW, while this click still counts as
+  // a gesture, because there will not be another one twenty minutes in.
+  const localFolderName = await resolveTransferFolder(message.projectId);
   let sink;
   try {
-    sink = await pickSink(message.name || 'video.mp4');
+    sink = localFolderName
+      ? rawSink(state.localRoot, localFolderName, message.name || 'video.mp4')
+      : await pickSink(message.name || 'video.mp4');
   } catch {
     // The person closed the file picker. That is a decline, not a failure.
     actions.declineVideo();
@@ -1749,7 +1913,8 @@ actions.acceptVideo = async (btn) => {
 
     transfer.stage = 'done';
     transfer.message = `“${result.name}” arrived unchanged — ${formatBytes(result.bytes)}.`
-      + (sink.kind === 'disk' ? ' Saved where you chose.' : ' Check your Downloads.');
+      + (localFolderName ? ` Saved in ${localFolderName}/03-raw.`
+        : sink.kind === 'disk' ? ' Saved where you chose.' : ' Check your Downloads.');
     transfer.verdict = `SHA-256 ${result.sha256}`;
     drawTransfer();
   } catch (e) {
@@ -1800,6 +1965,29 @@ function stopDevices() {
   if (state.devices) state.devices.leave();
   state.devices = null;
   state.peers = [];
+}
+
+// ---------- the local project-folders root ----------
+//
+// Reconnecting to a folder chosen on an earlier visit needs no click: a
+// directory handle is stored in IndexedDB and queryPermission() (unlike
+// requestPermission()) can be asked without a user gesture. If permission has
+// lapsed — the browser asks again after a while, or the folder moved — the
+// handle is kept and localPermission says 'prompt', so Settings can offer a
+// single Reconnect button rather than asking to choose the folder all over
+// again.
+async function startLocalFolder() {
+  state.localPermission = isLocalFolderSupported() ? 'none' : 'unsupported';
+  if (!isLocalFolderSupported()) return;
+  const handle = await loadRootHandle().catch(() => null);
+  if (!handle) return;
+  state.localRoot = handle;
+  state.localRootName = handle.name;
+  try {
+    state.localPermission = await checkPermission(handle);
+  } catch {
+    state.localPermission = 'prompt';
+  }
 }
 
 // ---------- things shared into ViralRadar from Android ----------
@@ -2218,6 +2406,11 @@ async function renderSettings() {
       </section>
 
       <section class="card stack">
+        <h2>Local project folders</h2>
+        ${renderLocalFolderSettings()}
+      </section>
+
+      <section class="card stack">
         <h2>Backup &amp; restore</h2>
         <p class="small">Download everything as one JSON file. Worth doing now and then: a free Supabase project keeps no backups of its own.</p>
         <div class="row">
@@ -2317,6 +2510,83 @@ actions.purgeFiles = async (btn) => {
   }
 };
 
+// ---------- local project folders ----------
+//
+// A second, optional mirror of part of a project onto a real folder on this
+// computer: one subfolder per project, with the research pack, the script and
+// the captions written there automatically. Chrome and Edge on desktop only —
+// the File System Access API does not exist anywhere else, so the rest of
+// this screen says so rather than showing a button that cannot work.
+//
+// Everything that decides what the folder is called and what goes in it is in
+// shared/localfolder.mjs, tested against a fake directory handle. This is
+// only the wiring: showDirectoryPicker(), the permission state, and drawing
+// it on screen.
+
+const LOCAL_PERMISSION_LABEL = {
+  granted: 'Connected.',
+  prompt: 'Needs permission again — browsers forget after a while.',
+  denied: 'Permission was refused. Choose the folder again to try once more.',
+};
+
+function renderLocalFolderSettings() {
+  if (!isLocalFolderSupported()) {
+    return '<p class="muted small">This needs Chrome or Edge on a laptop or desktop. Not available on this browser.</p>';
+  }
+  if (!state.localRoot) {
+    return `<p class="muted small">Choose a folder on this computer. ViralRadar makes one subfolder per
+        project inside it — ${LOCAL_SUBFOLDERS.join(', ')} — and keeps the research pack, script and
+        captions in it automatically as they change. Nothing you put in the folder yourself, including raw
+        footage, is ever touched.</p>
+      <div><button type="button" class="primary" data-action="chooseLocalFolder">Choose content folder…</button></div>`;
+  }
+  return `<p class="small">Folder: <b>${esc(state.localRootName)}</b></p>
+    <p class="muted small">${esc(LOCAL_PERMISSION_LABEL[state.localPermission] || state.localPermission)}</p>
+    <div class="row">
+      ${state.localPermission !== 'granted' ? '<button type="button" class="primary" data-action="reconnectLocalFolder">Reconnect</button>' : ''}
+      <button type="button" class="sm ghost" data-action="forgetLocalFolder">Forget this folder</button>
+    </div>`;
+}
+
+actions.chooseLocalFolder = async (btn) => {
+  btn.disabled = true;
+  try {
+    const handle = await chooseRootFolder();
+    state.localRoot = handle;
+    state.localRootName = handle.name;
+    state.localPermission = 'granted';
+    toast(`Connected to “${handle.name}”.`);
+  } catch (e) {
+    // Closing the picker without choosing anything is not a failure.
+    if (e.name !== 'AbortError') toast(e.message, true);
+  } finally {
+    btn.disabled = false;
+    render();
+  }
+};
+
+actions.reconnectLocalFolder = async (btn) => {
+  btn.disabled = true;
+  try {
+    state.localPermission = await requestPermission(state.localRoot);
+    toast(state.localPermission === 'granted' ? 'Reconnected.' : 'Permission was not granted.', state.localPermission !== 'granted');
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false;
+    render();
+  }
+};
+
+actions.forgetLocalFolder = async () => {
+  await forgetRootFolder();
+  state.localRoot = null;
+  state.localRootName = '';
+  state.localPermission = 'none';
+  toast('Forgotten. The folder itself, and everything in it, is untouched.');
+  render();
+};
+
 actions.createToken = async (btn) => {
   btn.disabled = true;
   try {
@@ -2412,6 +2682,11 @@ async function signedIn(session) {
   // it, so it is started without being waited for: a failure costs the video
   // feature and nothing else, and says so on the screens that offer it.
   startDevices().then(() => {
+    if (['projects', 'settings'].includes(currentRoute())) render();
+  });
+  // Local project folders are per device, not per account, so this has to run
+  // every sign-in rather than once — the same reason the device channel does.
+  startLocalFolder().then(() => {
     if (['projects', 'settings'].includes(currentRoute())) render();
   });
   // Say what happened before the drain starts, so a share is acknowledged

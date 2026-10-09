@@ -41,9 +41,13 @@ export const BROWSER_DIR = join(ROOT, 'public', 'shared');
 //             kept away from the untestable WebRTC wiring
 //   learning  what past results say: the UI shows when a generation was
 //             personalised, and both ends agree on the thresholds
+//   localfolder  what a local project folder is called and what goes in it —
+//                kept away from the untestable File System Access wiring, the
+//                same reason transfer.mjs is split from public/transfer.js
 export const BROWSER_SHARED = [
   'stats.mjs', 'defaults.mjs', 'time.mjs', 'tokens.mjs', 'edit-plan.mjs',
   'projects.mjs', 'sha256.mjs', 'transfer.mjs', 'learning.mjs', 'research.mjs',
+  'localfolder.mjs',
 ];
 
 const BANNER = [

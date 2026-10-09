@@ -318,13 +318,16 @@ export function connect({ signaling, transferId, me, peer, offering, cancelled, 
  * Everything that decides anything — chunk size, backpressure, the digest
  * comparison — is in shared/transfer.mjs. This sequences it.
  */
-export async function sendTo({ signaling, me, peer, file, onProgress = () => {}, onStage = () => {}, cancelled = () => false }) {
+export async function sendTo({
+  signaling, me, peer, file, projectId = '', onProgress = () => {}, onStage = () => {}, cancelled = () => false,
+}) {
   const transferId = newPeerId();
   const source = fileSource(file);
 
   onStage('asking');
   signaling.send(invite({
-    transferId, from: me, to: peer.id, name: file.name, size: file.size, mime: file.type, canStream: canStreamToDisk(),
+    transferId, from: me, to: peer.id, name: file.name, size: file.size, mime: file.type,
+    canStream: canStreamToDisk(), projectId,
   }));
 
   // Wait for the other device to say yes. Nothing is connected until it does,
