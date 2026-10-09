@@ -139,3 +139,95 @@ test('a failed search still costs quota, because YouTube charges for it', async 
     assert.equal(u.state.units, SEARCH_COST);
   } finally { globalThis.fetch = real; }
 });
+
+// ---- the Radar language filter ----
+
+test('relevanceLanguage is sent as the first configured language, a single hint not a filter', async () => {
+  const f = stubFetch(ytReply);
+  const u = fakeUsage();
+  try {
+    await fetchYouTube({ apiKey: 'k', keywords: ['ai tools'], usage: u.port, languages: ['hi', 'en'] });
+    // Exactly "hi" — not "hi,en" or any other list. YouTube's parameter takes
+    // one language; the real filtering happens afterwards, against the truth.
+    assert.match(f.calls[0], /relevanceLanguage=hi(?:&|$)/);
+    assert.ok(!/relevanceLanguage=hi%2Cen|relevanceLanguage=hi,en/.test(f.calls[0]));
+  } finally { f.restore(); }
+});
+
+test('no relevanceLanguage is sent when no language is configured at all', async () => {
+  const f = stubFetch(ytReply);
+  const u = fakeUsage();
+  try {
+    await fetchYouTube({ apiKey: 'k', keywords: ['ai tools'], usage: u.port, languages: [] });
+    assert.ok(!/relevanceLanguage/.test(f.calls[0]));
+  } finally { f.restore(); }
+});
+
+test('a video YouTube declares in a disallowed language is dropped, and the count is reported', async () => {
+  const twoVideos = (url) => url.includes('/search?')
+    ? { items: [{ id: { videoId: 'hi1' } }, { id: { videoId: 'ta1' } }] }
+    : {
+      items: [
+        {
+          id: 'hi1', statistics: { viewCount: '1000' },
+          snippet: { title: 'Free AI tool', defaultAudioLanguage: 'hi', publishedAt: new Date().toISOString() },
+        },
+        {
+          id: 'ta1', statistics: { viewCount: '2000' },
+          snippet: { title: 'Free AI tool', defaultAudioLanguage: 'ta', publishedAt: new Date().toISOString() },
+        },
+      ],
+    };
+  const f = stubFetch(twoVideos);
+  const u = fakeUsage();
+  try {
+    const r = await fetchYouTube({ apiKey: 'k', keywords: ['ai tools'], usage: u.port, languages: ['hi', 'en'] });
+    assert.equal(r.items.length, 1);
+    assert.equal(r.items[0].url, 'https://www.youtube.com/shorts/hi1');
+    assert.match(r.notes.join(' '), /Filtered out 1 video in other languages/);
+  } finally { f.restore(); }
+});
+
+test('with no declared language, the title\'s own script decides', async () => {
+  const titleOnly = (url) => url.includes('/search?')
+    ? { items: [{ id: { videoId: 'kn1' } }] }
+    : {
+      items: [{
+        id: 'kn1', statistics: { viewCount: '500' },
+        snippet: { title: 'ಕನ್ನಡ ವೀಡಿಯೋ', publishedAt: new Date().toISOString() },
+      }],
+    };
+  const f = stubFetch(titleOnly);
+  const u = fakeUsage();
+  try {
+    const r = await fetchYouTube({ apiKey: 'k', keywords: ['ai tools'], usage: u.port, languages: ['hi', 'en'] });
+    assert.equal(r.items.length, 0, 'a Kannada title is dropped when only Hindi and English are allowed');
+    assert.match(r.notes.join(' '), /Filtered out 1 video/);
+  } finally { f.restore(); }
+});
+
+test('nothing is filtered, and no note appears, when every video passes', async () => {
+  const f = stubFetch(ytReply);
+  const u = fakeUsage();
+  try {
+    const r = await fetchYouTube({ apiKey: 'k', keywords: ['ai tools'], usage: u.port, languages: ['hi', 'en'] });
+    assert.equal(r.items.length, 1);
+    assert.ok(!r.notes.some((n) => /Filtered out/.test(n)));
+  } finally { f.restore(); }
+});
+
+test('with every language allowed (an empty languages list is treated as "do not filter" by the caller), nothing is dropped', async () => {
+  // fetchYouTube itself still applies isLanguageAllowed() against whatever list
+  // it is given; an empty list is a real "nothing is allowed" configuration,
+  // which is why Settings must never let language selection end up empty —
+  // this just proves fetchYouTube does not silently special-case it.
+  const titleOnly = (url) => url.includes('/search?')
+    ? { items: [{ id: { videoId: 'x1' } }] }
+    : { items: [{ id: 'x1', statistics: { viewCount: '1' }, snippet: { title: 'नमस्ते', publishedAt: new Date().toISOString() } }] };
+  const f = stubFetch(titleOnly);
+  const u = fakeUsage();
+  try {
+    const r = await fetchYouTube({ apiKey: 'k', keywords: ['ai tools'], usage: u.port, languages: [] });
+    assert.equal(r.items.length, 0);
+  } finally { f.restore(); }
+});

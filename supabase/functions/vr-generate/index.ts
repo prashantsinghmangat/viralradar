@@ -158,7 +158,13 @@ Deno.serve(async (req: Request) => {
       if (error) return json(req, { ok: false, error: `Could not open that script: ${error.message}` }, 500);
       if (!script) return json(req, { ok: false, error: 'That script is no longer there.' }, 404);
 
-      const result = await generateJson({ ...ask, prompt: editPlanPrompt({ script, language, length, today }) });
+      // The script's OWN language, if the sheet set one when it was written —
+      // never the account-wide default, and never whatever this particular
+      // request happened to send. An edit plan has to match the script it is
+      // for, not the language someone was last generating something else in.
+      const scriptLanguage = script.language || language;
+
+      const result = await generateJson({ ...ask, prompt: editPlanPrompt({ script, language: scriptLanguage, length, today }) });
       await countCall(client, userId, result.provider);
 
       // The plan lives inside raw, where an imported one lives, so one piece of
@@ -257,14 +263,39 @@ Deno.serve(async (req: Request) => {
       return json(req, { ok: false, error: `${result.provider} replied, but with nothing usable in it. Try again.` }, 502);
     }
 
+    // A pack's own steps and prompts, when the browser sent one — see
+    // shared/research.mjs's packDemoSource(). Overrides whatever the model
+    // wrote for demo.steps/demo.prompts, the same "ask in the prompt, enforce
+    // in code" split the Research Pack itself uses: a model can paraphrase a
+    // prompt it was told to copy exactly, and the one place this matters most
+    // is the one line the viewer is about to read off screen on camera.
+    const demoSource = kind === 'script' && body.demo_source && typeof body.demo_source === 'object'
+      ? body.demo_source as Record<string, unknown> : null;
+
     // Ids are assigned here, never by the model: it has no idea what already
-    // exists, and a collision would overwrite real work.
+    // exists, and a collision would overwrite real work. A script's id may be
+    // supplied by the browser instead, so it can navigate straight to
+    // `#/scripts/<id>` before the generation even finishes.
     const prefix = kind === 'ideas' ? 'idea' : 'scr';
-    const stamped = items.slice(0, 12).map((item: Record<string, unknown>) => ({
+    const suppliedId = kind === 'script' ? String(body.id ?? '').trim() : '';
+    const stamped = items.slice(0, 12).map((item: Record<string, unknown>, i: number) => ({
       ...item,
-      id: newId(prefix),
+      id: (i === 0 && suppliedId) || newId(prefix),
       source: result.provider,
       ...(kind === 'ideas' ? { date: item.date || today } : { created_at: new Date().toISOString() }),
+      ...(demoSource ? {
+        demo: {
+          tool: demoSource.tool, url: demoSource.url,
+          prepare: Array.isArray(item.demo && (item.demo as Record<string, unknown>).prepare)
+            ? (item.demo as Record<string, unknown>).prepare : demoSource.prepare,
+          steps: demoSource.steps, prompts: demoSource.prompts, check: demoSource.check,
+          // False only when the pack itself has never been fetched by this
+          // app — see shared/research.mjs's packDemoSource(). The steps and
+          // prompts are still the pack's own, real ones; only the confidence
+          // in them is what this says.
+          checked: demoSource.checked !== false,
+        },
+      } : {}),
     }));
 
     // Through the same path as an import, so there is one way rows are written.
@@ -272,6 +303,27 @@ Deno.serve(async (req: Request) => {
       { app: 'shorts-studio', schema: 1, type: kind === 'ideas' ? 'ideas' : 'script', exported_at: new Date().toISOString(), items: stamped },
       storeFor(client, userId),
     );
+
+    // Set directly, never through the contract: `language` is not part of the
+    // Shorts Studio import shape at all (unlike demo, which Shorts Studio can
+    // send too), so it stays out of COLUMNS.script on purpose — a column
+    // listed there is overwritten by every future import of the same script,
+    // including a plain re-import from Shorts Studio that has never heard of
+    // this concept and would otherwise null it straight back out, the exact
+    // bug class that keeps status/stage out of that list too.
+    if (kind === 'script') {
+      const { error: scriptLangError } = await client.from('scripts').update({ language }).eq('id', stamped[0].id);
+      if (scriptLangError) console.warn(`[vr-generate] could not save the script's language: ${scriptLangError.message}`);
+    }
+
+    // The project's own language default, for next time — best-effort, same
+    // as vr-research treats a pack save failure: the script is already
+    // written, and losing this convenience is not worth failing the request.
+    const projectId = kind === 'script' ? String(body.project_id ?? '').trim() : '';
+    if (projectId) {
+      const { error: projLangError } = await client.from('projects').update({ language }).eq('id', projectId);
+      if (projLangError) console.warn(`[vr-generate] could not remember the project's language: ${projLangError.message}`);
+    }
 
     console.log(`[vr-generate] ${kind} by ${result.provider}: ${imported.message}`);
     return json(req, {

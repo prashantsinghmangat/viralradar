@@ -20,9 +20,10 @@ installable on your phone's home screen like an app.
 ## The screens
 
 - **Radar** — today's trends, fastest-growing first, refreshed automatically at
-  **7:00 AM IST**. *Copy for Shorts Studio* copies a title, link and one-line
-  summary ready to paste; *Write script*, *Find angles* and *Research Pack* turn
-  one into a video.
+  **7:00 AM IST**, in whichever **languages** Settings is set to show.
+  *Copy for Shorts Studio* copies a title, link and one-line summary ready to
+  paste; *Write script*, *Find angles* and *Research Pack* turn one into a
+  video.
 - **Ideas** — your ideas by day. Mark each **Picked** or **Skip**. *Write ideas
   with AI* adds fresh ones for your niche, and every card has *Write script*,
   *Find angles* and *Research Pack*.
@@ -36,12 +37,16 @@ installable on your phone's home screen like an app.
   Whatever you add appears on your other device a second later, saying which
   device it came from. **Open project** on any script makes its folder. Videos
   go device to device from here, with the copy checked byte for byte.
+  **Archive** hides a folder from the list without touching anything in it;
+  **Delete project** asks first, saying exactly what it removes.
 - **Results** — totals, posting streak, your top 5, and what actually works
   broken down by format, hook, length and CTA.
 - **Import** — paste or upload a Shorts Studio export.
 - **Settings** — niche keywords, language, script length, which AI to use,
-  today's quota, **Test AI** to check both providers are answering, what to call
-  this device, and how much of your project-file space is used.
+  today's quota, **Test AI** to check both providers are answering, which
+  **Radar languages** to show trends in, what to call this device, your
+  connected **local project folder**, and how much of your project-file space
+  is used.
 
 Everything syncs. An import on the laptop appears on the phone a second or two
 later, with no refresh.
@@ -195,6 +200,19 @@ means everywhere except Chrome and Edge on a computer.
 **Ideas**, **angles**, **Scripts** and the **edit plan** can each be written for
 you, using your niche keywords, language and target length from Settings.
 
+### Before anything is written
+
+Writing ideas, angles or a script first asks **Language** (Hinglish, Hindi or
+English) and **Length** — prefilled from Settings, or from whatever you last
+chose for this same project, so it does not have to be set over and over for
+one video. The edit plan never asks again: it always matches the script it is
+for, whichever language that was written in.
+
+Tapping **Write script** (or *Write this angle*, or *Research Pack*, or *Make
+edit plan*) goes straight to the screen the result will land on, with a
+loading state there and then — not back to wherever the button was. If it
+fails, that screen shows the error with a **Retry**, in place.
+
 ### Angles, before the script
 
 On any trend or idea there is **🎯 Find angles**. Instead of one script, it
@@ -232,6 +250,18 @@ was never on the page.
 From a trend card it uses the trend's own link, so nothing is guessed. From an
 idea or the free-text box it finds candidate pages and checks them, which is
 slower and less certain — paste the URL in the second box if you have it.
+
+### How to do the demo
+
+Every script can carry its own demo walkthrough: what tool, what to prepare
+before filming, each click in order, and — in its own copyable block — the
+exact prompt to type or paste, word for word. It shows above the edit plan on
+the script's own screen.
+
+When a Research Pack is open for the same subject, the demo is built straight
+from **its** verified steps and prompts rather than left to the model to
+remember — the one line most worth getting exactly right is the one you are
+about to read off screen on camera.
 
 ### It learns from your own results
 
@@ -311,7 +341,7 @@ deploys and the phone. It assumes nothing and says why each step exists.
 
 ```
 npm install
-npm test            # 490 tests. No network, no database, no keys needed.
+npm test            # 547 tests. No network, no database, no keys needed.
 npm run build       # builds the site into dist/ (Netlify runs this)
 ```
 

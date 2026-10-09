@@ -7,10 +7,13 @@
  */
 import { data, readable } from './data.js';
 import { newToken, hashToken } from './shared/tokens.mjs';
-import { LENGTHS, DEFAULT_AI_ORDER } from './shared/defaults.mjs';
+import {
+  LENGTHS, DEFAULT_AI_ORDER, SCRIPT_LANGUAGES, RADAR_LANGUAGE_OPTIONS, DEFAULT_RADAR_LANGUAGES,
+} from './shared/defaults.mjs';
 import { readEditPlan, editPlanText } from './shared/edit-plan.mjs';
+import { readDemo } from './shared/demo.mjs';
 import { lessonLabel } from './shared/learning.mjs';
-import { packLabel, packSummary } from './shared/research.mjs';
+import { packLabel, packSummary, packDemoSource } from './shared/research.mjs';
 import {
   MAX_FILE_BYTES, POSTED_RETENTION_DAYS, TOTAL_BYTES_CAP,
   checkUpload, cleanDeviceName, downloadUrl, formatBytes, guessDeviceName, itemPreview, usageSummary,
@@ -127,6 +130,11 @@ const state = {
   // 'unsupported' (not Chrome/Edge desktop), 'none' (nothing chosen yet),
   // 'prompt' (chosen before, but the browser wants to ask again) or 'granted'.
   localRoot: null, localRootName: '', localPermission: 'none',
+  // Whether the Projects list currently shows archived folders too. Reset
+  // every sign-in: Projects always opens on the active ones.
+  showArchived: false,
+  // The id of a project whose delete confirmation is open, or null.
+  confirmDeleteProject: null,
 };
 const userId = () => state.session?.user?.id ?? null;
 
@@ -425,7 +433,8 @@ actions.refreshRadar = async (btn) => {
   btn.innerHTML = '<span class="spin"></span> Refreshing… up to 30 sec';
   try {
     const r = await data.trends.refresh();
-    toast(`Found ${r.total} trends`);
+    const filteredNote = (r.sources?.youtube?.notes || []).find((n) => /^Filtered out/.test(n));
+    toast(`Found ${r.total} trends` + (filteredNote ? ` · ${filteredNote}` : ''));
   } catch (e) { toast(e.message, true); }
   render();
 };
@@ -470,6 +479,15 @@ const packList = (title, items) => (items && items.length
 
 function renderPack() {
   if (!pack) return '';
+  if (pack.status === 'working') {
+    return `<section class="pack-block"><p class="small"><span class="spin"></span> ${esc(GENERATING.research)}</p></section>`;
+  }
+  if (pack.status === 'failed') {
+    return `<section class="pack-block">
+      <div class="notice">${esc(pack.message)}</div>
+      <div><button type="button" class="primary" data-action="retryPack">Retry</button></div>
+    </section>`;
+  }
   const p = pack.data;
   const tool = p.main_tool || {};
   const free = tool.free_details || {};
@@ -573,24 +591,52 @@ function renderPack() {
 actions.closePack = () => { pack = null; render(); };
 
 /** Research a subject. The button carries the topic and, where there is one, a URL. */
-actions.researchPack = async (btn) => {
-  const topic = btn.dataset.topic;
-  if (!topic) { toast('Nothing to research.', true); return; }
-  const urls = btn.dataset.url ? [btn.dataset.url] : [];
-  const result = await askAi(btn, { kind: 'research', topic, urls });
-  if (!result) return;
-  pack = {
-    topic,
-    data: result.pack,
-    projectId: result.project_id || '',
-    itemId: result.item_id || '',
-    provider: result.provider || '',
-    urlsFrom: result.urls_from || 'given',
-  };
-  if (result.warning) toast(result.warning, true, 9000);
+/**
+ * Research a subject: a loading card appears immediately where the pack will
+ * — there is no separate screen for a pack to navigate to, so "take me to
+ * where the result appears" means right here, before the fetch even starts,
+ * rather than only once it finishes.
+ *
+ * `context` is whatever of {topic, itemId, projectId, provider, urlsFrom}
+ * is already known, carried through a failure so Retry does not lose it.
+ */
+async function runResearch(context, body) {
+  pack = { ...context, status: 'working' };
   angles = null; // one panel at a time, or the screen is unreadable
   render();
   window.scrollTo(0, 0);
+  try {
+    const result = await data.ai.research(body);
+    pack = {
+      topic: context.topic,
+      data: result.pack,
+      projectId: result.project_id || context.projectId || '',
+      itemId: result.item_id || context.itemId || '',
+      provider: result.provider || context.provider || '',
+      urlsFrom: result.urls_from || context.urlsFrom || 'given',
+    };
+    if (result.warning) toast(result.warning, true, 9000);
+    render();
+  } catch (e) {
+    // The original body is kept, not rebuilt, so Retry asks exactly what was
+    // asked before — a trend's own URL, say — rather than quietly falling
+    // back to a guess.
+    pack = { ...context, status: 'failed', message: e.message, body };
+    render();
+  }
+}
+
+actions.retryPack = () => {
+  if (!pack || !pack.body) return;
+  const context = { topic: pack.topic, itemId: pack.itemId, projectId: pack.projectId, provider: pack.provider, urlsFrom: pack.urlsFrom };
+  return runResearch(context, pack.body);
+};
+
+actions.researchPack = (btn) => {
+  const topic = btn.dataset.topic;
+  if (!topic) { toast('Nothing to research.', true); return; }
+  const urls = btn.dataset.url ? [btn.dataset.url] : [];
+  return runResearch({ topic }, { kind: 'research', topic, urls });
 };
 
 /** Open a research pack already saved in a project folder — e.g. an imported one. */
@@ -614,17 +660,17 @@ actions.openPack = async (card) => {
 };
 
 /** Re-fetch every URL a pack names, so an imported pack's claims go from grey to real. */
-actions.recheckPack = async (btn) => {
+actions.recheckPack = () => {
   if (!pack || !pack.itemId) return;
-  const result = await askAi(btn, { kind: 'research', recheck: true, item_id: pack.itemId });
-  if (!result) return;
-  pack = { ...pack, data: result.pack };
-  render();
+  const { topic, itemId, projectId, provider, urlsFrom } = pack;
+  return runResearch({ topic, itemId, projectId, provider, urlsFrom }, { kind: 'research', recheck: true, item_id: itemId });
 };
 
 actions.anglesFromPack = async (btn) => {
   if (!pack) return;
-  const result = await askAi(btn, { kind: 'angles', topic: pack.topic, research: packSummary(pack.data) });
+  const body = await withLanguageSheet({ kind: 'angles', topic: pack.topic, research: packSummary(pack.data) }, pack.projectId);
+  if (!body) return;
+  const result = await askAi(btn, body);
   if (!result) return;
   angles = {
     topic: pack.topic,
@@ -635,9 +681,12 @@ actions.anglesFromPack = async (btn) => {
   render();
 };
 
-actions.scriptFromPack = (btn) => {
+actions.scriptFromPack = () => {
   if (!pack) return;
-  return askAi(btn, { kind: 'script', topic: pack.topic, research: packSummary(pack.data) });
+  return writeScriptTo({
+    kind: 'script', topic: pack.topic, research: packSummary(pack.data),
+    project_id: pack.projectId || '', demo_source: packDemoSource(pack.data),
+  });
 };
 
 /** "🔍 Research Pack" — on anything that could become a video. */
@@ -692,7 +741,9 @@ actions.closeAngles = () => { angles = null; render(); };
 actions.findAngles = async (btn) => {
   const topic = btn.dataset.topic;
   if (!topic) { toast('Nothing to find angles on.', true); return; }
-  const result = await askAi(btn, { kind: 'angles', topic });
+  const body = await withLanguageSheet({ kind: 'angles', topic });
+  if (!body) return;
+  const result = await askAi(btn, body);
   if (!result) return;
   angles = {
     topic,
@@ -710,8 +761,10 @@ actions.writeAngle = (btn) => {
   // The topic goes with it: the angle says how, the topic says what. And if a
   // pack is open for the same subject, its verified facts go too — the angles
   // on screen were written from them, so the script should be as well.
-  const research = pack && pack.topic === angles.topic ? packSummary(pack.data) : '';
-  return askAi(btn, { kind: 'script', topic: angles.topic, angle, research });
+  const samePack = pack && pack.topic === angles.topic;
+  const research = samePack ? packSummary(pack.data) : '';
+  const demoSource = samePack ? packDemoSource(pack.data) : null;
+  return writeScriptTo({ kind: 'script', topic: angles.topic, angle, research, project_id: pack?.projectId || '', demo_source: demoSource });
 };
 
 /** "🎯 Find angles" — on anything that could become a video. */
@@ -787,6 +840,7 @@ async function renderScripts(params) {
         <article class="card script-card" data-id="${esc(s.id)}" data-action="openScript" ${canDrag ? 'draggable="true"' : ''}>
           <div class="t">${esc(s.title || s.yt_title || s.topic || s.id)}</div>
           ${s.topic && s.title ? `<div class="muted small">${esc(s.topic)}</div>` : ''}
+          ${s.language ? `<span class="badge accent">${esc(s.language)}</span>` : ''}
           <div class="actions">
             ${idx > 0 ? `<button type="button" class="sm ghost" data-action="moveScript" data-id="${esc(s.id)}" data-v="${STAGES[idx - 1][0]}" title="Move back">← ${STAGES[idx - 1][1]}</button>` : '<span></span>'}
             ${idx < STAGES.length - 1 ? `<button type="button" class="sm" data-action="moveScript" data-id="${esc(s.id)}" data-v="${STAGES[idx + 1][0]}">${STAGES[idx + 1][1]} →</button>` : ''}
@@ -843,7 +897,37 @@ afterRender.scripts = () => {
 };
 
 async function renderScriptDetail(id) {
-  const s = await data.scripts.get(id);
+  // A script this device just asked for, navigated to before the generation
+  // even started — see writeScriptTo(). Shown instead of "Script not found",
+  // which is what data.scripts.get() below would otherwise say truthfully
+  // but unhelpfully while the row does not exist yet.
+  const writing = renderPendingGeneration(id, { onMessage: (m) => `Could not write the script: ${m}` });
+  if (writing) {
+    return `<div class="detail-head"><a class="btn sm ghost" href="#/scripts">← Board</a><h1>Writing your script…</h1></div>${writing}`;
+  }
+
+  let s;
+  try {
+    s = await data.scripts.get(id);
+  } catch (e) {
+    // pendingGen is gone the moment the tab closes or the page reloads, so a
+    // script that was still being written when that happened would otherwise
+    // land here as a plain "Script not found" — true, but not what actually
+    // happened, and with no way back to it. The request itself survived in
+    // localStorage (see savePendingScript()), so this is recoverable rather
+    // than a dead end.
+    const saved = loadPendingScript(id);
+    if (!saved) throw e; // genuinely no such script, and nothing to retry
+    return `
+      <div class="detail-head">
+        <a class="btn sm ghost" href="#/scripts">← Board</a>
+        <h1>This script didn't finish</h1>
+      </div>
+      <div class="card stack">
+        <div class="notice">The app closed, or lost its connection, before this script was written.</div>
+        <div><button type="button" class="primary" data-action="resumePendingScript" data-id="${esc(id)}">Retry</button></div>
+      </div>`;
+  }
   const beats = Array.isArray(s.beats) ? s.beats : [];
   const tags = (s.hashtags || []).map((t) => (String(t).startsWith('#') ? t : '#' + t)).join(' ');
   const fullScript = beats.map((b) => b.say).filter(Boolean).join('\n\n');
@@ -872,6 +956,7 @@ async function renderScriptDetail(id) {
       <button type="button" class="sm" data-action="openScriptProject" data-id="${esc(s.id)}">📁 Open project</button>
       ${s.topic ? `<span class="muted small">Topic: ${esc(s.topic)}</span>` : ''}
       ${created ? `<span class="muted small">Created ${esc(when(created))}</span>` : ''}
+      ${s.language ? `<span class="badge accent">${esc(s.language)}</span>` : ''}
       ${s.source && s.source !== 'shorts-studio' ? `<span class="badge accent">Written by ${esc(s.source)}</span>` : ''}
     </div>
 
@@ -896,7 +981,9 @@ async function renderScriptDetail(id) {
       </div>
     </section>
 
-    ${renderEditPlan(s)}
+    ${renderDemo(s)}
+
+    ${renderPendingGeneration(`edit_plan:${s.id}`, { onMessage: (m) => `Could not plan the edit: ${m}` }) || renderEditPlan(s)}
 
     <div class="outputs grid">
       ${outputs.map(([label, value]) => `<div class="card out">
@@ -906,6 +993,41 @@ async function renderScriptDetail(id) {
     </div>
     <p style="margin-top:20px"><button type="button" class="sm ghost" data-action="deleteScript" data-id="${esc(s.id)}">Delete script</button></p>`;
 }
+// ---- the demo walkthrough ----
+//
+// Exactly what to click and exactly what to type, on camera. Same story as
+// the edit plan below: no column of its own, rides along in `raw`, shows
+// nothing when there is none.
+function renderDemo(script) {
+  const demo = readDemo(script);
+  if (!demo) return '';
+
+  const list = (title, items, ordered) => (items.length
+    ? `<div><h3 style="margin:14px 0 6px;font-size:.9rem">${esc(title)}</h3>
+        <${ordered ? 'ol' : 'ul'} class="pack-steps">${items.map((x) => `<li>${esc(x)}</li>`).join('')}</${ordered ? 'ol' : 'ul'}></div>`
+    : '');
+
+  return `
+    <section class="card stack" style="margin-top:22px">
+      <h2 style="margin:0">How to do the demo</h2>
+      ${demo.checked === false ? `<div class="notice">Not checked yet — these steps and prompts came from a Research Pack
+        this app has not fetched the pages for itself. Press <b>Re-check links</b> on that pack before trusting them.</div>` : ''}
+      ${demo.tool || demo.url ? `<p class="small">
+        <b>${esc(demo.tool || 'The tool')}</b>${demo.url ? ` — <a href="${esc(demo.url)}" target="_blank" rel="noopener noreferrer">${esc(demo.url)}</a>` : ''}
+      </p>` : ''}
+      ${list('Prepare', demo.prepare, false)}
+      ${list('Steps', demo.steps, true)}
+      ${demo.prompts.length ? `<div>
+        <h3 style="margin:14px 0 6px;font-size:.9rem">Prompts — use this exact wording</h3>
+        ${demo.prompts.map((p) => `<div class="card out" style="margin-bottom:8px">
+          <div class="out-head"><h4 style="margin:0;font-size:.82rem">Prompt</h4>${copyBtn(p)}</div>
+          <pre>${esc(p)}</pre>
+        </div>`).join('')}
+      </div>` : ''}
+      ${list('Check before moving on', demo.check, false)}
+    </section>`;
+}
+
 // ---- edit plan ----
 //
 // Shorts Studio can attach a shooting-and-editing plan to a script. It has no
@@ -1146,7 +1268,13 @@ const ITEM_ICON = { text: '📝', link: '🔗', image: '🖼️', file: '📎', 
 async function renderProjects(params) {
   if (params[0]) return renderProjectDetail(params[0]);
 
-  const [list, usage] = await Promise.all([data.projects.list(), data.storage.usage()]);
+  const [all, usage] = await Promise.all([data.projects.list(), data.storage.usage()]);
+  // Archiving is "hide it, keep everything" — the status switch on a
+  // project's own screen is how one gets archived, and this is the one place
+  // that hiding actually happens. showArchived is per render, not stored:
+  // reopening Projects always starts back on the active ones.
+  const archived = all.filter((p) => p.status === 'archived');
+  const list = state.showArchived ? all : all.filter((p) => p.status !== 'archived');
   const cards = list.map((p) => {
     const latest = p.latest
       ? `<div class="muted small">${esc(itemPreview(p.latest, 70))}${p.latest.from_device ? ` · from ${esc(p.latest.from_device)}` : ''} · ${esc(ago(p.latest.created_at))}</div>`
@@ -1172,10 +1300,15 @@ async function renderProjects(params) {
       <button type="button" data-action="openInbox">📥 Inbox</button>
     </div>
     ${list.length ? `<div class="grid">${cards}</div>`
-      : '<div class="empty"><span class="big">📁</span>No projects yet.<br>Create one above, or open one from a script.</div>'}
+      : (state.showArchived ? '<div class="empty"><span class="big">📁</span>Nothing archived.</div>'
+        : '<div class="empty"><span class="big">📁</span>No projects yet.<br>Create one above, or open one from a script.</div>')}
+    ${archived.length ? `<p><button type="button" class="sm ghost" data-action="toggleShowArchived">
+      ${state.showArchived ? 'Hide archived' : `Show archived (${archived.length})`}</button></p>` : ''}
     <p class="muted small">Files in a project marked <b>Posted</b> are deleted after ${POSTED_RETENTION_DAYS} days, so this
       shared Supabase project is never filled up. Notes and links are kept.</p>`;
 }
+
+actions.toggleShowArchived = () => { state.showArchived = !state.showArchived; render(); };
 
 actions.openProject = (card) => { location.hash = `#/projects/${encodeURIComponent(card.dataset.id)}`; };
 
@@ -1291,9 +1424,11 @@ async function renderProjectDetail(id) {
         `<button type="button" class="${i === idx ? 'on' : ''}" data-action="setProjectStatus" data-id="${esc(project.id)}" data-v="${k}">${l}</button>`).join('')}</div>
       ${project.script_id ? `<a class="btn sm" href="#/scripts/${encodeURIComponent(project.script_id)}">🎬 Its script</a>` : ''}
       <span class="muted small">Sending as <b>${esc(deviceName())}</b></span>
+      ${!project.is_inbox ? '<button type="button" class="sm ghost" data-action="confirmDeleteProject">Delete project</button>' : ''}
     </div>
     ${project.status === 'posted' ? `<div class="notice">Posted${project.posted_at ? ` ${esc(ago(project.posted_at))}` : ''}.
       Its files are deleted ${POSTED_RETENTION_DAYS} days after that; notes and links stay.</div>` : ''}
+    ${state.confirmDeleteProject === project.id ? renderDeleteProjectConfirm(project, list) : ''}
 
     ${localFolder}
 
@@ -1357,6 +1492,56 @@ actions.setProjectStatus = async (btn) => {
       : 'Saved');
     render();
   } catch (e) { toast(e.message, true); }
+};
+
+// ---- deleting a project ----
+//
+// What it actually removes: the notes/links and files are listed, in words,
+// before anything happens — the dialog this builds. What it never removes:
+// a linked script (projects.script_id is not a foreign key for exactly this
+// reason — deleting the folder cannot cascade into it) and the local folder
+// on disk, which this feature has no access to delete even if it wanted to.
+function renderDeleteProjectConfirm(project, items) {
+  const notes = items.filter((i) => i.kind === 'text' || i.kind === 'link').length;
+  const files = items.filter((i) => i.storage_path).length;
+  const bytes = items.reduce((n, i) => n + (Number(i.size_bytes) || 0), 0);
+  return `<div class="card stack" style="margin-bottom:16px">
+    <h2 style="margin:0;font-size:1rem">Delete “${esc(project.title)}”?</h2>
+    <p class="small">This removes ${notes} note${notes === 1 ? '' : 's'} and ${files} file${files === 1 ? '' : 's'}
+      (${esc(formatBytes(bytes))}) from this shared Supabase project. This cannot be undone.</p>
+    ${project.script_id ? '<p class="muted small">Its script is not deleted — only unlinked from this folder.</p>' : ''}
+    ${project.local_folder_name
+      ? `<p class="muted small">Its local folder is never touched: <b>${esc(state.localRootName || 'your chosen folder')}/${esc(project.local_folder_name)}</b> stays exactly as it is.</p>`
+      : ''}
+    <div class="row">
+      <button type="button" class="sm" data-action="deleteProject" data-id="${esc(project.id)}">Yes, delete it</button>
+      <button type="button" class="sm ghost" data-action="cancelDeleteProject">Cancel</button>
+    </div>
+  </div>`;
+}
+
+actions.confirmDeleteProject = () => {
+  state.confirmDeleteProject = parseHash().params[0];
+  render();
+};
+
+actions.cancelDeleteProject = () => {
+  state.confirmDeleteProject = null;
+  render();
+};
+
+actions.deleteProject = async (btn) => {
+  btn.disabled = true;
+  try {
+    await data.projects.remove(btn.dataset.id);
+    state.confirmDeleteProject = null;
+    toast('Project deleted.');
+    location.hash = '#/projects';
+    render();
+  } catch (e) {
+    toast(e.message, true);
+    btn.disabled = false;
+  }
 };
 
 actions.sendText = async (btn) => {
@@ -2139,6 +2324,167 @@ const GENERATING = {
   edit_plan: 'Planning the edit… up to 40 sec',
 };
 
+// ---------- the language + length sheet ----------
+//
+// Shown before writing ideas, angles or a script — never before an edit plan,
+// which always uses the script's own language (vr-generate enforces that
+// server-side; see supabase/functions/vr-generate/index.ts), and never before
+// research, which has no language of its own at all.
+//
+// One native <dialog>, reused by every entry point rather than one sheet per
+// screen: showModal()/close() give focus trapping and an Esc-to-cancel for
+// free, which a hand-rolled overlay would have to build.
+function askLanguageAndLength({ language, length }) {
+  return new Promise((resolve) => {
+    let dialog = $('#genSheet');
+    if (!dialog) {
+      dialog = document.createElement('dialog');
+      dialog.id = 'genSheet';
+      document.body.appendChild(dialog);
+    }
+    let chosen = language;
+    dialog.innerHTML = `
+      <form method="dialog" class="card stack sheet">
+        <h3 style="margin:0">Before writing this</h3>
+        <div>
+          <label class="field">Language</label>
+          <div class="seg" id="genLanguageSeg">${SCRIPT_LANGUAGES.map((l) =>
+            `<button type="button" class="${l === chosen ? 'on' : ''}" data-lang="${esc(l)}">${esc(l)}</button>`).join('')}</div>
+        </div>
+        <div>
+          <label class="field" for="genLength">Length</label>
+          <select id="genLength">${LENGTHS.map((l) => `<option value="${l}" ${l === length ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        </div>
+        <div class="row">
+          <button type="submit" class="primary" value="go">Continue</button>
+          <button type="button" value="cancel">Cancel</button>
+        </div>
+      </form>`;
+    for (const b of $$('[data-lang]', dialog)) {
+      b.addEventListener('click', () => {
+        chosen = b.dataset.lang;
+        for (const other of $$('[data-lang]', dialog)) other.classList.toggle('on', other === b);
+      });
+    }
+    dialog.querySelector('button[value="cancel"]').addEventListener('click', () => dialog.close('cancel'));
+    dialog.addEventListener('close', () => {
+      resolve(dialog.returnValue === 'cancel' ? null : { language: chosen, length: $('#genLength', dialog).value });
+    }, { once: true });
+    dialog.showModal();
+  });
+}
+
+/**
+ * Ask Language and Length, then merge the answer into `body` — or null if the
+ * sheet was cancelled, which every caller must treat as "do nothing".
+ *
+ * Defaults to the account-wide Settings, unless `projectId` names a project
+ * that already has its own language from a previous generation — a prefill,
+ * never a requirement, so a wrong guess costs one tap to change rather than
+ * silently writing in the wrong language.
+ */
+async function withLanguageSheet(body, projectId = '') {
+  const defaults = {
+    language: state.settings?.language || 'English',
+    length: state.settings?.default_length || '30s',
+  };
+  if (projectId) {
+    try {
+      const project = await data.projects.get(projectId);
+      if (project.language) defaults.language = project.language;
+    } catch { /* a guess from Settings is a fine fallback */ }
+  }
+  const chosen = await askLanguageAndLength(defaults);
+  if (!chosen) return null;
+  return { ...body, ...chosen, ...(projectId ? { project_id: projectId } : {}) };
+}
+
+// ---------- a generation whose result lives on its own screen ----------
+//
+// "Write script" (and its variants) and "Make edit plan" both produce
+// something that belongs on a specific screen, not wherever the button
+// happened to be — so the button navigates there immediately, with a loading
+// state, rather than waiting on the current screen and jumping afterwards.
+// Keyed so the destination screen can ask "is something being written for
+// me right now", and show its own loading or failed-with-Retry state instead
+// of "not found".
+const pendingGen = new Map();
+
+// A script's own request is also written to localStorage, not only kept in
+// this Map — closing the tab, or losing signal, loses pendingGen entirely,
+// and reopening `#/scripts/<id>` would otherwise find no row and no memory of
+// why, which reads as "Script not found" for a script that may simply not
+// have finished yet. The saved request is what lets that screen offer Retry
+// instead. Scoped to scripts only: an edit plan's own screen already exists
+// (the script itself), so losing its in-memory state just loses the loading
+// animation, never the ability to find the screen at all.
+const PENDING_SCRIPTS_KEY = 'vr-pending-scripts';
+
+function savePendingScript(id, body) {
+  try {
+    const all = JSON.parse(localStorage.getItem(PENDING_SCRIPTS_KEY) || '{}');
+    all[id] = body;
+    localStorage.setItem(PENDING_SCRIPTS_KEY, JSON.stringify(all));
+  } catch { /* private mode — the loading state still works for this session */ }
+}
+
+function loadPendingScript(id) {
+  try {
+    const all = JSON.parse(localStorage.getItem(PENDING_SCRIPTS_KEY) || '{}');
+    return all[id] || null;
+  } catch { return null; }
+}
+
+function clearPendingScript(id) {
+  try {
+    const all = JSON.parse(localStorage.getItem(PENDING_SCRIPTS_KEY) || '{}');
+    delete all[id];
+    localStorage.setItem(PENDING_SCRIPTS_KEY, JSON.stringify(all));
+  } catch { /* nothing saved, so nothing to clean up */ }
+}
+
+async function runPendingGeneration(key, body) {
+  pendingGen.set(key, { status: 'working', kind: body.kind });
+  if (body.kind === 'script') savePendingScript(key, body);
+  render();
+  try {
+    const result = await data.ai.generate(body);
+    pendingGen.delete(key);
+    if (body.kind === 'script') clearPendingScript(key);
+    const by = result.provider ? ` (by ${result.provider})` : '';
+    const tuned = result.personalised ? ` · ${lessonLabel({ active: true, count: result.results_count })}` : '';
+    toast((result.message || 'Done') + by + tuned);
+    render();
+  } catch (e) {
+    pendingGen.set(key, { status: 'failed', kind: body.kind, message: e.message, retry: () => runPendingGeneration(key, body) });
+    render();
+  }
+}
+
+/** The loading / failed-with-Retry card a destination screen shows in place of its usual content. */
+function renderPendingGeneration(key, { onMessage } = {}) {
+  const pending = pendingGen.get(key);
+  if (!pending) return null;
+  if (pending.status === 'working') {
+    return `<div class="card stack"><p class="small"><span class="spin"></span> ${esc(GENERATING[pending.kind] || 'Working…')}</p></div>`;
+  }
+  return `<div class="card stack">
+    <div class="notice">${esc(onMessage ? onMessage(pending.message) : pending.message)}</div>
+    <div><button type="button" class="primary" data-action="retryPendingGeneration" data-key="${esc(key)}">Retry</button></div>
+  </div>`;
+}
+
+actions.retryPendingGeneration = (btn) => {
+  const pending = pendingGen.get(btn.dataset.key);
+  if (pending?.retry) pending.retry();
+};
+
+/** A script whose request survived a closed tab, but whose in-memory progress did not. */
+actions.resumePendingScript = (btn) => {
+  const body = loadPendingScript(btn.dataset.id);
+  if (body) runPendingGeneration(btn.dataset.id, body);
+};
+
 async function askAi(btn, body) {
   const original = btn.innerHTML;
   btn.disabled = true;
@@ -2164,9 +2510,26 @@ async function askAi(btn, body) {
   }
 }
 
-actions.generateIdeas = (btn) => askAi(btn, { kind: 'ideas', count: 6 });
+/**
+ * Write a script somewhere other than the screen the button is on: the
+ * language sheet, then straight to `#/scripts/<id>` with a loading state,
+ * before the generation has even started — see runPendingGeneration().
+ */
+async function writeScriptTo(body) {
+  const sheet = await withLanguageSheet(body, body.project_id || '');
+  if (!sheet) return;
+  const id = crypto.randomUUID();
+  location.hash = `#/scripts/${encodeURIComponent(id)}`;
+  runPendingGeneration(id, { ...sheet, id });
+}
 
-actions.writeScript = (btn) => askAi(btn, { kind: 'script', topic: btn.dataset.topic });
+actions.generateIdeas = async (btn) => {
+  const body = await withLanguageSheet({ kind: 'ideas', count: 6 });
+  if (!body) return;
+  return askAi(btn, body);
+};
+
+actions.writeScript = (btn) => writeScriptTo({ kind: 'script', topic: btn.dataset.topic });
 
 actions.writeScriptFromBox = (btn) => {
   const input = $('#scriptTopic');
@@ -2176,13 +2539,14 @@ actions.writeScriptFromBox = (btn) => {
     input.focus();
     return;
   }
-  return askAi(btn, { kind: 'script', topic });
+  return writeScriptTo({ kind: 'script', topic });
 };
 
-actions.makeEditPlan = (btn) => askAi(btn, { kind: 'edit_plan', script_id: btn.dataset.id });
+/** Always on the script's own screen already, so this needs no navigation — just a loading/Retry state in place. */
+actions.makeEditPlan = (btn) => runPendingGeneration(`edit_plan:${btn.dataset.id}`, { kind: 'edit_plan', script_id: btn.dataset.id });
 
 /** Research whatever is in the free-text box, with its URL if one was given. */
-actions.researchFromBox = async (btn) => {
+actions.researchFromBox = (btn) => {
   const input = $('#scriptTopic');
   const topic = input.value.trim();
   if (!topic) {
@@ -2191,19 +2555,7 @@ actions.researchFromBox = async (btn) => {
     return;
   }
   const url = ($('#researchUrl').value || '').trim();
-  const result = await askAi(btn, { kind: 'research', topic, urls: url ? [url] : [] });
-  if (!result) return;
-  pack = {
-    topic,
-    data: result.pack,
-    projectId: result.project_id || '',
-    provider: result.provider || '',
-    urlsFrom: result.urls_from || 'given',
-  };
-  if (result.warning) toast(result.warning, true, 9000);
-  angles = null;
-  render();
-  window.scrollTo(0, 0);
+  return runResearch({ topic }, { kind: 'research', topic, urls: url ? [url] : [] });
 };
 
 // ---- paste from Shorts Studio ----
@@ -2339,6 +2691,19 @@ async function renderSettings() {
       </section>
 
       <section class="card stack">
+        <h2>Radar languages</h2>
+        <div class="chips">
+          ${RADAR_LANGUAGE_OPTIONS.map(([code, label]) => `<label class="chip">
+            <input type="checkbox" name="radarLanguage" value="${esc(code)}" ${(s.radar_languages || []).includes(code) ? 'checked' : ''}>
+            ${esc(label)}
+          </label>`).join('')}
+        </div>
+        <p class="muted small">A video whose language is not one of these is left off the Radar — detected from what
+          YouTube itself says, or failing that from the title's own script. At least one language has to stay checked.</p>
+        <div><button type="button" class="primary" data-action="saveRadarLanguages">Save languages</button></div>
+      </section>
+
+      <section class="card stack">
         <h2>Writing</h2>
         <label class="field" for="language">Language</label>
         <input type="text" id="language" value="${esc(s.language || 'English')}">
@@ -2444,6 +2809,12 @@ actions.saveKeywords = () => {
   return saveSettings({ niche_keywords: list }, 'Keywords saved');
 };
 
+actions.saveRadarLanguages = () => {
+  const list = $$('input[name="radarLanguage"]:checked').map((el) => el.value);
+  if (!list.length) { toast('Keep at least one language checked, or the Radar would filter out everything.', true); return; }
+  return saveSettings({ radar_languages: list }, 'Radar languages saved');
+};
+
 actions.saveWriting = () => {
   const order = $('#aiOrder').value.split(/[\s,]+/).map((x) => x.trim().toLowerCase()).filter(Boolean);
   const unknown = order.filter((p) => !['gemini', 'openrouter', 'claude'].includes(p));
@@ -2544,7 +2915,8 @@ function renderLocalFolderSettings() {
     <p class="muted small">${esc(LOCAL_PERMISSION_LABEL[state.localPermission] || state.localPermission)}</p>
     <div class="row">
       ${state.localPermission !== 'granted' ? '<button type="button" class="primary" data-action="reconnectLocalFolder">Reconnect</button>' : ''}
-      <button type="button" class="sm ghost" data-action="forgetLocalFolder">Forget this folder</button>
+      <button type="button" class="sm ghost" data-action="chooseLocalFolder">Change folder…</button>
+      <button type="button" class="sm ghost" data-action="forgetLocalFolder">Forget folder</button>
     </div>`;
 }
 
@@ -2696,7 +3068,10 @@ async function signedIn(session) {
   // Make sure the settings row exists, but never block the first paint on it.
   // The data layer has already turned this into a sentence; wrapping it again
   // produced "Could not read your settings: Could not read your settings: ...".
-  data.settings.get(session.user.id).catch((e) => toast(e.message, true));
+  // Kept on state too — not just for the Settings screen itself any more, but
+  // for the language sheet, needed wherever something gets written, not only
+  // from Settings.
+  data.settings.get(session.user.id).then((s) => { state.settings = s; }).catch((e) => toast(e.message, true));
   // Anything shared from Android's Share menu, including while there was no
   // signal. Deliberately after the first paint: an upload must not be what
   // stands between someone and their own screen.

@@ -568,3 +568,97 @@ test('packLabel says "not checked yet" rather than a false source count', async 
   assert.equal(packLabel(pack), '2 claims · not checked yet');
   assert.equal(packLabel(normalisePack({ checked: false, pack: {} })), 'not checked yet');
 });
+
+// ---------- building a demo from the pack, not from the model ----------
+
+test('packDemoSource builds the demo straight from the pack, when there is something to build from', async () => {
+  const { normalisePack, packDemoSource } = await load();
+  const pack = normalisePack({
+    pages: [livePage],
+    pack: {
+      main_tool: {
+        name: 'NameForge', url: livePage.url,
+        steps: ['Open the site', 'Paste your name'],
+        prompts: ['Give me 3D render options for the name "Alex"'],
+      },
+      test_plan: ['show the 3D render actually changes when the name changes'],
+      recording_checklist: ['have a sample name ready'],
+    },
+  });
+  const demo = packDemoSource(pack);
+  assert.equal(demo.tool, 'NameForge');
+  assert.equal(demo.url, livePage.url);
+  assert.deepEqual(demo.steps, ['Open the site', 'Paste your name']);
+  assert.deepEqual(demo.prompts, ['Give me 3D render options for the name "Alex"']);
+  assert.deepEqual(demo.check, ['show the 3D render actually changes when the name changes']);
+  assert.deepEqual(demo.prepare, ['have a sample name ready']);
+});
+
+test('packDemoSource is null with nothing fetched, or a pack with no steps or prompts at all', async () => {
+  const { normalisePack, packDemoSource } = await load();
+  assert.equal(packDemoSource(null), null);
+  assert.equal(packDemoSource(normalisePack({ pages: [], pack: { main_tool: { name: 'x' } } })), null, 'ungrounded');
+  // Ungrounded specifically — not just "no steps" — even though the pack DOES
+  // carry steps and prompts: nothing was fetched, so there is nothing real to
+  // build a demo from, whatever the model wrote.
+  assert.equal(
+    packDemoSource(normalisePack({ pages: [], pack: { main_tool: { name: 'x', steps: ['a'], prompts: ['b'] } } })),
+    null,
+    'ungrounded, even with steps and prompts present',
+  );
+  assert.equal(
+    packDemoSource(normalisePack({ pages: [livePage], pack: { main_tool: { name: 'x', url: livePage.url } } })),
+    null,
+    'grounded, but the pack never found a how-to',
+  );
+});
+
+test('packDemoSource still uses an unchecked pack\'s steps, but marks the demo unchecked', async () => {
+  const { normalisePack, packDemoSource } = await load();
+  const pack = normalisePack({
+    checked: false,
+    pack: {
+      topic: 'a background remover',
+      main_tool: {
+        name: 'Bgless', url: 'https://bgless.example',
+        steps: ['Open bgless.example', 'Drop the photo'],
+        prompts: ['Remove the background from this photo'],
+      },
+      test_plan: ['the background is actually gone'],
+    },
+  });
+  assert.equal(pack.checked, false);
+  assert.equal(pack.grounded, false, 'nothing has been fetched, so this is not confused with a real fetch');
+
+  const demo = packDemoSource(pack);
+  // Still built from the pack's own real steps — not thrown away just because
+  // nobody has fetched the page for this app yet.
+  assert.equal(demo.tool, 'Bgless');
+  assert.deepEqual(demo.steps, ['Open bgless.example', 'Drop the photo']);
+  assert.deepEqual(demo.prompts, ['Remove the background from this photo']);
+  assert.equal(demo.checked, false, 'the confidence, not the content, is what differs from a checked pack');
+});
+
+test('packDemoSource marks a rechecked, grounded pack as checked', async () => {
+  const { normalisePack, packDemoSource } = await load();
+  const pack = normalisePack({
+    pages: [livePage],
+    pack: {
+      main_tool: { name: 'NameForge', url: livePage.url, steps: ['Open the site'], prompts: ['Give me a name'] },
+    },
+  });
+  assert.equal(packDemoSource(pack).checked, true);
+});
+
+test('packSummary carries steps and prompts too, so beats are written consistent with the demo', async () => {
+  const { normalisePack, packSummary } = await load();
+  const pack = normalisePack({
+    pages: [livePage],
+    pack: {
+      main_tool: { name: 'x', url: livePage.url, steps: ['Step one'], prompts: ['Exact prompt text'] },
+    },
+  });
+  const summary = packSummary(pack);
+  assert.match(summary, /Steps read off the page:\n- Step one/);
+  assert.match(summary, /Exact prompt text/);
+});

@@ -114,13 +114,13 @@ maintained by a trigger.
 | Table | Key | Holds |
 |---|---|---|
 | `ideas` | `(user_id, id)` | date, title, hook, tool, show, why, format, `status` new/picked/skipped |
-| `scripts` | `(user_id, id)` | topic, title, `beats` jsonb, captions, `hashtags[]`, `broll[]`, audio, `stage` to_shoot/shot/edited/posted |
+| `scripts` | `(user_id, id)` | topic, title, `beats` jsonb, captions, `hashtags[]`, `broll[]`, audio, `stage` to_shoot/shot/edited/posted, `language` |
 | `results` | `(user_id, id)` | posted_on, `platforms[]`, format, hook, len, cta, views/likes/comments/shares/saves/follows, `script_id` |
 | `trends` | `(user_id, url)` | title, source, summary, thumbnail, views, views_per_hour, score, fetched_on, `extra` jsonb |
-| `settings` | `user_id` | `niche_keywords[]`, language, default_length, `ai_order[]`, gemini_model, openrouter_model |
+| `settings` | `user_id` | `niche_keywords[]`, language, default_length, `ai_order[]`, gemini_model, openrouter_model, `radar_languages[]` |
 | `usage` | `(user_id, date, provider)` | units, requests — YouTube quota and AI call counts |
 | `import_tokens` | `id` | `token_hash` (SHA-256 only), label, last_used_at |
-| `projects` | `(user_id, id)` | title, `script_id`, `status` active/posted/archived, `is_inbox`, `posted_at`, `local_folder_name` |
+| `projects` | `(user_id, id)` | title, `script_id`, `status` active/posted/archived, `is_inbox`, `posted_at`, `local_folder_name`, `language` |
 | `project_items` | `(user_id, id)` | `project_id`, `kind` text/link/image/file/video_ref/research, content, storage_path, file_name, mime, size_bytes, sha256, `devices[]`, `external_id` (an import's own id, for re-import upsert), from_device, `preview` (generated) |
 | `allowed_users` | `user_id` | who may use ViralRadar at all |
 
@@ -379,7 +379,7 @@ public/              the whole frontend — no build step, no framework
 
 scripts/             build, sync-shared, inspect-db, test-rls, rls-plan,
                      db-url, make-icons
-test/                30 files, 490 tests
+test/                32 files, 547 tests
 ```
 
 **Why `_shared/core/` is a copy.** A deployed Edge Function only receives files
@@ -545,6 +545,7 @@ except the optional folder watcher.
 | 14. Research Pack | **done, migration pushed, `vr-research` deployed** |
 | 15. Import research packs and notes; forward-compatible bundles | **done, migration pushed, `vr-import` redeployed** |
 | 16. Local project folders, mirrored onto disk | **built and tested; migration NOT yet pushed; the File System Access half (choosing a folder, a real write, a real receive-to-folder) NOT yet run live — same untested category as phase 12, see "Testing the half that cannot be tested"** |
+| 17. Language sheet, a demo walkthrough, the Radar language filter, deleting a project | **built and tested (10 tamper cases caught); migration NOT yet pushed, `vr-generate` and `vr-refresh-trends` NOT yet redeployed — nothing in this phase has been exercised against a real request yet** |
 
 Phase 10 originally also contained a SQLite → Postgres migration. It was
 dropped, not skipped: no local database ever held any data, so there was
@@ -626,6 +627,12 @@ and all seven screens read and write the real database:
   the Realtime half is the same machinery that already works for imports, but
   the Share Target in particular only appears once the installed PWA has
   activated the new service worker.
+- **The language sheet, the demo walkthrough, the Radar language filter and
+  deleting a project have never run against the real database or a real
+  model.** All four are tested in Node against fakes, and 10 tamper cases are
+  caught, but the migration adding `scripts.language`, `projects.language` and
+  `settings.radar_languages` has not been pushed, and `vr-generate` /
+  `vr-refresh-trends` have not been redeployed with this batch's code.
 
 **Done by hand:** every migration pushed up to and including research packs
 and notes, schema exposed to the Data API, account created with a password and
@@ -635,10 +642,11 @@ in Vault, code on GitHub, Netlify deploying from `main`, all five functions
 deployed, PWA installed on the phone, and the before/after policy fingerprint
 taken to show the other app was untouched.
 
-**Still to do by hand:** push the local-folder migration, set
-`cron_config.purge_function_url`, reload the installed PWA on the phone so its
-service worker picks up the Share Target, and re-run SETUP.md Step 14c now
-that the ICE-candidate fix is live.
+**Still to do by hand:** push the local-folder migration and the
+language/demo/radar-languages migration, redeploy `vr-generate` and
+`vr-refresh-trends`, set `cron_config.purge_function_url`, reload the
+installed PWA on the phone so its service worker picks up the Share Target,
+and re-run SETUP.md Step 14c now that the ICE-candidate fix is live.
 
 ---
 
@@ -870,6 +878,82 @@ posted, the Projects screen offers to delete `03-raw`'s contents and says how
 much that would free — `05-final` is a different subfolder `deleteRawFiles()`
 never even opens, so a final cut is structurally safe from this regardless of
 what the raw footage cleanup does.
+
+### A UX batch: language per script, a demo walkthrough, a Radar language filter, deleting a project
+
+Four changes, kept in four separate shared modules so none of them had to
+touch the others:
+
+- **The language sheet.** Before writing ideas, angles or a script, a small
+  `<dialog>` asks Language (Hinglish / Hindi / English) and Length, defaulting
+  to Settings — or, inside a project's context, to that project's own last
+  choice, a prefill rather than a requirement. The choice reaches
+  `vr-generate` as `{ language, length }` in the request body, which it
+  already preferred over `settings.language` before this batch; what changed
+  is that the browser now always sends one. Chosen once, it then has to stick:
+  `scripts.language` is set by a direct `update()` after the script is
+  written, deliberately **not** through `COLUMNS.script` in
+  `shared/import-core.mjs` — a column listed there is overwritten by every
+  future import of the same script, including a plain re-import from Shorts
+  Studio that has never heard of this concept, which would null it straight
+  back out. `edit_plan` generation reads `script.language` directly and
+  ignores whatever the request asked for, so an edit plan can never drift from
+  the script it is for.
+
+- **The demo walkthrough.** `shared/demo.mjs` mirrors `shared/edit-plan.mjs`
+  exactly: a `demo` field (`tool`, `url`, `prepare[]`, `steps[]`, `prompts[]`,
+  `check[]`) rides in `raw`, no column, no migration needed to accept it from
+  Shorts Studio. The interesting part is where a script's own demo comes from:
+  when the browser has a Research Pack open, it sends the pack's `main_tool`
+  fields as `demo_source`, and `vr-generate` **overrides** whatever the model
+  wrote for `demo.steps`/`demo.prompts` with the pack's own — the same
+  "ask in the prompt, enforce in code" split the Research Pack itself uses,
+  because a model asked to copy a prompt exactly can still paraphrase it, and
+  the one place that matters most is the line about to be read off screen on
+  camera. `shared/research.mjs`'s `packDemoSource()` is the gate: null when the
+  pack has been checked (something was actually fetched) and found nothing
+  live, or when it names no step or prompt at all either way. An **unchecked**
+  pack (imported from outside, never Re-checked) is treated differently on
+  purpose — its steps and prompts are still used, just marked `checked: false`.
+  `checked: true` is earned, never assumed: `readDemo()` defaults it to
+  **false** for everything — a Shorts Studio export, a Claude chat import, a
+  demo a model wrote with no pack behind it, none of which can browse and so
+  none of which can vouch for a URL or a step actually working. Only
+  vr-generate overriding a demo from a pack it has itself fetched sets
+  `checked: true`. The script screen shows "Not checked yet" above the
+  walkthrough whenever it isn't, pointing at Re-check links as the fix.
+  A script generation also survives the tab closing mid-request: the request
+  body is shadowed into `localStorage` before the network call and cleared
+  after, so reopening `#/scripts/<id>` with nothing in memory shows "This
+  script didn't finish" with Retry instead of a blank screen or a spinner that
+  never resolves.
+
+- **The Radar language filter.** `shared/language.mjs` has no dependencies and
+  no state: `detectTitleScript()` matches a title's Unicode block against nine
+  Indic scripts, and `isLanguageAllowed()` combines that with whatever YouTube
+  itself declares (`snippet.defaultAudioLanguage` / `defaultLanguage`) —
+  the declaration wins when there is one, a Latin-script title is kept
+  whenever Hindi or English is allowed (indistinguishable from the text alone
+  — "Hinglish" is Latin letters too), and a title with no signal at all is
+  kept rather than guessed away. `fetchYouTube()` applies this per video after
+  `videos.list` answers, drops what fails, and reports the count as a note
+  ("Filtered out N videos in other languages") that the Radar's refresh toast
+  picks out and appends. `relevanceLanguage` is sent too, but only as the
+  first configured language — a ranking hint YouTube itself does not treat as
+  a filter, so the real filtering stays entirely in code that can be tested.
+
+- **Deleting a project.** `data.projects.remove()` already existed (files from
+  Storage first, then the row, the same order the nightly purge uses) — new
+  here is the Inbox guard (checked before anything is touched, not just hidden
+  from the button) and the confirmation dialog, which states what is about to
+  happen rather than asking for a blind "are you sure": how many notes, how
+  many files, how many bytes, that a linked script is only unlinked (it was
+  never a foreign key, precisely so a folder's deletion could never cascade
+  into it), and — read off `state.localRootName` and the project's own
+  `local_folder_name` — exactly where its local folder is, because this
+  feature has no access to delete that even if it wanted to. Archiving a
+  project (the existing status switch) now also hides it from the default
+  Projects list, with a "Show archived (N)" toggle to bring it back.
 
 ### Testing the half that cannot be tested
 

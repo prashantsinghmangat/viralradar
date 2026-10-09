@@ -67,7 +67,15 @@ const SCRIPT_SHAPE = `{
   "hashtags": ["#tag", "#tag"],
   "pinned_comment": "the comment to pin under the video",
   "broll": ["b-roll shot to film or screen-record"],
-  "audio": "the kind of background audio"
+  "audio": "the kind of background audio",
+  "demo": {
+    "tool": "the exact tool or website name",
+    "url": "its homepage URL",
+    "prepare": ["one thing to have ready before filming, e.g. an account, a sample file"],
+    "steps": ["one exact on-screen click or action, in the order you do them"],
+    "prompts": ["exact prompt text to type or paste, word for word, if the tool takes one"],
+    "check": ["one thing to verify worked before moving on"]
+  }
 }`;
 
 const jsonOnly = (shape, wrapper) =>
@@ -162,6 +170,12 @@ ${rulesBlock()}
 ${lessonBlock(lesson)}${researchBlock(research)}
 Beats must cover the whole ${length} with timecodes that add up to it (for example 0-3s, 3-10s, 10-22s, 22-30s).
 The spoken lines together must be readable aloud within ${length}.
+
+Also write "demo": the exact walkthrough of using the tool on camera — what to
+prepare, each click in order, and anything typed or pasted. If any beat's
+spoken line tells the viewer to type or paste a prompt, that beat's words and
+the matching entry in demo.prompts must be the same prompt, word for word —
+whichever you write first, keep the other consistent with it.${research ? ' A Research Pack exists for this subject (above): build demo.steps and demo.prompts from the steps and prompts read off the page rather than inventing your own, and write beats consistent with them.' : ''}
 
 ${jsonOnly(SCRIPT_SHAPE, '{ "items": [ SHAPE ] }')}`;
 }

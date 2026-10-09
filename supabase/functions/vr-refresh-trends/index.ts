@@ -20,7 +20,7 @@ import type { SupabaseClient } from 'jsr:@supabase/supabase-js@2';
 import { authenticate, AuthError, SCHEMA, serviceClient } from '../_shared/auth.ts';
 import { corsHeaders, json, preflight } from '../_shared/cors.ts';
 import { runRefresh } from '../_shared/core/trends-core.mjs';
-import { DEFAULT_KEYWORDS, SUBREDDITS } from '../_shared/core/defaults.mjs';
+import { DEFAULT_KEYWORDS, DEFAULT_RADAR_LANGUAGES, SUBREDDITS } from '../_shared/core/defaults.mjs';
 import { istDay } from '../_shared/core/time.mjs';
 
 /** Constant-time compare, so the secret cannot be guessed a character at a time. */
@@ -121,16 +121,18 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    // Their own keywords, if they have set any.
+    // Their own keywords and languages, if they have set any.
     const { data: settings } = await caller.client
-      .from('settings').select('niche_keywords').eq('user_id', caller.userId).maybeSingle();
+      .from('settings').select('niche_keywords, radar_languages').eq('user_id', caller.userId).maybeSingle();
     const keywords = settings?.niche_keywords?.length ? settings.niche_keywords : DEFAULT_KEYWORDS;
+    const languages = settings?.radar_languages?.length ? settings.radar_languages : DEFAULT_RADAR_LANGUAGES;
 
     const summary = await runRefresh(storeFor(caller), {
       keywords,
       subreddits: SUBREDDITS,
       youtubeKey: Deno.env.get('YOUTUBE_API_KEY') ?? '',
       githubToken: Deno.env.get('GITHUB_TOKEN') ?? '',
+      languages,
     });
 
     console.log(`[vr-refresh-trends] ${caller.via} ${caller.userId}: ${summary.total} trends`

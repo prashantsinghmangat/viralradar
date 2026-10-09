@@ -29,3 +29,20 @@ export const DEFAULT_OPENROUTER_MODEL = 'nvidia/nemotron-3-super-120b-a12b:free'
 
 export const IDEA_STATUS = ['new', 'picked', 'skipped'];
 export const SCRIPT_STAGES = ['to_shoot', 'shot', 'edited', 'posted'];
+
+// The three spoken languages the language sheet offers before writing
+// anything — free text, same as DEFAULT_LANGUAGE, because that is what the
+// prompt wants ("Spoken language: ${language}"). Hinglish first: it is what
+// most of this creator's own videos are actually spoken in.
+export const SCRIPT_LANGUAGES = ['Hinglish', 'Hindi', 'English'];
+
+// Radar language filtering (shared/language.mjs) — ISO 639-1 codes, not the
+// free-text script languages above. Hindi and English because that is what
+// the Radar is for; the rest are offered because shared/language.mjs can
+// actually detect them from a title's Unicode script.
+export const RADAR_LANGUAGE_OPTIONS = [
+  ['hi', 'Hindi'], ['en', 'English'], ['ta', 'Tamil'], ['te', 'Telugu'],
+  ['kn', 'Kannada'], ['ml', 'Malayalam'], ['bn', 'Bengali'], ['gu', 'Gujarati'],
+  ['pa', 'Punjabi'], ['or', 'Odia'],
+];
+export const DEFAULT_RADAR_LANGUAGES = ['hi', 'en'];

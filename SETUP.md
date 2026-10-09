@@ -790,6 +790,38 @@ whose folder is connected here: it should save straight into that project's
 `03-raw` with no save dialog, and the checksum check still runs exactly as
 it does without a local folder.
 
+### Step 14f. Push the language/demo migration and redeploy two functions
+
+```powershell
+cd D:\Project\viralradar
+npx supabase db push
+npx supabase functions deploy vr-generate --use-api
+npx supabase functions deploy vr-refresh-trends --use-api
+```
+
+This adds `scripts.language`, `projects.language` and
+`settings.radar_languages` — again only widened columns, nothing dropped.
+
+Then a few quick checks:
+
+1. **Write script** from anywhere. The Language/Length sheet should appear
+   first, and you should land on the new script's own screen with a loading
+   state immediately — before the script actually exists.
+2. Open that script: its language shows as a tag near the title, and on its
+   card on the **Scripts** board.
+3. If it has a demo, **"How to do the demo"** appears above the edit plan,
+   with each prompt in its own block with a **Copy** button.
+4. **Settings → Radar languages.** Uncheck everything but one language you
+   do not usually get trends in, save, then **Refresh now**. The summary
+   should say *"Filtered out N videos in other languages"* when it drops any.
+   Put your real languages back afterward.
+5. Open a project with something in it → **Delete project**. It should name
+   how many notes, files and MB, say its local folder (if any) is untouched
+   and where it is, and only remove anything once you confirm.
+6. Mark a project **Archived** from its own screen, then go back to
+   **Projects** — it should disappear from the list, with a
+   "Show archived (1)" link to bring it back.
+
 ## Step 15. Close the door (optional)
 
 **ViralRadar is already closed** without this step. The allowlist from Step 6b
@@ -944,6 +976,10 @@ watcher is a convenience, not a requirement.
 | "Could not read the folder" on a project | The chosen root folder was moved, renamed, or is on a drive that is not connected right now (an external drive, say). Reconnect it from the same location, or choose a different root in Settings. |
 | The incoming video card never appears on the other device | It is already busy with another transfer (one at a time, by design) — or that device's app is on an old service worker. Reload it. |
 | Where did my video go? | Nowhere near Supabase — that is the point. On a laptop, where you chose to save it; on Android, Downloads. The folder keeps only a 📹 note about it. |
+| Writing a script never shows the Language/Length sheet, or fails with a column error | The migration in Step 14f has not been pushed, or `vr-generate` has not been redeployed with this batch's code. |
+| "How to do the demo" never appears | Either the script has no demo at all (older scripts, or a provider that did not write one — not every generation gets one), or the migration/redeploy in Step 14f is still pending. |
+| A Research Pack's steps and prompts do not show up in the demo | `packDemoSource()` needs the pack to be **grounded** (something was actually fetched) and to name at least one step or prompt — an unchecked, imported pack (see Step 14e → "Re-check links") will not contribute to the demo until it has been rechecked. |
+| Every trend disappears from the Radar after a refresh | **Settings → Radar languages** probably has too narrow a selection, or none at all. At least one language has to stay checked; the Radar refuses to save an empty list, but a very narrow one (one regional language only, say) can look the same as broken. |
 
 When in doubt, paste the exact message to me — I would rather see the real error
 than guess from a description.

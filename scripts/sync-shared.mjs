@@ -45,7 +45,7 @@ export const BROWSER_DIR = join(ROOT, 'public', 'shared');
 //                kept away from the untestable File System Access wiring, the
 //                same reason transfer.mjs is split from public/transfer.js
 export const BROWSER_SHARED = [
-  'stats.mjs', 'defaults.mjs', 'time.mjs', 'tokens.mjs', 'edit-plan.mjs',
+  'stats.mjs', 'defaults.mjs', 'time.mjs', 'tokens.mjs', 'edit-plan.mjs', 'demo.mjs',
   'projects.mjs', 'sha256.mjs', 'transfer.mjs', 'learning.mjs', 'research.mjs',
   'localfolder.mjs',
 ];

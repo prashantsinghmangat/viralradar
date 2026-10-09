@@ -115,7 +115,7 @@ test('user text is escaped wherever it is put into HTML', () => {
   // model-written text on screen, so they are the ones that matter most.
   // encodeURIComponent() is on the list for a different reason: it percent-
   // encodes, so its output cannot be markup at all.
-  const safe = /^(esc\(|fmt\(|compact\(|ago\(|when\(|copyBtn\(|hbars\(|format\(|formatBytes\(|renderEditPlan\(|PASTE_BUTTON\(|makeButton\(|devicesLine\(|renderAngles\(|ANGLES_BUTTON\(|renderPack\(|RESEARCH_BUTTON\(|packLink\(|packList\(|liveBadge\(|factClass\(|renderLocalFolderSettings\(|encodeURIComponent\(|GENERATING\[|KIND_ICON|SOURCE|LIVE_LABEL|STAGES|LENGTHS|DEFAULT_AI_ORDER)/;
+  const safe = /^(esc\(|fmt\(|compact\(|ago\(|when\(|copyBtn\(|hbars\(|format\(|formatBytes\(|renderEditPlan\(|renderDemo\(|renderPendingGeneration\(|PASTE_BUTTON\(|makeButton\(|devicesLine\(|renderAngles\(|ANGLES_BUTTON\(|renderPack\(|RESEARCH_BUTTON\(|packLink\(|packList\(|liveBadge\(|factClass\(|renderLocalFolderSettings\(|encodeURIComponent\(|GENERATING\[|KIND_ICON|SOURCE|LIVE_LABEL|STAGES|LENGTHS|DEFAULT_AI_ORDER)/;
   const bad = [];
   for (const literal of htmlLiterals) {
     for (const m of literal.matchAll(/\$\{([^{}]*)\}/g)) {
@@ -452,6 +452,61 @@ test('the video never touches Storage, and the row never claims it does', () => 
 
 // ---------- local project folders ----------
 
+test('archived projects are hidden by default, with a way to see them again', () => {
+  const fn = appjs.slice(appjs.indexOf('async function renderProjects'), appjs.indexOf('actions.toggleShowArchived'));
+  assert.match(fn, /p\.status === 'archived'/, 'archiving has to actually filter something');
+  assert.match(fn, /state\.showArchived/);
+  assert.ok(!appjs.includes('showArchived: true'), 'it must start hidden, not shown');
+});
+
+test('deleting a project asks first, says what it removes, and says the local folder is untouched', () => {
+  const fn = appjs.slice(appjs.indexOf('function renderDeleteProjectConfirm'), appjs.indexOf('actions.confirmDeleteProject'));
+  for (const expr of ['notes', 'files', 'bytes']) assert.match(fn, new RegExp(expr), `must count ${expr}`);
+  assert.match(fn, /esc\(project\.title\)/);
+  assert.match(fn, /not deleted — only unlinked/);
+  assert.match(fn, /local folder is never touched/);
+  assert.match(fn, /esc\(project\.local_folder_name\)/);
+  assert.match(fn, /cannot be undone/);
+});
+
+test('the Inbox cannot be offered for deletion from its own screen', () => {
+  const fn = appjs.slice(appjs.indexOf('async function renderProjectDetail'), appjs.indexOf('async function devicesLine') > -1
+    ? appjs.indexOf('function devicesLine') : appjs.length);
+  assert.match(fn, /!project\.is_inbox \? '<button type="button" class="sm ghost" data-action="confirmDeleteProject">/);
+});
+
+test('deleting a project removes it through data.projects.remove, the files-first path', () => {
+  const fn = appjs.slice(appjs.indexOf('actions.deleteProject ='), appjs.indexOf('actions.deleteProject =') + 400);
+  assert.match(fn, /data\.projects\.remove\(/);
+  assert.match(fn, /location\.hash = '#\/projects'/, 'leave the deleted project\'s own screen');
+});
+
+test('the local folder section shows the connected folder\'s name and permission state first, with Change and Forget', () => {
+  const fn = appjs.slice(appjs.indexOf('function renderLocalFolderSettings'), appjs.indexOf('actions.chooseLocalFolder'));
+  const nameAt = fn.indexOf('state.localRootName');
+  const permAt = fn.indexOf('LOCAL_PERMISSION_LABEL');
+  const changeAt = fn.indexOf('Change folder');
+  const forgetAt = fn.indexOf('data-action="forgetLocalFolder"');
+  assert.ok(nameAt > 0 && permAt > nameAt, 'name, then permission state, in that order');
+  assert.ok(changeAt > permAt && forgetAt > permAt, 'both actions come after the status, not before it');
+  assert.match(fn, /Change folder/);
+  assert.match(fn, /Forget folder/);
+});
+
+test('the radar language checkboxes are escaped and reflect what is saved', () => {
+  const fn = appjs.slice(appjs.indexOf('<h2>Radar languages</h2>'), appjs.indexOf('<h2>Backup &amp; restore</h2>'));
+  assert.match(fn, /RADAR_LANGUAGE_OPTIONS\.map/);
+  assert.match(fn, /esc\(code\)/);
+  assert.match(fn, /esc\(label\)/);
+  assert.match(fn, /s\.radar_languages \|\| \[\]\)\.includes\(code\)/);
+});
+
+test('saving radar languages refuses an empty selection rather than silently filtering everything', () => {
+  const fn = appjs.slice(appjs.indexOf('actions.saveRadarLanguages'), appjs.indexOf('actions.saveWriting'));
+  assert.match(fn, /if \(!list\.length\)/, 'an empty list must be refused before it reaches settings');
+  assert.match(fn, /radar_languages: list/);
+});
+
 test('the local folder is offered only where the API actually exists', () => {
   const section = appjs.slice(appjs.indexOf('function renderLocalFolderSettings'), appjs.indexOf('actions.chooseLocalFolder'));
   assert.match(section, /isLocalFolderSupported\(\)/, 'unsupported browsers must see a message, not a dead button');
@@ -524,6 +579,129 @@ test('sending a video passes this project\'s id along as a hint, never a require
   const sendTo = section.slice(section.indexOf('actions.sendVideoTo'), section.indexOf('// ---- receiving'));
   assert.match(sendTo, /projectId,/, 'the id travels; a folder name never does');
   assert.ok(!/data\.projects\.get\(/.test(sendTo), 'the sender has no reason to look anything up — it already has the id');
+});
+
+test('every value the demo section puts on screen is escaped, including the exact prompt text', () => {
+  // The prompt is the one line this whole feature exists to get exactly
+  // right — literally "copy this and paste it into the tool" — so it is
+  // also the one most worth checking actually goes through esc() rather
+  // than straight into a <pre>.
+  const fn = appjs.slice(appjs.indexOf('function renderDemo'), appjs.indexOf('// ---- edit plan ----'));
+  const interpolations = [...fn.matchAll(/\$\{([^{}]*)\}/g)].map((m) => m[1].trim());
+  assert.ok(interpolations.length >= 5, `expected renderDemo to interpolate something, found ${interpolations.length}`);
+  for (const expr of interpolations) {
+    const ok = /^(esc\(|copyBtn\(|list\()/.test(expr) || /\.map\(|\.join\(|\?/.test(expr) || expr === 'ordered';
+    assert.ok(ok, `renderDemo puts ${expr} into HTML without escaping it`);
+  }
+  assert.match(fn, /esc\(p\)/, 'a prompt has to be escaped before it reaches the <pre>');
+  assert.match(fn, /esc\(demo\.url\)/);
+});
+
+test('the demo section says "Not checked yet" only when the pack behind it was never fetched', () => {
+  const fn = appjs.slice(appjs.indexOf('function renderDemo'), appjs.indexOf('// ---- edit plan ----'));
+  assert.match(fn, /demo\.checked === false/, 'the gate must be the explicit false, not falsy');
+  assert.match(fn, /Not checked yet/);
+  assert.match(fn, /Re-check links/, 'the notice should point at the fix, not just the problem');
+});
+
+// ---------- navigating to where a result will appear ----------
+
+test('a script generation survives the tab closing: the request is saved, not only kept in memory', () => {
+  const fn = appjs.slice(appjs.indexOf('async function runPendingGeneration'), appjs.indexOf('/** The loading'));
+  assert.match(fn, /if \(body\.kind === 'script'\) savePendingScript\(key, body\);/,
+    'the request has to be saved before the network call, not after it resolves');
+  assert.match(fn, /if \(body\.kind === 'script'\) clearPendingScript\(key\);/,
+    'a successful generation must clean up after itself');
+  // Saved with try/catch, the same as every other localStorage use in this
+  // file — private mode, or a full quota, must not break the loading state.
+  const saveFn = appjs.slice(appjs.indexOf('function savePendingScript'), appjs.indexOf('function loadPendingScript'));
+  assert.match(saveFn, /try \{/);
+  assert.match(saveFn, /catch/);
+});
+
+test('reopening an unfinished script offers Retry instead of "Script not found"', () => {
+  const fn = appjs.slice(appjs.indexOf('async function renderScriptDetail'), appjs.indexOf('const beats ='));
+  // The normal read is wrapped so a failure can be told apart from "this one
+  // genuinely does not exist" — only the former has a saved request to retry.
+  assert.match(fn, /try \{\s*s = await data\.scripts\.get\(id\);\s*\} catch \(e\) \{/s);
+  assert.match(fn, /const saved = loadPendingScript\(id\);/);
+  assert.match(fn, /if \(!saved\) throw e;/, 'a genuinely unknown id must still fail, not silently show Retry');
+  assert.match(fn, /This script didn't finish/);
+  assert.match(fn, /data-action="resumePendingScript" data-id="\$\{esc\(id\)\}"/);
+});
+
+test('resuming an unfinished script replays the exact saved request', () => {
+  const fn = appjs.slice(appjs.indexOf('actions.resumePendingScript'), appjs.indexOf('actions.resumePendingScript') + 300);
+  assert.match(fn, /loadPendingScript\(btn\.dataset\.id\)/);
+  assert.match(fn, /runPendingGeneration\(btn\.dataset\.id, body\)/);
+});
+
+test('writing a script goes straight to its own screen, with a loading state, before the generation starts', () => {
+  const fn = appjs.slice(appjs.indexOf('async function writeScriptTo'), appjs.indexOf('actions.generateIdeas'));
+  assert.match(fn, /location\.hash = `#\/scripts\/\$\{encodeURIComponent\(id\)\}`/, 'the navigation must happen immediately');
+  assert.match(fn, /runPendingGeneration\(id,/);
+  // The id is made before the request is sent, and sent with it — the
+  // navigation and the generation have to agree on where the result lands.
+  const order = fn.indexOf('location.hash');
+  const sendOrder = fn.indexOf('runPendingGeneration');
+  assert.ok(order > 0 && order < sendOrder, 'navigation must come before the request is sent, not after');
+});
+
+test('every entry point that writes a script goes through writeScriptTo, not straight to the AI call', () => {
+  for (const action of ['writeScript', 'writeScriptFromBox', 'writeAngle', 'scriptFromPack']) {
+    const start = appjs.indexOf(`actions.${action} =`);
+    assert.ok(start > 0, `actions.${action} is not defined`);
+    const body = appjs.slice(start, appjs.indexOf('\n};', start));
+    assert.match(body, /writeScriptTo\(/, `actions.${action} must navigate via writeScriptTo()`);
+  }
+});
+
+test('the script screen shows a loading or failed state instead of "not found" while one is being written', () => {
+  const fn = appjs.slice(appjs.indexOf('async function renderScriptDetail'), appjs.indexOf('const beats ='));
+  assert.match(fn, /renderPendingGeneration\(id,/);
+  // The pending check has to come before the row is actually read, or a
+  // script that does not exist yet would just throw "Script not found".
+  const pendingAt = fn.indexOf('const writing = renderPendingGeneration');
+  const readAt = fn.indexOf('data.scripts.get(id)');
+  assert.ok(pendingAt > 0 && pendingAt < readAt, 'the pending check must come before reading the row');
+});
+
+test('an edit plan loads and fails in place, on the script\'s own screen — no navigation needed', () => {
+  assert.match(appjs, /actions\.makeEditPlan = \(btn\) => runPendingGeneration\(`edit_plan:\$\{btn\.dataset\.id\}`/);
+  const fn = appjs.slice(appjs.indexOf('async function renderScriptDetail'), appjs.indexOf('function renderDemo'));
+  assert.match(fn, /renderPendingGeneration\(`edit_plan:\$\{s\.id\}`/, 'the edit-plan section must check its own pending state');
+});
+
+test('the language sheet appears before ideas, angles or a script, and never before an edit plan or research', () => {
+  // writeScript, writeScriptFromBox, writeAngle and scriptFromPack all go
+  // through writeScriptTo() (its own test proves that), which is where their
+  // sheet is shown — checked once, here, rather than once per action.
+  const writeScriptToFn = appjs.slice(appjs.indexOf('async function writeScriptTo'), appjs.indexOf('actions.generateIdeas'));
+  assert.match(writeScriptToFn, /withLanguageSheet\(/);
+
+  for (const action of ['generateIdeas', 'findAngles', 'anglesFromPack']) {
+    const start = appjs.indexOf(`actions.${action} =`);
+    assert.ok(start > 0, `actions.${action} is not defined`);
+    const body = appjs.slice(start, appjs.indexOf('\n};', start));
+    assert.match(body, /withLanguageSheet\(/, `actions.${action} must show the language sheet first`);
+  }
+  // Neither of these has a language of its own to ask about.
+  const editPlanLine = appjs.slice(appjs.indexOf('actions.makeEditPlan ='), appjs.indexOf('actions.makeEditPlan =') + 200);
+  assert.ok(!/withLanguageSheet/.test(editPlanLine), 'an edit plan always uses the script\'s own language');
+  const researchFns = appjs.slice(appjs.indexOf('async function runResearch'), appjs.indexOf('actions.researchPack ='));
+  assert.ok(!/withLanguageSheet/.test(researchFns), 'research has no language of its own');
+});
+
+test('a cancelled language sheet means nothing is written', () => {
+  const fn = appjs.slice(appjs.indexOf('async function withLanguageSheet'), appjs.indexOf('// ---------- a generation'));
+  assert.match(fn, /if \(!chosen\) return null;/, 'cancelling the sheet must propagate as null, not an empty choice');
+  const writeScriptToFn = appjs.slice(appjs.indexOf('async function writeScriptTo'), appjs.indexOf('actions.generateIdeas'));
+  assert.match(writeScriptToFn, /if \(!sheet\) return;/, 'a null sheet must stop before anything navigates or writes');
+});
+
+test('the script\'s language is shown as a tag on its own screen', () => {
+  const fn = appjs.slice(appjs.indexOf('async function renderScriptDetail'), appjs.indexOf('function renderDemo'));
+  assert.match(fn, /s\.language \? `<span class="badge accent">\$\{esc\(s\.language\)\}<\/span>` : ''/);
 });
 
 test('a transfer survives moving between screens', () => {

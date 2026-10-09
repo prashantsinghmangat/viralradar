@@ -496,9 +496,13 @@ test('a note is deleted without going anywhere near Storage', async () => {
 test('deleting a folder removes its files before the folder itself', async () => {
   const { createData } = await load();
   const client = fakeClient({
-    respond: (call) => (call.table === 'project_items' && call.op === 'select'
-      ? { data: [{ id: 'i1', storage_path: 'u/p/a.png' }, { id: 'i2', storage_path: null }, { id: 'i3', storage_path: 'u/p/b.png' }], error: null }
-      : { data: [], error: null }),
+    respond: (call) => {
+      if (call.table === 'projects' && call.op === 'select') return { data: [{ id: PROJECT, is_inbox: false }], error: null };
+      if (call.table === 'project_items' && call.op === 'select') {
+        return { data: [{ id: 'i1', storage_path: 'u/p/a.png' }, { id: 'i2', storage_path: null }, { id: 'i3', storage_path: 'u/p/b.png' }], error: null };
+      }
+      return { data: [], error: null };
+    },
   });
   await createData(client).projects.remove(PROJECT);
 
@@ -510,6 +514,18 @@ test('deleting a folder removes its files before the folder itself', async () =>
   assert.equal(deletes.length, 1);
   assert.equal(deletes[0].table, 'projects');
   assert.ok(client.events.indexOf(removed) < client.events.findIndex((e) => e.kind === 'db' && e.op === 'delete'));
+});
+
+test('the Inbox cannot be deleted, and nothing is removed before that is checked', async () => {
+  const { createData } = await load();
+  const client = fakeClient({
+    respond: (call) => (call.table === 'projects' && call.op === 'select'
+      ? { data: [{ id: PROJECT, is_inbox: true }], error: null }
+      : { data: [{ id: 'i1', storage_path: 'u/p/a.png' }], error: null }),
+  });
+  await assert.rejects(() => createData(client).projects.remove(PROJECT), /Inbox cannot be deleted/);
+  assert.ok(!client.events.some((e) => e.kind === 'remove'), 'no file should have been touched');
+  assert.ok(!client.calls.some((c) => c.op === 'delete'), 'no row should have been touched');
 });
 
 // ---------- usage ----------

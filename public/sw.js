@@ -36,6 +36,7 @@ const SHELL = [
   '/shared/time.mjs',
   '/shared/tokens.mjs',
   '/shared/edit-plan.mjs',
+  '/shared/demo.mjs',
   '/shared/projects.mjs',
   '/shared/learning.mjs',
   '/shared/sha256.mjs',

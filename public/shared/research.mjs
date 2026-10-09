@@ -468,17 +468,65 @@ export function packSummary(pack) {
     ? verified.map((f) => `- ${f.claim} (${f.source_url})`).join('\n')
     : '- (nothing could be verified from the pages that were read)';
 
+  // Steps and prompts are not individually fact-checked the way a claim is —
+  // see normalisePack() — but they only ever reach here once at least one
+  // page was actually fetched (packSummary refuses otherwise), and they are
+  // what packDemoSource() below builds demo.steps / demo.prompts from. Shown
+  // here too so a script's own beats are written consistent with the demo
+  // that will actually override them.
+  const steps = (tool.steps || []).length
+    ? `\n\nSteps read off the page:\n${tool.steps.map((s) => `- ${s}`).join('\n')}` : '';
+  const prompts = (tool.prompts || []).length
+    ? `\n\nPrompts read off the page — if the demo needs one, use this exact wording:\n${tool.prompts.map((p) => `- ${p}`).join('\n')}` : '';
+
   return `Verified research on this subject. Use these facts and no others:
 
 tool: ${tool.name || '(not named)'}${tool.url ? ` — ${tool.url}` : ''}
 what it does: ${tool.what_it_does || '(not established)'}
 
-${facts}
+${facts}${steps}${prompts}
 
 Do NOT state any limit, price, watermark behaviour or feature that is not in the
 list above. If the script needs one and it is not there, leave it out of the
 script rather than guessing: every claim above was read off the live page, and
 anything else would not have been.`;
+}
+
+/**
+ * The demo's steps and prompts, taken straight from the pack rather than
+ * trusted from whatever the model writes — the same "ask in the prompt,
+ * enforce in code" split the rest of this module uses.
+ *
+ * Two different reasons this can come back with nothing to build from:
+ *   - `checked !== false` (this app fetched the pages itself, or has not said
+ *     otherwise) but `!grounded` — a real fetch was attempted and found
+ *     nothing live, so there is no page a step or a prompt could have been
+ *     read off. Building a demo from it would be building one from a page
+ *     that does not answer.
+ *   - the pack simply names no steps or prompts at all (grounded in general
+ *     facts about a tool without ever having found a how-to).
+ *
+ * An imported pack that has never been checked (`checked === false` — see
+ * normalisePack()) is treated differently on purpose: its steps and prompts
+ * came from somewhere else, not from a fetch this app ever made or refused
+ * to make, so they are still worth using rather than thrown away — just
+ * labelled. The returned `checked` field is what the demo section reads to
+ * show "Not checked yet" instead of presenting them as confirmed.
+ */
+export function packDemoSource(pack) {
+  if (!pack) return null;
+  if (pack.checked !== false && !pack.grounded) return null;
+  const tool = pack.main_tool || {};
+  if (!(tool.steps || []).length && !(tool.prompts || []).length) return null;
+  return {
+    tool: tool.name || '',
+    url: tool.url || '',
+    prepare: pack.recording_checklist || [],
+    steps: tool.steps || [],
+    prompts: tool.prompts || [],
+    check: pack.test_plan || [],
+    checked: pack.checked !== false,
+  };
 }
 
 /** "3 sources · 7 verified · 2 unverified", or "4 claims · not checked yet" before a recheck. */

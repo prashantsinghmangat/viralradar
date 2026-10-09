@@ -13,7 +13,7 @@ import { fetchYouTube } from './sources/youtube.mjs';
 import { fetchHackerNews } from './sources/hackernews.mjs';
 import { fetchReddit } from './sources/reddit.mjs';
 import { fetchGitHub } from './sources/github.mjs';
-import { DEFAULT_KEYWORDS, SUBREDDITS, TREND_RETENTION_DAYS } from './defaults.mjs';
+import { DEFAULT_KEYWORDS, DEFAULT_RADAR_LANGUAGES, SUBREDDITS, TREND_RETENTION_DAYS } from './defaults.mjs';
 
 /** One collected item as a row of viralradar.trends. */
 export function toRow(item, { userId, day, fetchedAt }) {
@@ -64,6 +64,7 @@ export async function runRefresh(store, {
   subreddits = SUBREDDITS,
   youtubeKey = '',
   githubToken = '',
+  languages = DEFAULT_RADAR_LANGUAGES,
   now = new Date(),
   sources: override = null,
 } = {}) {
@@ -71,7 +72,7 @@ export async function runRefresh(store, {
   const fetchedAt = now.toISOString();
 
   const sources = override || {
-    youtube: () => fetchYouTube({ apiKey: youtubeKey, keywords, usage: usagePort(store) }),
+    youtube: () => fetchYouTube({ apiKey: youtubeKey, keywords, usage: usagePort(store), languages }),
     hackernews: () => fetchHackerNews(),
     reddit: () => fetchReddit(subreddits),
     github: () => fetchGitHub({ token: githubToken }),

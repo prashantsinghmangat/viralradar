@@ -167,7 +167,7 @@ export function createData(client) {
 
   const scripts = {
     list: () => run(
-      client.from('scripts').select('id, topic, title, yt_title, thumbnail_text, stage, origin_at, updated_at')
+      client.from('scripts').select('id, topic, title, yt_title, thumbnail_text, stage, language, origin_at, updated_at')
         .order('origin_at', { ascending: false }),
       'load your scripts',
     ),
@@ -429,14 +429,20 @@ export function createData(client) {
      * still counted against the quota this whole feature is careful about.
      */
     async remove(id) {
+      // Checked here as well as hidden in the UI: the one folder a phone
+      // share can always land in must always exist.
+      const project = await projects.get(id);
+      if (project.is_inbox) throw new Error('The Inbox cannot be deleted.');
+
       const items = await projects.items(id);
       const paths = (items || []).map((i) => i.storage_path).filter(Boolean);
       if (paths.length) {
         const { error } = await client.storage.from(BUCKET).remove(paths);
         if (error) throw new Error(readable(error, 'delete that project\'s files'));
       }
-      // project_items cascades from the folder, so one delete is enough.
-      return run(client.from('projects').delete().eq('id', id), 'delete that project');
+      const result = await run(client.from('projects').delete().eq('id', id), 'delete that project');
+      if (paths.length) await client.storage.from(BUCKET).remove(paths);
+      return result;
     },
   };
 

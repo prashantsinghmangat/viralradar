@@ -142,6 +142,14 @@ label.field { display: block; font-weight: 600; font-size: .85rem; margin: 0 0 6
 .empty { text-align: center; padding: 40px 16px; color: var(--muted); }
 .empty .big { font-size: 2rem; display: block; margin-bottom: 6px; }
 .notice { padding: 10px 12px; border-radius: 10px; background: var(--warn-soft); color: var(--warn); font-size: .88rem; }
+
+/* The language + length sheet, and any other native <dialog> that wants the
+   same card look. The dialog element itself provides the modal behaviour
+   (focus trap, Esc to cancel) — this only has to make it look like the rest
+   of the app. */
+dialog { border: none; padding: 0; background: transparent; max-width: 360px; width: calc(100% - 32px); }
+dialog::backdrop { background: rgba(0, 0, 0, .5); }
+dialog .sheet { margin: 0; }
 .status-line { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: .82rem; color: var(--text-2); margin-bottom: 12px; }
 
 /* Radar */

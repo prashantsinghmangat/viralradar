@@ -59,7 +59,22 @@ test('the script prompt carries the topic and every contract field', () => {
   for (const f of ['topic', 'title', 'beats', 'thumbnail_text', 'yt_title', 'ig_caption', 'fb_caption',
     'hashtags', 'pinned_comment', 'broll', 'audio']) assert.ok(p.includes(`"${f}"`), `missing field: ${f}`);
   for (const f of ['"t"', '"say"', '"screen"']) assert.ok(p.includes(f), `missing beat field: ${f}`);
+  for (const f of ['"tool"', '"url"', '"prepare"', '"steps"', '"prompts"', '"check"']) {
+    assert.ok(p.includes(f), `missing demo field: ${f}`);
+  }
   assert.ok(!p.includes('"id"'), 'the model must not invent ids');
+});
+
+test('the script prompt ties a beat\'s prompt to demo.prompts, word for word', () => {
+  const p = scriptPrompt({ topic: 'x', today: '2026-10-07' });
+  assert.match(p, /matching entry in demo\.prompts must be the same prompt, word for word/);
+});
+
+test('with a research pack, the script prompt says to build the demo from it, not invent one', () => {
+  const withPack = scriptPrompt({ topic: 'x', today: '2026-10-07', research: 'Verified research on this subject...' });
+  assert.match(withPack, /build demo\.steps and demo\.prompts from the steps and prompts read off the page/);
+  const without = scriptPrompt({ topic: 'x', today: '2026-10-07' });
+  assert.ok(!/build demo\.steps and demo\.prompts/.test(without), 'nothing to build from without a pack');
 });
 
 test('the script rules say where to cut and how to close', () => {
