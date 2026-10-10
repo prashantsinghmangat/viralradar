@@ -45,6 +45,8 @@ const SHELL = [
   '/shared/localfolder.mjs',
   '/transfer.js',
   '/localfolder.js',
+  '/fonts/jakarta-var.woff2',
+  '/fonts/inter-var.woff2',
   '/manifest.webmanifest',
   '/icons/icon-192.png',
   '/icons/icon-512.png',

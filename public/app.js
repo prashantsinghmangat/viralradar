@@ -58,11 +58,15 @@ function ago(iso) {
 }
 const when = (iso) => (iso ? new Date(iso).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '');
 
+// Only one toast on screen at a time — a second one replaces the first
+// rather than stacking, so the user is never reading two at once.
 function toast(message, bad = false, ms = 3800) {
+  const box = $('#toasts');
+  box.innerHTML = '';
   const el = document.createElement('div');
   el.className = 'toast' + (bad ? ' bad' : '');
   el.textContent = message;
-  $('#toasts').appendChild(el);
+  box.appendChild(el);
   setTimeout(() => el.remove(), bad ? ms + 2500 : ms);
 }
 
@@ -118,6 +122,31 @@ $('#themeBtn').addEventListener('click', () => {
   root.dataset.theme = isDark ? 'light' : 'dark';
   try { localStorage.setItem('vr-theme', root.dataset.theme); } catch { /* private mode */ }
 });
+
+// ---------- "More" sheet (mobile nav overflow) ----------
+const moreBtn = $('#moreBtn');
+const moreSheet = $('#moreSheet');
+if (moreBtn && moreSheet) {
+  moreBtn.addEventListener('click', () => moreSheet.showModal());
+  moreSheet.addEventListener('click', (e) => {
+    if (e.target === moreSheet) moreSheet.close(); // backdrop
+    if (e.target.closest('[data-more-link]')) moreSheet.close();
+  });
+}
+
+// ---------- desktop top bar: search + new script ----------
+//
+// Search filters whatever list the current screen already rendered, client
+// side — it never re-fetches. Screens that don't read uiSearch simply ignore
+// it, so this is additive rather than something every screen must support.
+let uiSearch = '';
+const topSearch = $('#topSearch');
+if (topSearch) {
+  topSearch.addEventListener('input', () => { uiSearch = topSearch.value.trim().toLowerCase(); render(); });
+}
+const matchesSearch = (...parts) => !uiSearch || parts.some((p) => String(p || '').toLowerCase().includes(uiSearch));
+
+actions.newScript = () => { location.hash = '#/ideas'; };
 
 // ---------- who is signed in ----------
 const state = {
@@ -372,18 +401,44 @@ actions.signOut = async () => {
 // ================= RADAR =================
 let radarSource = '';
 const SOURCE = {
-  youtube: { label: 'YouTube', icon: '▶️', unit: 'views/hr' },
-  hackernews: { label: 'Hacker News', icon: '🟧', unit: 'pts/hr' },
-  reddit: { label: 'Reddit', icon: '👽', unit: 'upvotes/hr' },
-  github: { label: 'GitHub', icon: '🐙', unit: 'stars/hr' },
+  youtube: { label: 'YouTube', icon: '▶️', unit: 'views/hr', badge: 'source-youtube' },
+  hackernews: { label: 'Hacker News', icon: '🟧', unit: 'pts/hr', badge: 'source-hn' },
+  reddit: { label: 'Reddit', icon: '👽', unit: 'upvotes/hr', badge: 'source-reddit' },
+  github: { label: 'GitHub', icon: '🐙', unit: 'stars/hr', badge: 'source-github' },
 };
 
+// "Hindi + English" (or whatever's actually selected) — read off the same
+// setting Settings writes, so the chip and the filter it describes can never
+// drift apart.
+function radarLanguageLabel() {
+  const codes = (state.settings?.radar_languages?.length ? state.settings.radar_languages : DEFAULT_RADAR_LANGUAGES);
+  const labels = codes.map((c) => (RADAR_LANGUAGE_OPTIONS.find(([code]) => code === c) || [c, c.toUpperCase()])[1]);
+  return labels.join(' + ') || 'All languages';
+}
+
+// Monday–Sunday, this device's local time (the goal is a weekly rhythm, not
+// a precisely-timestamped metric, so IST-exactness isn't worth chasing here).
+function startOfWeek(d = new Date()) {
+  const dow = (d.getDay() + 6) % 7; // Mon=0 … Sun=6
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() - dow);
+}
+function thisWeekCount(results) {
+  const start = startOfWeek();
+  return results.filter((r) => r.posted_on && new Date(`${r.posted_on}T00:00:00`) >= start).length;
+}
+
 async function renderRadar() {
-  const [{ day, trends }, usage] = await Promise.all([data.trends.list(radarSource), data.usage.today()]);
+  const [{ day, trends: allTrends }, usage, results] = await Promise.all([
+    data.trends.list(radarSource), data.usage.today(), data.results.list().catch(() => []),
+  ]);
   const yt = usage.youtube || { units: 0, requests: 0 };
+  const trends = allTrends.filter((t) => matchesSearch(t.title, t.summary));
+  const goal = state.settings?.weekly_goal || 5;
+  const done = thisWeekCount(results);
+  const pct = Math.min(100, Math.round((done / goal) * 100));
 
   const cards = trends.map((t, i) => {
-    const s = SOURCE[t.source] || { label: t.source, icon: '🔗', unit: '/hr' };
+    const s = SOURCE[t.source] || { label: t.source, icon: '🔗', unit: '/hr', badge: '' };
     const keyword = t.extra && t.extra.keyword;
     const copy = `${t.title}\n${t.url}\n${t.summary || ''}`.trim();
     const thumb = t.thumbnail
@@ -393,16 +448,16 @@ async function renderRadar() {
     return `<article class="card trend ${t.source === 'youtube' ? '' : 'wide'}">
       <div class="thumb">${thumb}</div>
       <div>
-        <div class="rank">#${i + 1} · ${s.icon} ${esc(s.label)}${keyword ? ` · ${esc(keyword)}` : ''}</div>
+        <div class="rank"><span class="badge ${s.badge}">${s.icon} ${esc(s.label)}</span>${keyword ? `<span class="muted small">${esc(keyword)}</span>` : ''}</div>
         <h3>${esc(t.title)}</h3>
         <div class="meta">${t.views != null ? `<span><b>${compact(t.views)}</b> ${viewsLabel}</span>` : ''}<span><b>${compact(t.score)}</b> ${t.views == null ? 'rank pts/hr' : s.unit}</span><span>${ago(t.published_at)}</span></div>
         <div class="summary">${esc(t.summary || '')}</div>
         <div class="actions">
-          <a class="btn sm" href="${esc(t.url)}" target="_blank" rel="noopener noreferrer">Open ↗</a>
           <button type="button" class="btn sm primary" data-action="writeScript" data-topic="${esc([t.title, t.summary].filter(Boolean).join(' — ').slice(0, 300))}">✍️ Write script</button>
           ${ANGLES_BUTTON([t.title, t.summary].filter(Boolean).join(' — ').slice(0, 300))}
           ${RESEARCH_BUTTON([t.title, t.summary].filter(Boolean).join(' — ').slice(0, 300), t.url)}
-          ${copyBtn(copy, 'Copy', 'sm')}
+          <a class="btn sm ghost" href="${esc(t.url)}" target="_blank" rel="noopener noreferrer" title="Open source">↗</a>
+          ${copyBtn(copy, 'Copy', 'sm ghost')}
         </div>
       </div>
     </article>`;
@@ -410,18 +465,28 @@ async function renderRadar() {
 
   return `
     <div class="page-head">
-      <h1>Radar</h1>
+      <div>
+        <h1>Today's Radar</h1>
+        <p class="muted small" style="margin:2px 0 0">${day ? `Collected ${esc(day)}` : 'Not run yet. Tap “Refresh now”, or wait for 7:00 AM IST.'}</p>
+      </div>
       <button type="button" class="primary" data-action="refreshRadar">↻ Refresh now</button>
     </div>
     <div class="status-line">
-      ${day ? `<span>Collected ${esc(day)}</span>` : '<span>Not run yet. Tap “Refresh now”, or wait for 7:00 AM IST.</span>'}
       <span class="badge accent" title="search.list costs 100 units, videos.list costs 1">YouTube today: ${yt.requests} searches · ${fmt(yt.units)} units</span>
     </div>
+
+    <section class="card tile weekly-goal" style="margin-bottom:16px">
+      <div class="k">Weekly goal</div>
+      <div class="v">${done} of ${goal} videos this week</div>
+      <div class="bar" style="margin-top:8px"><div class="fill" style="width:${pct}%"></div></div>
+    </section>
+
     ${renderPack()}
     ${renderAngles()}
-    <div class="chips" style="margin-bottom:14px">
+    <div class="chip-row" style="margin-bottom:14px">
       ${[['', 'All'], ...Object.entries(SOURCE).map(([k, v]) => [k, v.label])].map(([k, l]) =>
         `<button type="button" class="chip ${radarSource === k ? 'on' : ''}" data-action="radarSource" data-v="${k}">${esc(l)}</button>`).join('')}
+      <a class="chip" href="#/settings" title="Change which languages the Radar scans for">🌐 ${esc(radarLanguageLabel())}</a>
     </div>
     ${trends.length ? `<div class="grid">${cards}</div>`
       : `<div class="empty"><span class="big">📡</span>No trends yet${day ? ' for this source' : ''}.<br>Tap <b>Refresh now</b> to scan YouTube, Hacker News, Reddit and GitHub.</div>`}
@@ -2704,6 +2769,14 @@ async function renderSettings() {
       </section>
 
       <section class="card stack">
+        <h2>Weekly goal</h2>
+        <label class="field" for="weeklyGoal">Videos per week</label>
+        <input type="number" id="weeklyGoal" min="1" max="50" value="${esc(s.weekly_goal || 5)}" style="max-width:120px">
+        <p class="muted small">Shown on the Radar as "N of this many videos this week", counted from posted Results.</p>
+        <div><button type="button" class="primary" data-action="saveWeeklyGoal">Save goal</button></div>
+      </section>
+
+      <section class="card stack">
         <h2>Writing</h2>
         <label class="field" for="language">Language</label>
         <input type="text" id="language" value="${esc(s.language || 'English')}">
@@ -2813,6 +2886,12 @@ actions.saveRadarLanguages = () => {
   const list = $$('input[name="radarLanguage"]:checked').map((el) => el.value);
   if (!list.length) { toast('Keep at least one language checked, or the Radar would filter out everything.', true); return; }
   return saveSettings({ radar_languages: list }, 'Radar languages saved');
+};
+
+actions.saveWeeklyGoal = () => {
+  const n = Math.round(Number($('#weeklyGoal').value));
+  if (!n || n < 1) { toast('Enter a goal of at least 1.', true); return; }
+  return saveSettings({ weekly_goal: n }, 'Weekly goal saved');
 };
 
 actions.saveWriting = () => {
