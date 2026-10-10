@@ -11,3 +11,10 @@ supabase/.env.secrets
 
 # Build output
 dist/
+
+# Playwright's own run artefacts. The screenshots under qa/screenshots/ are
+# deliberately NOT ignored: the QA report refers to them.
+qa/report/
+qa/test-results/
+test-results/
+playwright-report/

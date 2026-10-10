@@ -9,6 +9,7 @@
   },
   "scripts": {
     "test": "node --test test/*.test.js",
+    "test:ui": "playwright test --config qa/playwright.config.mjs",
     "test:rls": "node scripts/test-rls.mjs",
     "inspect:db": "node scripts/inspect-db.mjs",
     "sync:shared": "node scripts/sync-shared.mjs",
@@ -22,6 +23,9 @@
     "dotenv": "^18.0.5"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "@playwright/test": "^1.64.0",
+    "axe-core": "^4.14.0",
     "libpg-query": "^18.1.5",
     "postgres": "^3.4.9",
     "typescript": "^5.9.3"
