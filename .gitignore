@@ -12,9 +12,30 @@ supabase/.env.secrets
 # Build output
 dist/
 
-# Playwright's own run artefacts. The screenshots under qa/screenshots/ are
-# deliberately NOT ignored: the QA report refers to them.
+# Playwright's own run artefacts.
 qa/report/
 qa/test-results/
+qa/results/
 test-results/
 playwright-report/
+
+# The full screenshot sweep is ~200 MB a run — too much to carry in history.
+# It stays on disk after `npm run test:ui` for browsing; only the pairs the
+# QA report actually cites are committed, so the report stands on its own.
+qa/screenshots/**
+!qa/screenshots/before/
+!qa/screenshots/after/
+!qa/screenshots/before/radar--1280--dark.png
+!qa/screenshots/after/radar--1280--dark.png
+!qa/screenshots/before/scripts--360--dark.png
+!qa/screenshots/after/scripts--360--dark.png
+!qa/screenshots/before/login--390--dark.png
+!qa/screenshots/after/login--390--dark.png
+!qa/screenshots/before/research-pack--1280--dark.png
+!qa/screenshots/after/research-pack--1280--dark.png
+!qa/screenshots/before/script-detail--390--dark.png
+!qa/screenshots/after/script-detail--390--dark.png
+!qa/screenshots/before/settings--390--light.png
+!qa/screenshots/after/settings--390--light.png
+!qa/screenshots/before/ideas--1024--light.png
+!qa/screenshots/after/ideas--1024--light.png

@@ -595,7 +595,7 @@ function renderPack() {
   const facts = (p.fact_check || []).map((f) => `
     <li class="fact ${factClass(factStatus(f))}">
       <div>${esc(f.claim)}</div>
-      <div class="muted small">
+      <div class="pack-link muted small">
         ${FACT_BADGE[factStatus(f)] || FACT_BADGE.unverified}
         ${f.source_url ? `<a href="${esc(f.source_url)}" target="_blank" rel="noopener noreferrer">${esc(f.source_url)}</a>` : 'no source'}
       </div>
