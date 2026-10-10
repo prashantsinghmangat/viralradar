@@ -110,6 +110,24 @@ test('the cleanup deletes files through Storage, and only ever its own', () => {
   assert.match(source, /\.eq\('user_id', caller\.userId\)/, 'the owner filter has to be explicit');
 });
 
+test('format_script enforces keep_exact in code, with one retry, before trusting the model', () => {
+  const source = fs.readFileSync(path.join(FUNCTIONS, 'vr-generate', 'index.ts'), 'utf8');
+  assert.match(source, /'format_script'/, 'format_script must be a known kind');
+  assert.match(source, /keepsExact\(/, 'the check has to run in code — a model told to copy text exactly can still paraphrase it');
+  assert.match(source, /from '\.\.\/_shared\/core\/own-idea\.mjs'/, 'the check must be the same one shared/own-idea.mjs tests, not a copy');
+  // Exactly one retry: `attempt < 2` with the failure only returned once
+  // attempt is already 1 (the second and last try).
+  assert.match(source, /attempt < 2/);
+  assert.match(source, /attempt === 1/);
+  assert.match(source, /could not keep your script exactly/i);
+  // own_idea and original pass through to a script generated this way, same
+  // as demo_source — none of the three are part of the Shorts Studio
+  // contract, so none belong in COLUMNS.script (see shared/import-core.mjs).
+  assert.match(source, /SCRIPT_KINDS/, 'format_script must share the script-kind id/demo/language handling, not duplicate it');
+  assert.match(source, /body\.own_idea/);
+  assert.match(source, /body\.original/);
+});
+
 test('CORS never answers an origin it was not told about', () => {
   const source = fs.readFileSync(path.join(FUNCTIONS, '_shared', 'cors.ts'), 'utf8');
   // A wildcard origin would let any website call this with your session. There

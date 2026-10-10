@@ -822,6 +822,38 @@ Then a few quick checks:
    **Projects** — it should disappear from the list, with a
    "Show archived (1)" link to bring it back.
 
+### Step 14g. Push the own-idea migration and redeploy vr-generate
+
+```powershell
+cd D:\Project\viralradar
+npx supabase db push
+npx supabase functions deploy vr-generate --use-api
+```
+
+This adds `projects.own_idea` and `scripts.own_idea` — again only widened
+columns, nothing dropped. vr-research is unchanged; only vr-generate gained
+the new `format_script` kind.
+
+Then a few quick checks:
+
+1. **+ New project**, from Projects, the desktop top bar, or the **+** on
+   Ideas. Try all three modes:
+   - **Idea → AI makes everything**, with a link pasted in: you should land on
+     the new script's screen with "Checking your links…" first, then
+     "Writing script…", then "Planning the edit…", in that order.
+   - **My own script**, with "Keep my words exactly" on: the script that comes
+     back should use your sentences, split into beats, unchanged. If it ever
+     refuses with "could not keep your script exactly as written", try
+     "Polish lightly" instead.
+   - **Just save the idea**: no script is written; the idea appears on
+     **Ideas**, and the folder has your title, details and links as a note.
+2. Whichever mode produced a script: its card and its detail screen both show
+   a **My idea** badge, and a collapsible **Original idea** section on the
+   detail screen has exactly what you typed.
+3. Close the tab while a script from New Project is still writing, then
+   reopen it: it should say "This script didn't finish" with **Retry**, the
+   same as a plain "Write script" would.
+
 ## Step 15. Close the door (optional)
 
 **ViralRadar is already closed** without this step. The allowlist from Step 6b

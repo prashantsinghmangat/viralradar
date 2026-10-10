@@ -15,6 +15,9 @@ import { readDemo } from './shared/demo.mjs';
 import { lessonLabel } from './shared/learning.mjs';
 import { packLabel, packSummary, packDemoSource } from './shared/research.mjs';
 import {
+  MAX_IDEA_LINKS, cleanIdeaLinks, validateNewProject, originalIdeaPayload, originalIdeaNote,
+} from './shared/own-idea.mjs';
+import {
   MAX_FILE_BYTES, POSTED_RETENTION_DAYS, TOTAL_BYTES_CAP,
   checkUpload, cleanDeviceName, downloadUrl, formatBytes, guessDeviceName, itemPreview, usageSummary,
 } from './shared/projects.mjs';
@@ -146,7 +149,7 @@ if (topSearch) {
 }
 const matchesSearch = (...parts) => !uiSearch || parts.some((p) => String(p || '').toLowerCase().includes(uiSearch));
 
-actions.newScript = () => { location.hash = '#/ideas'; };
+actions.newScript = () => startNewProject();
 
 // ---------- who is signed in ----------
 const state = {
@@ -289,8 +292,12 @@ const afterRender = {};
 
 window.addEventListener('hashchange', () => { copyStore = []; render().then(() => window.scrollTo(0, 0)); });
 
-// One delegated click handler for the whole app.
-view.addEventListener('click', async (e) => {
+// One delegated click handler for the whole app — and, via the same
+// function, for the hook sheet, which lives outside #view (so it can be
+// anchored to the right edge on desktop) and so would never reach this
+// listener on its own.
+const actions = {};
+async function handleActionClick(e) {
   const btn = e.target.closest('[data-copy],[data-action]');
   if (!btn) return;
   if (btn.dataset.copy !== undefined) {
@@ -306,8 +313,8 @@ view.addEventListener('click', async (e) => {
   }
   const fn = actions[btn.dataset.action];
   if (fn) { e.preventDefault(); e.stopPropagation(); fn(btn, e); }
-});
-const actions = {};
+}
+view.addEventListener('click', handleActionClick);
 
 // ================= SIGN IN =================
 //
@@ -456,6 +463,7 @@ async function renderRadar() {
           <button type="button" class="btn sm primary" data-action="writeScript" data-topic="${esc([t.title, t.summary].filter(Boolean).join(' — ').slice(0, 300))}">✍️ Write script</button>
           ${ANGLES_BUTTON([t.title, t.summary].filter(Boolean).join(' — ').slice(0, 300))}
           ${RESEARCH_BUTTON([t.title, t.summary].filter(Boolean).join(' — ').slice(0, 300), t.url)}
+          ${HOOKS_BUTTON([t.title, t.summary].filter(Boolean).join(' — ').slice(0, 300))}
           <a class="btn sm ghost" href="${esc(t.url)}" target="_blank" rel="noopener noreferrer" title="Open source">↗</a>
           ${copyBtn(copy, 'Copy', 'sm ghost')}
         </div>
@@ -836,6 +844,91 @@ actions.writeAngle = (btn) => {
 const ANGLES_BUTTON = (topic) =>
   `<button type="button" class="btn sm" data-action="findAngles" data-topic="${esc(topic)}">🎯 Find angles</button>`;
 
+// ================= HOOK OPTIONS =================
+//
+// Just the opening line for a trend — not a whole angle, not a whole script.
+// A bottom sheet on mobile, the same <dialog> anchored to the right edge on
+// desktop (.sheet-side, set in CSS at the 1024px breakpoint). Never stored,
+// for the same reason angles above are not: a hook is a choice on the way to
+// a script, not an item to keep.
+function hookSheetDialog() {
+  let dialog = $('#hookSheet');
+  if (!dialog) {
+    dialog = document.createElement('dialog');
+    dialog.id = 'hookSheet';
+    dialog.className = 'sheet sheet-side';
+    document.body.appendChild(dialog);
+    // This dialog is a sibling of #view, not inside it, so the one delegated
+    // click handler the rest of the app relies on would never see clicks in
+    // here — it needs its own copy of the same wiring.
+    dialog.addEventListener('click', (e) => {
+      if (e.target === dialog) { dialog.close(); return; } // backdrop
+      handleActionClick(e);
+    });
+  }
+  return dialog;
+}
+
+function hookSheetHead(topic) {
+  return `<div class="page-head" style="margin-bottom:4px">
+    <h2 style="margin:0;font-size:1rem">🎣 Hook options</h2>
+    <button type="button" class="sm ghost" data-action="closeHooks">✕ Close</button>
+  </div>
+  <p class="muted small" style="overflow-wrap:anywhere">${esc(topic.slice(0, 140))}</p>`;
+}
+
+/** "🎣 Hook angles" — on a Radar trend card. */
+actions.findHooks = async (btn) => {
+  const topic = btn.dataset.topic;
+  if (!topic) { toast('Nothing to hook.', true); return; }
+  const language = state.settings?.language || 'English';
+  const dialog = hookSheetDialog();
+  dialog.dataset.topic = topic;
+  dialog.innerHTML = `<div class="sheet-handle" aria-hidden="true"></div>
+    <div class="sheet-body stack">
+      ${hookSheetHead(topic)}
+      <p class="small"><span class="spin"></span> Writing hooks… up to 40 sec</p>
+    </div>`;
+  dialog.showModal();
+  try {
+    const result = await data.ai.generate({ kind: 'hooks', topic, language, count: 3 });
+    const hooks = result.hooks || [];
+    dialog.dataset.hooks = JSON.stringify(hooks);
+    const cards = hooks.map((h, i) => `
+      <article class="card stack" style="padding:12px">
+        <div class="row" style="justify-content:space-between">
+          <span class="badge accent">${esc(h.label || `Hook ${i + 1}`)}</span>
+          ${h.style ? `<span class="muted small">${esc(h.style)}</span>` : ''}
+        </div>
+        <div class="angle-hook">“${esc(h.line)}”</div>
+        <div class="actions">
+          <button type="button" class="sm primary" data-action="useHook" data-i="${i}">✓ Use this hook</button>
+          ${copyBtn(h.line, 'Copy hook', 'sm')}
+        </div>
+      </article>`).join('');
+    dialog.querySelector('.sheet-body').innerHTML = `${hookSheetHead(topic)}
+      ${hooks.length ? cards : '<p class="muted small">No hooks came back. Try again.</p>'}`;
+  } catch (e) {
+    dialog.querySelector('.sheet-body').innerHTML = `${hookSheetHead(topic)}<div class="notice">${esc(e.message)}</div>`;
+  }
+};
+
+actions.closeHooks = (btn) => { btn.closest('dialog').close(); };
+
+actions.useHook = (btn) => {
+  const dialog = $('#hookSheet');
+  const hooks = JSON.parse(dialog.dataset.hooks || '[]');
+  const hook = hooks[Number(btn.dataset.i)];
+  if (!hook) return;
+  const topic = dialog.dataset.topic;
+  dialog.close();
+  return writeScriptTo({ kind: 'script', topic, angle: { type: 'Hook', hook: hook.line } });
+};
+
+/** "🎣 Hook angles" — on a Radar trend card. */
+const HOOKS_BUTTON = (topic) =>
+  `<button type="button" class="btn sm" data-action="findHooks" data-topic="${esc(topic)}">🎣 Hook angles</button>`;
+
 // ================= IDEAS =================
 let ideaFilter = 'all';
 async function renderIdeas() {
@@ -874,7 +967,9 @@ async function renderIdeas() {
     </section>`).join('');
 
   return `
-    <div class="page-head"><h1>Ideas</h1><button type="button" class="primary" data-action="generateIdeas">✨ Generate ideas</button>${PASTE_BUTTON()}</div>
+    <div class="page-head"><h1>Ideas</h1>
+      <button type="button" class="sm" data-action="openNewProject" title="New project from your own idea">+ New idea</button>
+      <button type="button" class="primary" data-action="generateIdeas">✨ Generate ideas</button>${PASTE_BUTTON()}</div>
     ${renderPack()}
     ${renderAngles()}
     <div class="chips" style="margin-bottom:14px">
@@ -905,6 +1000,7 @@ async function renderScripts(params) {
         <article class="card script-card" data-id="${esc(s.id)}" data-action="openScript" ${canDrag ? 'draggable="true"' : ''}>
           <div class="t">${esc(s.title || s.yt_title || s.topic || s.id)}</div>
           ${s.topic && s.title ? `<div class="muted small">${esc(s.topic)}</div>` : ''}
+          ${s.own_idea ? '<span class="badge accent">My idea</span>' : ''}
           ${s.language ? `<span class="badge accent">${esc(s.language)}</span>` : ''}
           <div class="actions">
             ${idx > 0 ? `<button type="button" class="sm ghost" data-action="moveScript" data-id="${esc(s.id)}" data-v="${STAGES[idx - 1][0]}" title="Move back">← ${STAGES[idx - 1][1]}</button>` : '<span></span>'}
@@ -1019,11 +1115,15 @@ async function renderScriptDetail(id) {
     <div class="row" style="margin-bottom:14px">
       <div class="seg">${STAGES.map(([k, l], i) => `<button type="button" class="${i === idx ? 'on' : ''}" data-action="setStage" data-id="${esc(s.id)}" data-v="${k}">${l}</button>`).join('')}</div>
       <button type="button" class="sm" data-action="openScriptProject" data-id="${esc(s.id)}">📁 Open project</button>
+      ${s.topic ? `<button type="button" class="sm" data-action="findHooks" data-topic="${esc(s.topic)}">🎣 Hook options</button>` : ''}
       ${s.topic ? `<span class="muted small">Topic: ${esc(s.topic)}</span>` : ''}
       ${created ? `<span class="muted small">Created ${esc(when(created))}</span>` : ''}
       ${s.language ? `<span class="badge accent">${esc(s.language)}</span>` : ''}
+      ${s.own_idea ? '<span class="badge accent">My idea</span>' : ''}
       ${s.source && s.source !== 'shorts-studio' ? `<span class="badge accent">Written by ${esc(s.source)}</span>` : ''}
     </div>
+
+    ${renderOriginalIdea(s)}
 
     <section class="prompter" id="prompter">
       <div class="prompter-tools">
@@ -1050,46 +1150,95 @@ async function renderScriptDetail(id) {
 
     ${renderPendingGeneration(`edit_plan:${s.id}`, { onMessage: (m) => `Could not plan the edit: ${m}` }) || renderEditPlan(s)}
 
+    <h2 style="margin:22px 0 10px">Ready to post</h2>
     <div class="outputs grid">
       ${outputs.map(([label, value]) => `<div class="card out">
         <div class="out-head"><h3>${esc(label)}</h3>${copyBtn(value)}</div>
         <pre>${esc(value)}</pre>
       </div>`).join('')}
     </div>
-    <p style="margin-top:20px"><button type="button" class="sm ghost" data-action="deleteScript" data-id="${esc(s.id)}">Delete script</button></p>`;
+    <p style="margin-top:20px"><button type="button" class="sm ghost" data-action="deleteScript" data-id="${esc(s.id)}">Delete script</button></p>
+
+    <div class="sticky-actions" aria-label="Script actions">
+      <button type="button" class="sm" data-action="prompterFull">⛶ Teleprompter</button>
+      <button type="button" class="sm" data-action="scrollToEditPlan">📝 Edit plan</button>
+      ${fullScript ? copyBtn(fullScript, '📋 Copy script', 'sm primary') : ''}
+    </div>`;
 }
+actions.scrollToEditPlan = () => { $('#editPlan')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
 // ---- the demo walkthrough ----
 //
 // Exactly what to click and exactly what to type, on camera. Same story as
 // the edit plan below: no column of its own, rides along in `raw`, shows
 // nothing when there is none.
+// Pre-flight ticks are device-local, not a column — a tick is "I personally
+// did this before filming", which has no reason to sync between devices, and
+// no reason to need a migration just to remember a checkbox.
+const checklistKey = (scriptId) => `vr-checklist-${scriptId}`;
+function readChecklist(scriptId) {
+  try { return new Set(JSON.parse(localStorage.getItem(checklistKey(scriptId)) || '[]')); }
+  catch { return new Set(); }
+}
+actions.toggleCheck = (btn) => {
+  const scriptId = btn.dataset.id;
+  const key = btn.dataset.key;
+  const set = readChecklist(scriptId);
+  if (set.has(key)) set.delete(key); else set.add(key);
+  try { localStorage.setItem(checklistKey(scriptId), JSON.stringify([...set])); } catch { /* private mode */ }
+  render();
+};
+
+// A collapsible section holding exactly what the creator typed before a model
+// ever touched it: the New Project screen's own title, details, links and
+// (for "my own script") their script — stamped onto raw.original by
+// vr-generate and never otherwise shown, so it would be lost from view
+// entirely once the generated script replaces it everywhere else on screen.
+function renderOriginalIdea(script) {
+  const original = script?.raw?.original;
+  if (!original || typeof original !== 'object') return '';
+  const text = originalIdeaNote(original);
+  return `
+    <details class="card stack" style="margin-bottom:14px">
+      <summary style="cursor:pointer">Original idea</summary>
+      <pre style="white-space:pre-wrap;margin:10px 0 0">${esc(text)}</pre>
+    </details>`;
+}
+
 function renderDemo(script) {
   const demo = readDemo(script);
   if (!demo) return '';
-
-  const list = (title, items, ordered) => (items.length
-    ? `<div><h3 style="margin:14px 0 6px;font-size:.9rem">${esc(title)}</h3>
-        <${ordered ? 'ol' : 'ul'} class="pack-steps">${items.map((x) => `<li>${esc(x)}</li>`).join('')}</${ordered ? 'ol' : 'ul'}></div>`
-    : '');
+  const checked = readChecklist(script.id);
+  const checkItem = (prefix, i, text) => {
+    const key = prefix + ':' + i;
+    return `<label class="check-item">
+      <input type="checkbox" data-action="toggleCheck" data-id="${esc(script.id)}" data-key="${esc(key)}" ${checked.has(key) ? 'checked' : ''}>
+      <span>${esc(text)}</span>
+    </label>`;
+  };
+  const preflight = [...demo.prepare.map((t, i) => checkItem('prepare', i, t)), ...demo.check.map((t, i) => checkItem('check', i, t))];
 
   return `
-    <section class="card stack" style="margin-top:22px">
-      <h2 style="margin:0">How to do the demo</h2>
+    <section class="card stack demo-setup" style="margin-top:22px">
+      <div class="page-head" style="margin:0 0 4px">
+        <h2 style="margin:0">Demo Setup</h2>
+        <span class="badge ${demo.checked ? 'good' : 'warn'}">${demo.checked ? '● Verified' : '? Unverified'}</span>
+      </div>
       ${demo.checked === false ? `<div class="notice">Not checked yet — these steps and prompts came from a Research Pack
         this app has not fetched the pages for itself. Press <b>Re-check links</b> on that pack before trusting them.</div>` : ''}
       ${demo.tool || demo.url ? `<p class="small">
         <b>${esc(demo.tool || 'The tool')}</b>${demo.url ? ` — <a href="${esc(demo.url)}" target="_blank" rel="noopener noreferrer">${esc(demo.url)}</a>` : ''}
       </p>` : ''}
-      ${list('Prepare', demo.prepare, false)}
-      ${list('Steps', demo.steps, true)}
+      ${demo.steps.length ? `<div><h3 style="margin:14px 0 6px;font-size:.9rem">Steps</h3>
+        <ol class="pack-steps">${demo.steps.map((x) => `<li>${esc(x)}</li>`).join('')}</ol></div>` : ''}
       ${demo.prompts.length ? `<div>
         <h3 style="margin:14px 0 6px;font-size:.9rem">Prompts — use this exact wording</h3>
         ${demo.prompts.map((p) => `<div class="card out" style="margin-bottom:8px">
-          <div class="out-head"><h4 style="margin:0;font-size:.82rem">Prompt</h4>${copyBtn(p)}</div>
+          <div class="out-head"><h4 style="margin:0;font-size:.82rem">Prompt</h4>${copyBtn(p, 'Copy Prompt')}</div>
           <pre>${esc(p)}</pre>
         </div>`).join('')}
       </div>` : ''}
-      ${list('Check before moving on', demo.check, false)}
+      ${preflight.length ? `<div><h3 style="margin:14px 0 6px;font-size:.9rem">Pre-flight checklist</h3>
+        <div class="checklist-ticks">${preflight.join('')}</div></div>` : ''}
     </section>`;
 }
 
@@ -1107,7 +1256,7 @@ function renderEditPlan(script) {
   // people to wonder whether the feature exists.
   if (!plan) {
     return `
-      <section class="edit-plan">
+      <section class="edit-plan" id="editPlan">
         <div class="page-head" style="margin-top:22px">
           <h2 style="margin:0">Edit plan</h2>
           ${makeButton('✨ Make edit plan')}
@@ -1140,7 +1289,7 @@ function renderEditPlan(script) {
   const pairs = (rows) => `<dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`;
 
   return `
-    <section class="edit-plan">
+    <section class="edit-plan" id="editPlan">
       <div class="page-head" style="margin-top:22px">
         <h2 style="margin:0">Edit plan${plan.total_sec ? ` <span class="muted small">${plan.total_sec}s</span>` : ''}</h2>
         <div class="row" style="gap:6px">
@@ -1347,6 +1496,7 @@ async function renderProjects(params) {
     return `<article class="card project" data-id="${esc(p.id)}" data-action="openProject">
       <div class="row" style="justify-content:space-between;align-items:flex-start">
         <h3 style="margin:0">${p.is_inbox ? '📥 ' : '📁 '}${esc(p.title)}</h3>
+        ${p.own_idea ? '<span class="badge accent">My idea</span>' : ''}
         ${p.status !== 'active' ? `<span class="badge ${p.status === 'posted' ? 'good' : ''}">${esc(p.status === 'posted' ? 'Posted' : 'Archived')}</span>` : ''}
       </div>
       <div class="muted small">${p.item_count} item${p.item_count === 1 ? '' : 's'}${p.bytes ? ` · ${esc(formatBytes(p.bytes))}` : ''}</div>
@@ -1357,11 +1507,12 @@ async function renderProjects(params) {
   return `
     <div class="page-head">
       <h1>Projects</h1>
+      <button type="button" class="primary" data-action="openNewProject">+ New project</button>
       <span class="muted small">${esc(usage.text)}</span>
     </div>
     <div class="card row" style="margin-bottom:14px;gap:8px">
-      <input type="text" id="newProject" placeholder="New project…  e.g. Background remover demo" style="flex:1">
-      <button type="button" class="primary" data-action="createProject">📁 Create</button>
+      <input type="text" id="newProject" placeholder="Just a folder…  e.g. Background remover demo" style="flex:1">
+      <button type="button" data-action="createProject">📁 Create</button>
       <button type="button" data-action="openInbox">📥 Inbox</button>
     </div>
     ${list.length ? `<div class="grid">${cards}</div>`
@@ -2531,7 +2682,10 @@ function renderPendingGeneration(key, { onMessage } = {}) {
   const pending = pendingGen.get(key);
   if (!pending) return null;
   if (pending.status === 'working') {
-    return `<div class="card stack"><p class="small"><span class="spin"></span> ${esc(GENERATING[pending.kind] || 'Working…')}</p></div>`;
+    // A multi-step pipeline (New Project's own-idea modes) sets its own label
+    // for whichever step is running; everything else keys off GENERATING by kind.
+    const label = pending.step || GENERATING[pending.kind] || 'Working…';
+    return `<div class="card stack"><p class="small"><span class="spin"></span> ${esc(label)}</p></div>`;
   }
   return `<div class="card stack">
     <div class="notice">${esc(onMessage ? onMessage(pending.message) : pending.message)}</div>
@@ -2544,10 +2698,17 @@ actions.retryPendingGeneration = (btn) => {
   if (pending?.retry) pending.retry();
 };
 
-/** A script whose request survived a closed tab, but whose in-memory progress did not. */
+/**
+ * A script whose request survived a closed tab, but whose in-memory progress
+ * did not. The saved body is either a plain generate() call, or a New
+ * Project pipeline request wrapped by runOwnIdeaPipeline() — the wrapper's
+ * own marker says which it is, so each resumes through the right function.
+ */
 actions.resumePendingScript = (btn) => {
-  const body = loadPendingScript(btn.dataset.id);
-  if (body) runPendingGeneration(btn.dataset.id, body);
+  const saved = loadPendingScript(btn.dataset.id);
+  if (!saved) return;
+  if (saved.__ownIdeaPipeline) runOwnIdeaPipeline(btn.dataset.id, saved.request);
+  else runPendingGeneration(btn.dataset.id, saved);
 };
 
 async function askAi(btn, body) {
@@ -2586,6 +2747,221 @@ async function writeScriptTo(body) {
   const id = crypto.randomUUID();
   location.hash = `#/scripts/${encodeURIComponent(id)}`;
   runPendingGeneration(id, { ...sheet, id });
+}
+
+// ---------- New Project: from your own idea ----------
+//
+// Three modes, one dialog: let AI write everything from a title and details,
+// format a script already written (exactly, or lightly polished), or just
+// save the idea with nothing generated. See shared/own-idea.mjs for the
+// validation and the "keep my words exactly" check vr-generate enforces.
+//
+// Modes a) and b) produce a script, so they reuse the exact pendingGen /
+// localStorage mechanism writeScriptTo() uses above — just with more than one
+// network call before the script exists, so runOwnIdeaPipeline() below is
+// runPendingGeneration()'s multi-step sibling rather than a second mechanism.
+function openNewProject() {
+  let dialog = $('#newProjectDialog');
+  if (!dialog) {
+    dialog = document.createElement('dialog');
+    dialog.id = 'newProjectDialog';
+    dialog.className = 'new-project-dialog';
+    document.body.appendChild(dialog);
+  }
+  const v = {
+    mode: 'generate', title: '', details: '', myScript: '', keepExact: true, links: '',
+    language: state.settings?.language || 'English', length: state.settings?.default_length || '30s',
+  };
+
+  /** Pull whatever is currently typed into v, before a mode switch redraws the form and loses it. */
+  const readFields = () => {
+    v.title = $('#npTitle', dialog)?.value ?? v.title;
+    v.details = $('#npDetails', dialog)?.value ?? v.details;
+    v.myScript = $('#npScript', dialog)?.value ?? v.myScript;
+    v.links = $('#npLinks', dialog)?.value ?? v.links;
+    if ($('#npLength', dialog)) v.length = $('#npLength', dialog).value;
+  };
+
+  const draw = () => {
+    dialog.innerHTML = `
+      <form method="dialog" class="card stack sheet">
+        <h2 style="margin:0">New project</h2>
+        <div class="seg" id="npModeSeg">
+          <button type="button" class="${v.mode === 'generate' ? 'on' : ''}" data-mode="generate">Idea → AI makes everything</button>
+          <button type="button" class="${v.mode === 'own_script' ? 'on' : ''}" data-mode="own_script">My own script</button>
+          <button type="button" class="${v.mode === 'save_only' ? 'on' : ''}" data-mode="save_only">Just save the idea</button>
+        </div>
+        <div>
+          <label class="field" for="npTitle">Title</label>
+          <input type="text" id="npTitle" value="${esc(v.title)}" placeholder="What is this video about?">
+        </div>
+        ${v.mode === 'own_script' ? `
+          <div>
+            <label class="field" for="npScript">Script</label>
+            <textarea id="npScript" rows="8" placeholder="Paste your script, word for word">${esc(v.myScript)}</textarea>
+          </div>
+          <div class="seg" id="npKeepSeg">
+            <button type="button" class="${v.keepExact ? 'on' : ''}" data-keep="1">Keep my words exactly</button>
+            <button type="button" class="${v.keepExact ? '' : 'on'}" data-keep="0">Polish lightly</button>
+          </div>` : `
+          <div>
+            <label class="field" for="npDetails">Details <span class="muted small">(optional — what to include, angle, tone)</span></label>
+            <textarea id="npDetails" rows="5" placeholder="What should this video show or say?">${esc(v.details)}</textarea>
+          </div>`}
+        <div>
+          <label class="field" for="npLinks">Source links <span class="muted small">(optional, up to ${MAX_IDEA_LINKS}, one per line)</span></label>
+          <textarea id="npLinks" rows="2" placeholder="https://…">${esc(v.links)}</textarea>
+        </div>
+        ${v.mode !== 'save_only' ? `
+        <div class="row">
+          <div style="flex:1">
+            <label class="field">Language</label>
+            <div class="seg" id="npLanguageSeg">${SCRIPT_LANGUAGES.map((l) =>
+              `<button type="button" class="${l === v.language ? 'on' : ''}" data-lang="${esc(l)}">${esc(l)}</button>`).join('')}</div>
+          </div>
+          <div>
+            <label class="field" for="npLength">Length</label>
+            <select id="npLength">${LENGTHS.map((l) => `<option value="${l}" ${l === v.length ? 'selected' : ''}>${l}</option>`).join('')}</select>
+          </div>
+        </div>` : ''}
+        <div class="row">
+          <button type="submit" class="primary" value="go">Create</button>
+          <button type="button" value="cancel">Cancel</button>
+        </div>
+      </form>`;
+
+    for (const b of $$('#npModeSeg button', dialog)) {
+      b.addEventListener('click', () => { readFields(); v.mode = b.dataset.mode; draw(); });
+    }
+    for (const b of $$('[data-keep]', dialog)) {
+      b.addEventListener('click', () => {
+        v.keepExact = b.dataset.keep === '1';
+        for (const other of $$('[data-keep]', dialog)) other.classList.toggle('on', other === b);
+      });
+    }
+    for (const b of $$('[data-lang]', dialog)) {
+      b.addEventListener('click', () => {
+        v.language = b.dataset.lang;
+        for (const other of $$('[data-lang]', dialog)) other.classList.toggle('on', other === b);
+      });
+    }
+    dialog.querySelector('button[value="cancel"]').addEventListener('click', () => dialog.close('cancel'));
+    // Validated here, not after the dialog has already closed: a native
+    // <dialog> form submit closes it immediately unless prevented, and once
+    // closed the only way back is opening a fresh one with everything typed
+    // so far lost.
+    dialog.querySelector('form').addEventListener('submit', (e) => {
+      readFields();
+      const problem = validateNewProject({ mode: v.mode, title: v.title, myScript: v.myScript });
+      if (problem) { e.preventDefault(); toast(problem, true); }
+    });
+  };
+  draw();
+
+  return new Promise((resolve) => {
+    dialog.addEventListener('close', () => {
+      if (dialog.returnValue === 'cancel') { resolve(null); return; }
+      readFields();
+      resolve({
+        mode: v.mode, title: v.title, details: v.details, myScript: v.myScript, keepExact: v.keepExact,
+        links: cleanIdeaLinks(v.links.split('\n')), language: v.language, length: v.length,
+      });
+    }, { once: true });
+    dialog.showModal();
+  });
+}
+
+/** Opens the dialog, then does whatever its mode calls for. Every entry point calls this. */
+async function startNewProject() {
+  const answer = await openNewProject();
+  if (!answer) return;
+  const original = originalIdeaPayload(answer);
+  const note = originalIdeaNote(original);
+
+  if (answer.mode === 'save_only') {
+    try {
+      const project = await data.projects.create({ title: answer.title, ownIdea: true });
+      await data.items.addText(project.id, note, deviceName());
+      await data.ideas.create({ title: answer.title, details: answer.details, links: answer.links });
+      toast('Idea saved.');
+      location.hash = `#/projects/${encodeURIComponent(project.id)}`;
+    } catch (e) { toast(e.message, true); }
+    return;
+  }
+
+  let project;
+  try {
+    project = await data.projects.create({ title: answer.title, ownIdea: true });
+    await data.items.addText(project.id, note, deviceName());
+  } catch (e) { toast(e.message, true); return; }
+
+  const id = crypto.randomUUID();
+  location.hash = `#/scripts/${encodeURIComponent(id)}`;
+  runOwnIdeaPipeline(id, { ...answer, projectId: project.id, original });
+}
+
+actions.openNewProject = () => startNewProject();
+
+/**
+ * Modes a) and b) of New Project: more than one network call has to happen
+ * before the script exists at all, so this is runPendingGeneration()'s
+ * multi-step sibling — same Map, same localStorage save (wrapped with
+ * __ownIdeaPipeline so actions.resumePendingScript knows to come back here
+ * rather than to a plain generate() call), but with its own "step" label per
+ * stage instead of one static message. Retry re-runs the whole pipeline from
+ * the top rather than resuming partway through — simplest, and at most one
+ * extra AI call more than resuming would have cost.
+ */
+async function runOwnIdeaPipeline(id, request) {
+  pendingGen.set(id, { status: 'working', kind: 'own_idea', step: 'Checking your links… up to 60 sec' });
+  savePendingScript(id, { __ownIdeaPipeline: true, request });
+  render();
+  try {
+    let research = '';
+    let demoSource = null;
+    if (request.mode === 'generate' && request.links.length) {
+      try {
+        const found = await data.ai.research({ topic: request.title, urls: request.links, project_id: request.projectId });
+        research = packSummary(found.pack);
+        demoSource = packDemoSource(found.pack);
+      } catch (e) {
+        // Enforced, not asked for: a failed research step must not stop the
+        // script from being written, only its demo from being able to claim
+        // more confidence than was actually earned — see packDemoSource()'s
+        // own checked/unchecked split for the no-pack-at-all case, which this
+        // falls into when nothing was fetched.
+        toast(`Could not check your links (${e.message}) — continuing without them.`, true, 7000);
+      }
+    }
+
+    pendingGen.set(id, { status: 'working', kind: 'own_idea', step: GENERATING.script });
+    render();
+    const genBody = request.mode === 'own_script'
+      ? {
+        kind: 'format_script', id, script: request.myScript, keep_exact: request.keepExact,
+        language: request.language, length: request.length, project_id: request.projectId,
+        research, demo_source: demoSource, own_idea: true, original: request.original,
+      }
+      : {
+        kind: 'script', id, topic: [request.title, request.details].filter(Boolean).join('\n\n'),
+        language: request.language, length: request.length, project_id: request.projectId,
+        research, demo_source: demoSource, own_idea: true, original: request.original,
+      };
+    const written = await data.ai.generate(genBody);
+
+    pendingGen.set(id, { status: 'working', kind: 'own_idea', step: GENERATING.edit_plan });
+    render();
+    await data.ai.generate({ kind: 'edit_plan', script_id: id, language: request.language, length: request.length });
+
+    pendingGen.delete(id);
+    clearPendingScript(id);
+    const by = written.provider ? ` (by ${written.provider})` : '';
+    toast(`Script written${by}.`);
+    render();
+  } catch (e) {
+    pendingGen.set(id, { status: 'failed', kind: 'own_idea', message: e.message, retry: () => runOwnIdeaPipeline(id, request) });
+    render();
+  }
 }
 
 actions.generateIdeas = async (btn) => {

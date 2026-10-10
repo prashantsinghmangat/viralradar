@@ -161,13 +161,32 @@ export function createData(client) {
       return rows[0];
     },
     remove: (id) => run(client.from('ideas').delete().eq('id', id), 'delete that idea'),
+
+    /**
+     * "Just save the idea" — New Project's third mode. No AI call: this is
+     * a row typed by hand, source 'manual', exactly like anything else a
+     * person enters rather than imports or generates.
+     */
+    async create({ title, details, links = [] } = {}) {
+      const name = String(title ?? '').replace(/\s+/g, ' ').trim().slice(0, 200);
+      if (!name) throw new Error('Give the idea a title.');
+      const row = {
+        id: crypto.randomUUID(),
+        title: name,
+        status: 'new',
+        source: 'manual',
+        raw: { title: name, details: String(details ?? '').trim(), links },
+      };
+      const rows = await run(client.from('ideas').insert(row).select('*'), 'save that idea');
+      return rows && rows[0];
+    },
   };
 
   // ---------- scripts ----------
 
   const scripts = {
     list: () => run(
-      client.from('scripts').select('id, topic, title, yt_title, thumbnail_text, stage, language, origin_at, updated_at')
+      client.from('scripts').select('id, topic, title, yt_title, thumbnail_text, stage, language, own_idea, origin_at, updated_at')
         .order('origin_at', { ascending: false }),
       'load your scripts',
     ),
@@ -308,11 +327,11 @@ export function createData(client) {
       'load what is in that project',
     ),
 
-    async create({ title, scriptId = null } = {}) {
+    async create({ title, scriptId = null, ownIdea = false } = {}) {
       const name = String(title ?? '').replace(/\s+/g, ' ').trim().slice(0, 120);
       if (!name) throw new Error('Give the project a name.');
       const rows = await run(
-        client.from('projects').insert({ title: name, script_id: scriptId }).select('*'),
+        client.from('projects').insert({ title: name, script_id: scriptId, own_idea: ownIdea === true }).select('*'),
         'create that project',
       );
       return rows && rows[0];

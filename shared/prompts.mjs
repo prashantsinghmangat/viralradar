@@ -148,6 +148,35 @@ ${lessonBlock(lesson)}${researchBlock(research)}
 ${jsonOnly(ANGLE_SHAPE, '{ "angles": [ SHAPE ] }')}`;
 }
 
+// ---------- hooks ----------
+//
+// Just the first line — not a whole angle, not a whole script. For when the
+// trend itself is the video and the only open question is how to open it.
+// Deliberately no score: a hook either lands with this creator's voice or it
+// doesn't, and a model's confidence number would just be guessed.
+const HOOK_SHAPE = `{
+  "label": "Hook A",
+  "style": "one short phrase naming the angle, e.g. \\"bold claim\\", \\"relatable problem\\", \\"direct challenge\\"",
+  "line": "the exact first spoken line, under 15 words, in the spoken language below"
+}`;
+
+export function hooksPrompt({ topic, language = 'English', count = 3, today } = {}) {
+  return `A creator who demos free tools and useful websites needs opening hooks for this subject:
+
+${topic}
+
+Write ${count} genuinely different first lines that could open a vertical short video about it.
+Spoken language: ${language}. Today is ${today}.
+
+Each hook must stop the scroll in under 3 seconds and use a DIFFERENT angle — for example a
+bold claim, a relatable problem, a surprising number, or a direct challenge to the viewer. No
+two hooks may use the same angle.
+Plain spoken language, no jargon, no emoji inside the line itself.
+Do not include any score, ranking, or confidence number — only the label, the style, and the line.
+
+${jsonOnly(HOOK_SHAPE, '{ "hooks": [ SHAPE ] }')}`;
+}
+
 export function scriptPrompt({ topic, language = 'English', length = '30s', today, angle = null, lesson = null, research = null } = {}) {
   // An angle chosen from the angles screen. The topic alone would produce the
   // plainest possible treatment of it, which is the one everybody else made.
@@ -177,6 +206,37 @@ spoken line tells the viewer to type or paste a prompt, that beat's words and
 the matching entry in demo.prompts must be the same prompt, word for word —
 whichever you write first, keep the other consistent with it.${research ? ' A Research Pack exists for this subject (above): build demo.steps and demo.prompts from the steps and prompts read off the page rather than inventing your own, and write beats consistent with them.' : ''}
 
+${jsonOnly(SCRIPT_SHAPE, '{ "items": [ SHAPE ] }')}`;
+}
+
+// ---------- format_script: turning the creator's own words into the shape ----------
+//
+// Not a fresh script — theirs, already written, only split into beats and
+// dressed with screen directions, demo, captions, hashtags and a pinned
+// comment. "Keep my words exactly" is asked for here, but it is enforced in
+// code, not trusted from the model: shared/own-idea.mjs's keepsExact()
+// checks the beats it comes back with against the original, word for word,
+// after vr-generate calls this.
+export function formatScriptPrompt({ script, keepExact = false, language = 'English', length = '30s', today, research = null } = {}) {
+  const instruction = keepExact
+    ? 'Keep every sentence exactly as written, in the same order. Split it into beats with timecodes only — do not rewrite, shorten, reorder, paraphrase, or add a single spoken word of your own.'
+    : 'Keep the same meaning, order and voice. You may polish wording lightly for flow and pacing, but do not change what it says.';
+
+  return `A creator has already written their own short-video script. Turn it into the ViralRadar script shape — do not write a new script.
+
+Their script, word for word:
+"""
+${script}
+"""
+
+${instruction}
+Spoken language: ${language}. Target length: ${length}. Today is ${today}.
+
+Add screen directions, a demo walkthrough, thumbnail text, captions, hashtags
+and a pinned comment around their words. The spoken lines in "beats" must be
+built only from their script, split into beats with timecodes that add up to
+roughly ${length} — never invent new spoken lines of your own.
+${researchBlock(research)}
 ${jsonOnly(SCRIPT_SHAPE, '{ "items": [ SHAPE ] }')}`;
 }
 

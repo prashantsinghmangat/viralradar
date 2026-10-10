@@ -100,6 +100,34 @@ test('changing a status that no longer exists says so plainly', async () => {
   await assert.rejects(() => createData(client).ideas.setStatus('gone', 'picked'), /no longer there/);
 });
 
+// ---------- New Project's "just save the idea" mode ----------
+
+test('saving an idea by hand writes source manual, status new, and keeps the original input in raw', async () => {
+  const { createData } = await load();
+  const client = fakeClient({ respond: () => ({ data: [{ id: 'i1' }], error: null }) });
+  await createData(client).ideas.create({
+    title: 'A background remover', details: 'free, no signup', links: ['https://bgless.example'],
+  });
+
+  const insert = client.calls.find((c) => c.op === 'insert');
+  assert.equal(insert.payload.title, 'A background remover');
+  assert.equal(insert.payload.status, 'new');
+  assert.equal(insert.payload.source, 'manual');
+  assert.ok(insert.payload.id, 'it needs an id of its own; nothing imported one for it');
+  assert.deepEqual(insert.payload.raw, {
+    title: 'A background remover', details: 'free, no signup', links: ['https://bgless.example'],
+  });
+});
+
+test('an idea has to be called something', async () => {
+  const { createData } = await load();
+  const client = fakeClient();
+  for (const title of ['', '   ', null, undefined]) {
+    await assert.rejects(() => createData(client).ideas.create({ title }), /title/i);
+  }
+  assert.equal(client.calls.length, 0, 'nothing should have been sent');
+});
+
 test('the scripts board asks only for the columns it draws', async () => {
   const { createData } = await load();
   const client = fakeClient();

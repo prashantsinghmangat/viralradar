@@ -43,6 +43,7 @@ const SHELL = [
   '/shared/transfer.mjs',
   '/shared/research.mjs',
   '/shared/localfolder.mjs',
+  '/shared/own-idea.mjs',
   '/transfer.js',
   '/localfolder.js',
   '/fonts/jakarta-var.woff2',

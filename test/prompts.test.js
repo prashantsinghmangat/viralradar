@@ -122,6 +122,26 @@ test('the angles prompt asks for five different videos, not five titles', () => 
   assert.match(p, /ONLY valid JSON/);
 });
 
+test('the hooks prompt asks for different opening lines, never a score', () => {
+  const { hooksPrompt } = require('../shared/prompts.mjs');
+  const p = hooksPrompt({ topic: 'a site that turns your name into 3D', language: 'Hinglish', today: '2026-10-08', count: 3 });
+
+  assert.match(p, /a site that turns your name into 3D/);
+  assert.match(p, /Hinglish/);
+  assert.match(p, /Write 3 genuinely different first lines/);
+  assert.match(p, /DIFFERENT angle/);
+  assert.match(p, /stop the scroll in under 3 seconds/);
+  assert.match(p, /"hooks": \[/);
+  assert.match(p, /"label"/);
+  assert.match(p, /"style"/);
+  assert.match(p, /"line"/);
+  assert.match(p, /ONLY valid JSON/);
+
+  // No score, ranking, or confidence number anywhere in the shape or the ask.
+  assert.match(p, /Do not include any score, ranking, or confidence number/);
+  assert.ok(!/"score"/.test(p));
+});
+
 test('a chosen angle becomes the spine of the script, not a note on it', () => {
   const { scriptPrompt } = require('../shared/prompts.mjs');
   const angle = { type: 'Reaction/Skeptic', title: 'I thought this was fake', hook: 'I did not believe this was real', twist: 'tests it live, on camera, expecting failure' };
@@ -234,6 +254,47 @@ test('with no research, the prompts are byte-for-byte what they were', () => {
     assert.equal(build({ ...args, research: null }), none);
     assert.ok(!/Use these facts and no others|Research:/.test(none));
   }
+});
+
+// ---------- format_script: the creator's own words, dressed into the shape ----------
+
+test('format_script carries the creator\'s own script word for word, and says not to write a new one', () => {
+  const { formatScriptPrompt } = require('../shared/prompts.mjs');
+  const script = 'Stop paying for background removal.\nThis free site does it in one click.';
+  const p = formatScriptPrompt({ script, language: 'English', length: '30s', today: '2026-10-10' });
+  assert.match(p, /Stop paying for background removal\./);
+  assert.match(p, /This free site does it in one click\./);
+  assert.match(p, /do not write a new script/i);
+});
+
+test('keepExact asks for the sentences unchanged; its absence allows light polish', () => {
+  const { formatScriptPrompt } = require('../shared/prompts.mjs');
+  const args = { script: 'Hello there.', language: 'English', length: '30s', today: '2026-10-10' };
+  const exact = formatScriptPrompt({ ...args, keepExact: true });
+  const polish = formatScriptPrompt({ ...args, keepExact: false });
+  assert.match(exact, /exactly as written/);
+  assert.ok(!/exactly as written/.test(polish));
+  assert.match(polish, /polish wording lightly/);
+});
+
+test('format_script still asks for the full script shape, including demo', () => {
+  const { formatScriptPrompt } = require('../shared/prompts.mjs');
+  const p = formatScriptPrompt({ script: 'Hello.', today: '2026-10-10' });
+  assert.match(p, /"demo"/);
+  assert.match(p, /"beats"/);
+  assert.match(p, /"items"/);
+});
+
+test('format_script also carries research, the same way scriptPrompt does', async () => {
+  const { formatScriptPrompt } = require('../shared/prompts.mjs');
+  const { packSummary } = await import('../shared/research.mjs');
+  const research = packSummary({
+    grounded: true,
+    main_tool: { name: 'Bgless', url: 'https://bgless.example' },
+    fact_check: [{ claim: 'free tier gives 5 images a day', status: 'verified', source_url: 'https://bgless.example' }],
+  });
+  const p = formatScriptPrompt({ script: 'Hello.', today: '2026-10-10', research });
+  assert.match(p, /free tier gives 5 images a day/);
 });
 
 test('the JSON repair prompt includes the broken text and asks for JSON only', () => {

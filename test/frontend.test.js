@@ -108,14 +108,14 @@ test('user text is escaped wherever it is put into HTML', () => {
   // Values that escape for themselves, or that cannot carry user text.
   // Builders that escape whatever they are given, so their output is markup on
   // purpose rather than by accident.
-  // devicesLine(), renderAngles(), renderPack() and the two BUTTON helpers are
-  // in here with the other builders because they escape every value they
-  // interpolate — see the
+  // devicesLine(), renderAngles(), renderPack(), hookSheetHead() and the
+  // *_BUTTON helpers are in here with the other builders because they escape
+  // every value they interpolate — see the
   // tests below, which hold them to that. renderAngles and renderPack put
   // model-written text on screen, so they are the ones that matter most.
   // encodeURIComponent() is on the list for a different reason: it percent-
   // encodes, so its output cannot be markup at all.
-  const safe = /^(esc\(|fmt\(|compact\(|ago\(|when\(|copyBtn\(|hbars\(|format\(|formatBytes\(|renderEditPlan\(|renderDemo\(|renderPendingGeneration\(|PASTE_BUTTON\(|makeButton\(|devicesLine\(|renderAngles\(|ANGLES_BUTTON\(|renderPack\(|RESEARCH_BUTTON\(|packLink\(|packList\(|liveBadge\(|factClass\(|renderLocalFolderSettings\(|encodeURIComponent\(|GENERATING\[|KIND_ICON|SOURCE|LIVE_LABEL|STAGES|LENGTHS|DEFAULT_AI_ORDER)/;
+  const safe = /^(esc\(|fmt\(|compact\(|ago\(|when\(|copyBtn\(|hbars\(|format\(|formatBytes\(|renderEditPlan\(|renderDemo\(|renderOriginalIdea\(|renderPendingGeneration\(|PASTE_BUTTON\(|makeButton\(|devicesLine\(|renderAngles\(|ANGLES_BUTTON\(|HOOKS_BUTTON\(|hookSheetHead\(|renderPack\(|RESEARCH_BUTTON\(|packLink\(|packList\(|liveBadge\(|factClass\(|renderLocalFolderSettings\(|encodeURIComponent\(|GENERATING\[|KIND_ICON|SOURCE|LIVE_LABEL|STAGES|LENGTHS|DEFAULT_AI_ORDER)/;
   const bad = [];
   for (const literal of htmlLiterals) {
     for (const m of literal.matchAll(/\$\{([^{}]*)\}/g)) {
@@ -630,10 +630,15 @@ test('reopening an unfinished script offers Retry instead of "Script not found"'
   assert.match(fn, /data-action="resumePendingScript" data-id="\$\{esc\(id\)\}"/);
 });
 
-test('resuming an unfinished script replays the exact saved request', () => {
+test('resuming an unfinished script replays the exact saved request, through whichever mechanism wrote it', () => {
   const fn = appjs.slice(appjs.indexOf('actions.resumePendingScript'), appjs.indexOf('actions.resumePendingScript') + 300);
   assert.match(fn, /loadPendingScript\(btn\.dataset\.id\)/);
-  assert.match(fn, /runPendingGeneration\(btn\.dataset\.id, body\)/);
+  // A plain script write and a New Project pipeline save differently-shaped
+  // bodies under the same key, so resuming has to tell them apart rather than
+  // always calling one function — see runOwnIdeaPipeline's own save below.
+  assert.match(fn, /saved\.__ownIdeaPipeline/);
+  assert.match(fn, /runOwnIdeaPipeline\(btn\.dataset\.id, saved\.request\)/);
+  assert.match(fn, /runPendingGeneration\(btn\.dataset\.id, saved\)/);
 });
 
 test('writing a script goes straight to its own screen, with a loading state, before the generation starts', () => {
@@ -648,7 +653,7 @@ test('writing a script goes straight to its own screen, with a loading state, be
 });
 
 test('every entry point that writes a script goes through writeScriptTo, not straight to the AI call', () => {
-  for (const action of ['writeScript', 'writeScriptFromBox', 'writeAngle', 'scriptFromPack']) {
+  for (const action of ['writeScript', 'writeScriptFromBox', 'writeAngle', 'scriptFromPack', 'useHook']) {
     const start = appjs.indexOf(`actions.${action} =`);
     assert.ok(start > 0, `actions.${action} is not defined`);
     const body = appjs.slice(start, appjs.indexOf('\n};', start));
@@ -664,6 +669,117 @@ test('the script screen shows a loading or failed state instead of "not found" w
   const pendingAt = fn.indexOf('const writing = renderPendingGeneration');
   const readAt = fn.indexOf('data.scripts.get(id)');
   assert.ok(pendingAt > 0 && pendingAt < readAt, 'the pending check must come before reading the row');
+});
+
+// ---------- New Project: from your own idea ----------
+
+test('New Project is reachable from all three entry points: Projects, the desktop top bar, and Ideas', () => {
+  assert.match(appjs, /data-action="openNewProject"/, 'the Projects screen button');
+  for (const action of ['newScript', 'openNewProject']) {
+    const body = appjs.slice(appjs.indexOf(`actions.${action} =`), appjs.indexOf(`actions.${action} =`) + 120);
+    assert.match(body, /startNewProject\(\)/, `actions.${action} must open New Project, not do something else`);
+  }
+});
+
+test('the New Project form is refused before the dialog closes, not after', () => {
+  const fn = appjs.slice(appjs.indexOf('function openNewProject'), appjs.indexOf('async function startNewProject'));
+  // A native <dialog> form submit closes it immediately unless prevented —
+  // validating only in the 'close' handler would be too late to stop it.
+  const submitAt = fn.indexOf("addEventListener('submit'");
+  assert.ok(submitAt > 0, 'the form needs its own submit handler, not just a close handler');
+  const submitBlock = fn.slice(submitAt, fn.indexOf('};', submitAt));
+  assert.match(submitBlock, /validateNewProject\(/);
+  assert.match(submitBlock, /e\.preventDefault\(\)/);
+});
+
+test('cancelling New Project does nothing: no project, no idea, no pipeline', () => {
+  const fn = appjs.slice(appjs.indexOf('function openNewProject'), appjs.indexOf('async function startNewProject'));
+  assert.match(fn, /returnValue === 'cancel'.*resolve\(null\)/s);
+  const startFn = appjs.slice(appjs.indexOf('async function startNewProject'), appjs.indexOf('actions.openNewProject'));
+  assert.match(startFn, /if \(!answer\) return;/);
+});
+
+test('"just save the idea" writes the idea and a note, but never calls the AI', () => {
+  const fn = appjs.slice(appjs.indexOf('async function startNewProject'), appjs.indexOf('actions.openNewProject'));
+  const saveOnlyBlock = fn.slice(fn.indexOf("mode === 'save_only'"), fn.indexOf('return;\n  }'));
+  assert.match(saveOnlyBlock, /data\.projects\.create\(/);
+  assert.match(saveOnlyBlock, /data\.items\.addText\(/);
+  assert.match(saveOnlyBlock, /data\.ideas\.create\(/);
+  assert.ok(!/data\.ai\.(generate|research)\(/.test(saveOnlyBlock), 'save_only must generate nothing');
+});
+
+test('modes a and b create the project and file the original note before the pipeline starts', () => {
+  const fn = appjs.slice(appjs.indexOf('async function startNewProject'), appjs.indexOf('actions.openNewProject'));
+  const afterSaveOnly = fn.slice(fn.indexOf("return;\n  }"));
+  assert.match(afterSaveOnly, /data\.projects\.create\(\{ title: answer\.title, ownIdea: true \}\)/);
+  assert.match(afterSaveOnly, /data\.items\.addText\(project\.id, note/);
+  assert.match(afterSaveOnly, /runOwnIdeaPipeline\(id, \{ \.\.\.answer, projectId: project\.id, original \}\)/);
+  // Navigation must happen before the pipeline, same reason writeScriptTo()'s does.
+  const navAt = afterSaveOnly.indexOf('location.hash');
+  const pipelineAt = afterSaveOnly.indexOf('runOwnIdeaPipeline(id,');
+  assert.ok(navAt > 0 && navAt < pipelineAt);
+});
+
+test('runOwnIdeaPipeline saves itself for Retry/resume, wrapped so resumePendingScript can tell it apart', () => {
+  const fn = appjs.slice(appjs.indexOf('async function runOwnIdeaPipeline'), appjs.indexOf('actions.generateIdeas'));
+  assert.match(fn, /savePendingScript\(id, \{ __ownIdeaPipeline: true, request \}\)/);
+  assert.match(fn, /retry: \(\) => runOwnIdeaPipeline\(id, request\)/);
+});
+
+test('runOwnIdeaPipeline shows a distinct step label at each stage', () => {
+  const fn = appjs.slice(appjs.indexOf('async function runOwnIdeaPipeline'), appjs.indexOf('actions.generateIdeas'));
+  const steps = [...fn.matchAll(/step: (.+?)[,}]/g)].map((m) => m[1]);
+  assert.ok(steps.some((s) => /Checking your links/.test(s)), 'no step label for the research stage');
+  assert.ok(steps.some((s) => s.includes('GENERATING.script')), 'no step label for the writing stage');
+  assert.ok(steps.some((s) => s.includes('GENERATING.edit_plan')), 'no step label for the edit-plan stage');
+});
+
+test('a failed research step is swallowed: the pipeline continues without a pack rather than failing the whole thing', () => {
+  const fn = appjs.slice(appjs.indexOf('async function runOwnIdeaPipeline'), appjs.indexOf('actions.generateIdeas'));
+  const researchBlock = fn.slice(fn.indexOf("mode === 'generate'"), fn.indexOf('pendingGen.set(id, { status: \'working\', kind: \'own_idea\', step: GENERATING.script }'));
+  assert.match(researchBlock, /try \{/);
+  assert.match(researchBlock, /data\.ai\.research\(/);
+  assert.match(researchBlock, /catch \(e\) \{/);
+  assert.match(researchBlock, /continuing without them/i);
+  // The catch must not rethrow — a caught error that is thrown again would
+  // still fail the whole pipeline, defeating the point of catching it.
+  assert.ok(!/throw/.test(researchBlock), 'the research failure must not propagate and stop the script from being written');
+});
+
+test('research only runs for mode "generate", and only when links were given', () => {
+  const fn = appjs.slice(appjs.indexOf('async function runOwnIdeaPipeline'), appjs.indexOf('actions.generateIdeas'));
+  assert.match(fn, /if \(request\.mode === 'generate' && request\.links\.length\)/);
+});
+
+test('own_script mode calls format_script with keep_exact, and both modes pass own_idea and the original input through', () => {
+  const fn = appjs.slice(appjs.indexOf('async function runOwnIdeaPipeline'), appjs.indexOf('actions.generateIdeas'));
+  assert.match(fn, /kind: 'format_script', id, script: request\.myScript, keep_exact: request\.keepExact/);
+  assert.match(fn, /kind: 'script', id, topic:/);
+  const genBodies = fn.slice(fn.indexOf('const genBody'), fn.indexOf('const written'));
+  assert.match(genBodies, /own_idea: true, original: request\.original/g);
+  assert.equal((genBodies.match(/own_idea: true, original: request\.original/g) || []).length, 2, 'both branches must carry it');
+});
+
+test('the pipeline writes the script, then the edit plan, in that order, on the same id', () => {
+  const fn = appjs.slice(appjs.indexOf('async function runOwnIdeaPipeline'), appjs.indexOf('actions.generateIdeas'));
+  const scriptAt = fn.indexOf("data.ai.generate(genBody)");
+  const planAt = fn.indexOf("kind: 'edit_plan', script_id: id");
+  assert.ok(scriptAt > 0 && planAt > 0 && scriptAt < planAt, 'the edit plan is for a script that must already exist');
+});
+
+test('"My idea" is shown on a project card, a script board card, and the script detail, from own_idea alone', () => {
+  assert.match(appjs, /p\.own_idea \? '<span class="badge accent">My idea<\/span>' : ''/);
+  const scriptsFn = appjs.slice(appjs.indexOf('async function renderScripts'), appjs.indexOf('actions.openScript ='));
+  assert.match(scriptsFn, /s\.own_idea \? '<span class="badge accent">My idea<\/span>' : ''/);
+  const detailFn = appjs.slice(appjs.indexOf('async function renderScriptDetail'), appjs.indexOf('actions.scrollToEditPlan'));
+  assert.match(detailFn, /s\.own_idea \? '<span class="badge accent">My idea<\/span>' : ''/);
+});
+
+test('the original idea is shown as a collapsible section, escaped, and absent when there is none', () => {
+  const fn = appjs.slice(appjs.indexOf('function renderOriginalIdea'), appjs.indexOf('function renderDemo'));
+  assert.match(fn, /<details/, 'it must be collapsible, not always open and in the way');
+  assert.match(fn, /esc\(text\)/, 'the creator\'s own words go through esc() like everything else on this screen');
+  assert.match(fn, /if \(!original \|\| typeof original !== 'object'\) return '';/);
 });
 
 test('an edit plan loads and fails in place, on the script\'s own screen — no navigation needed', () => {

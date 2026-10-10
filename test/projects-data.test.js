@@ -300,6 +300,22 @@ test('an unknown status never reaches the database', async () => {
   assert.equal(client.calls.length, 0);
 });
 
+test('a project is not marked "my idea" unless New Project says so', async () => {
+  const { createData } = await load();
+  const client = fakeClient({ respond: () => ({ data: [{ id: 'p1' }], error: null }) });
+  await createData(client).projects.create({ title: 'Plain folder' });
+  const insert = client.calls.find((c) => c.op === 'insert');
+  assert.equal(insert.payload.own_idea, false);
+});
+
+test('New Project stamps own_idea on the folder it creates', async () => {
+  const { createData } = await load();
+  const client = fakeClient({ respond: () => ({ data: [{ id: 'p1' }], error: null }) });
+  await createData(client).projects.create({ title: 'From my own idea', ownIdea: true });
+  const insert = client.calls.find((c) => c.op === 'insert');
+  assert.equal(insert.payload.own_idea, true);
+});
+
 test('a folder has to be called something', async () => {
   const { createData } = await load();
   const client = fakeClient();

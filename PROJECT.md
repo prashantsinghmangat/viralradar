@@ -379,7 +379,7 @@ public/              the whole frontend — no build step, no framework
 
 scripts/             build, sync-shared, inspect-db, test-rls, rls-plan,
                      db-url, make-icons
-test/                32 files, 547 tests
+test/                33 files, 585 tests
 ```
 
 **Why `_shared/core/` is a copy.** A deployed Edge Function only receives files
@@ -954,6 +954,46 @@ touch the others:
   feature has no access to delete that even if it wanted to. Archiving a
   project (the existing status switch) now also hides it from the default
   Projects list, with a "Show archived (N)" toggle to bring it back.
+
+### New Project: a script from your own idea, not a trend
+
+Three modes behind one segmented control (`shared/own-idea.mjs`), reachable
+from Projects, the desktop top bar's "New script", and a **+** on Ideas:
+
+- **Idea → AI makes everything.** Title, details and up to five source links.
+  Links, if given, run through vr-research first — same pack, same
+  checked/grounded rules as the Research Pack screen — and the script's demo
+  is built from it; with no links, the script is still written from the
+  title and details, and its demo is unverified by default (see the `checked`
+  default below).
+- **My own script.** The creator's own script, formatted into the shape by a
+  new vr-generate kind, `format_script`, rather than written fresh. "Keep my
+  words exactly" is asked for in the prompt but **enforced in code**:
+  `shared/own-idea.mjs`'s `keepsExact()` joins the beats' spoken lines and
+  compares them to the original after whitespace normalisation, the same
+  "ask in the prompt, enforce in code" split the Research Pack and the demo
+  walkthrough already use. A mismatch gets one retry with the identical
+  instruction; a second mismatch fails the request outright rather than
+  silently keeping a paraphrase — the one case where this feature would
+  rather say nothing than say something wrong.
+- **Just save the idea.** Writes an `ideas` row (source `manual`) and a note
+  in the folder; nothing is generated.
+
+Every mode creates a project folder first (`projects.own_idea = true`, the
+column the "My idea" badge reads) and files a note with the creator's exact
+original input — title, details, links, and for "my own script" the script
+itself — so it survives even once a model has reworked it into something
+else. That same input also rides inside the generated script's
+`raw.original` (no column needed, the same passthrough `demo` and
+`edit_plan` use), shown as a collapsible "Original idea" section on the
+script's own screen.
+
+Modes a) and b) navigate straight to the new script's screen with a
+step-by-step progress view — `runOwnIdeaPipeline()`, `runPendingGeneration()`'s
+multi-step sibling, reusing the exact same `pendingGen` Map and
+`localStorage` save so a closed tab still offers Retry on reopening. A failed
+research step is caught, not thrown: the pipeline carries on without a pack
+and says so, rather than failing the whole script over one unreachable link.
 
 ### Testing the half that cannot be tested
 

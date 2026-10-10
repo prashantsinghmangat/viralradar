@@ -2,7 +2,7 @@
 //
 //   POST /functions/v1/vr-generate
 //   Authorization: Bearer <user JWT>
-//   Body: { kind: "ideas" | "angles" | "script" | "edit_plan" | "test", ... }
+//   Body: { kind: "ideas" | "angles" | "hooks" | "script" | "edit_plan" | "test", ... }
 //
 // This function exists only because of the API keys. They are read from its
 // environment and never leave it — not to the browser, not to the phone, not
@@ -16,16 +16,20 @@
 import { authenticate, AuthError } from '../_shared/auth.ts';
 import { corsHeaders, json, preflight } from '../_shared/cors.ts';
 import { generateJson, testProviders } from '../_shared/core/generate-core.mjs';
-import { ideasPrompt, anglesPrompt, scriptPrompt, editPlanPrompt } from '../_shared/core/prompts.mjs';
+import { ideasPrompt, anglesPrompt, hooksPrompt, scriptPrompt, editPlanPrompt, formatScriptPrompt } from '../_shared/core/prompts.mjs';
 import { resultsLesson } from '../_shared/core/learning.mjs';
 import { runImport } from '../_shared/core/import-core.mjs';
 import { istDay } from '../_shared/core/time.mjs';
+import { keepsExact } from '../_shared/core/own-idea.mjs';
 import {
   DEFAULT_AI_ORDER, DEFAULT_GEMINI_MODEL, DEFAULT_OPENROUTER_MODEL,
   DEFAULT_KEYWORDS, DEFAULT_LANGUAGE, DEFAULT_LENGTH,
 } from '../_shared/core/defaults.mjs';
 
-const KINDS = ['ideas', 'angles', 'script', 'edit_plan', 'test'];
+const KINDS = ['ideas', 'angles', 'hooks', 'script', 'format_script', 'edit_plan', 'test'];
+// A script written straight from the creator's own words, same as 'script'
+// everywhere except which prompt builds it and the keep_exact check below.
+const SCRIPT_KINDS = ['script', 'format_script'];
 
 const keys = () => ({
   gemini: Deno.env.get('GEMINI_API_KEY') ?? '',
@@ -233,27 +237,91 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // ---- ideas, or a script ----
+    // ---- hooks: just the opening line, not a whole angle or script ----
+    //
+    // Deliberately not stored, same reasoning as angles above: a hook is a
+    // choice on the way to a script, not an item of its own.
+    if (kind === 'hooks') {
+      if (!topic) return json(req, { ok: false, error: 'What subject? No topic was sent.' }, 400);
+
+      const result = await generateJson({
+        ...ask,
+        prompt: hooksPrompt({ topic, language, count: Math.min(Math.max(Number(body.count) || 3, 2), 5), today }),
+      });
+      await countCall(client, userId, result.provider);
+
+      const raw = Array.isArray(result.value?.hooks) ? result.value.hooks
+        : Array.isArray(result.value) ? result.value : [];
+      const hooks = raw
+        .filter((h: Record<string, unknown>) => h && h.line)
+        .slice(0, 5)
+        .map((h: Record<string, unknown>) => ({
+          label: String(h.label ?? '').trim(),
+          style: String(h.style ?? '').trim(),
+          line: String(h.line ?? '').trim(),
+        }));
+
+      if (!hooks.length) {
+        return json(req, { ok: false, error: `${result.provider} replied, but with no usable hooks in it. Try again.` }, 502);
+      }
+
+      console.log(`[vr-generate] hooks for "${topic.slice(0, 60)}" by ${result.provider}: ${hooks.length}`);
+      return json(req, {
+        ok: true, kind, provider: result.provider, model: result.model, topic, hooks,
+        message: `${hooks.length} hooks from ${result.provider}`,
+      });
+    }
+
+    // ---- ideas, a script, or the creator's own script formatted ----
     if (kind === 'script' && !topic) {
       return json(req, { ok: false, error: 'What should the script be about? No topic was sent.' }, 400);
+    }
+    if (kind === 'format_script' && !String(body.script ?? '').trim()) {
+      return json(req, { ok: false, error: 'What should the script say? No script text was sent.' }, 400);
     }
 
     // An angle chosen on the angles screen, carried through so the script takes
     // it rather than producing the plainest treatment of the topic.
     const angle = body.angle && typeof body.angle === 'object' ? body.angle as Record<string, string> : null;
 
-    const prompt = kind === 'ideas'
-      ? ideasPrompt({
-        keywords: Array.isArray(body.keywords) && body.keywords.length ? body.keywords : settings.keywords,
-        language,
-        length,
-        count: Math.min(Math.max(Number(body.count) || 6, 1), 12),
-        today,
-        lesson,
-      })
-      : scriptPrompt({ topic, language, length, today, angle, lesson, research });
-
-    const result = await generateJson({ ...ask, prompt });
+    let result;
+    if (kind === 'format_script') {
+      // "Keep my words exactly" is asked for in the prompt, but a model told to
+      // copy sentences unchanged can still paraphrase — so it is checked here,
+      // in code, the same "ask in the prompt, enforce in code" split the
+      // Research Pack and the demo walkthrough already use. One retry before
+      // giving up: the second attempt gets the identical instruction, and a
+      // model that drifted once sometimes does not drift twice.
+      const myScript = String(body.script ?? '').trim();
+      const keepExact = body.keep_exact === true;
+      const prompt = formatScriptPrompt({ script: myScript, keepExact, language, length, today, research });
+      for (let attempt = 0; attempt < 2; attempt++) {
+        result = await generateJson({ ...ask, prompt });
+        const value = result.value as Record<string, unknown>;
+        const candidate = (Array.isArray(value?.items) ? value.items[0]
+          : Array.isArray(value) ? value[0] : value) as Record<string, unknown> | undefined;
+        if (!keepExact || keepsExact(myScript, candidate?.beats as unknown[])) break;
+        if (attempt === 1) {
+          return json(req, {
+            ok: false,
+            error: `${result.provider} could not keep your script exactly as written, even on a second try. `
+              + 'Try "Polish lightly" instead, or shorten your script.',
+          }, 502);
+        }
+      }
+    } else {
+      const prompt = kind === 'ideas'
+        ? ideasPrompt({
+          keywords: Array.isArray(body.keywords) && body.keywords.length ? body.keywords : settings.keywords,
+          language,
+          length,
+          count: Math.min(Math.max(Number(body.count) || 6, 1), 12),
+          today,
+          lesson,
+        })
+        : scriptPrompt({ topic, language, length, today, angle, lesson, research });
+      result = await generateJson({ ...ask, prompt });
+    }
     await countCall(client, userId, result.provider);
 
     const items = Array.isArray(result.value?.items) ? result.value.items
@@ -269,20 +337,31 @@ Deno.serve(async (req: Request) => {
     // in code" split the Research Pack itself uses: a model can paraphrase a
     // prompt it was told to copy exactly, and the one place this matters most
     // is the one line the viewer is about to read off screen on camera.
-    const demoSource = kind === 'script' && body.demo_source && typeof body.demo_source === 'object'
+    const demoSource = SCRIPT_KINDS.includes(kind) && body.demo_source && typeof body.demo_source === 'object'
       ? body.demo_source as Record<string, unknown> : null;
+
+    // New Project's own-idea screen: the creator's original title, details,
+    // links and (for format_script) their own script, kept whole in raw —
+    // shown on the script detail as a collapsible "Original idea" section —
+    // and own_idea:true, which draws the "My idea" badge. Neither is part of
+    // the Shorts Studio contract; both simply pass through raw untouched, the
+    // same way demo and edit_plan do.
+    const ownIdea = SCRIPT_KINDS.includes(kind) && body.own_idea === true;
+    const original = SCRIPT_KINDS.includes(kind) && body.original && typeof body.original === 'object'
+      ? body.original as Record<string, unknown> : null;
 
     // Ids are assigned here, never by the model: it has no idea what already
     // exists, and a collision would overwrite real work. A script's id may be
     // supplied by the browser instead, so it can navigate straight to
     // `#/scripts/<id>` before the generation even finishes.
     const prefix = kind === 'ideas' ? 'idea' : 'scr';
-    const suppliedId = kind === 'script' ? String(body.id ?? '').trim() : '';
+    const suppliedId = SCRIPT_KINDS.includes(kind) ? String(body.id ?? '').trim() : '';
     const stamped = items.slice(0, 12).map((item: Record<string, unknown>, i: number) => ({
       ...item,
       id: (i === 0 && suppliedId) || newId(prefix),
       source: result.provider,
       ...(kind === 'ideas' ? { date: item.date || today } : { created_at: new Date().toISOString() }),
+      ...(i === 0 && original ? { original } : {}),
       ...(demoSource ? {
         demo: {
           tool: demoSource.tool, url: demoSource.url,
@@ -311,15 +390,16 @@ Deno.serve(async (req: Request) => {
     // including a plain re-import from Shorts Studio that has never heard of
     // this concept and would otherwise null it straight back out, the exact
     // bug class that keeps status/stage out of that list too.
-    if (kind === 'script') {
-      const { error: scriptLangError } = await client.from('scripts').update({ language }).eq('id', stamped[0].id);
+    if (SCRIPT_KINDS.includes(kind)) {
+      const { error: scriptLangError } = await client.from('scripts')
+        .update({ language, ...(ownIdea ? { own_idea: true } : {}) }).eq('id', stamped[0].id);
       if (scriptLangError) console.warn(`[vr-generate] could not save the script's language: ${scriptLangError.message}`);
     }
 
     // The project's own language default, for next time — best-effort, same
     // as vr-research treats a pack save failure: the script is already
     // written, and losing this convenience is not worth failing the request.
-    const projectId = kind === 'script' ? String(body.project_id ?? '').trim() : '';
+    const projectId = SCRIPT_KINDS.includes(kind) ? String(body.project_id ?? '').trim() : '';
     if (projectId) {
       const { error: projLangError } = await client.from('projects').update({ language }).eq('id', projectId);
       if (projLangError) console.warn(`[vr-generate] could not remember the project's language: ${projLangError.message}`);

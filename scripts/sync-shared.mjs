@@ -44,10 +44,13 @@ export const BROWSER_DIR = join(ROOT, 'public', 'shared');
 //   localfolder  what a local project folder is called and what goes in it —
 //                kept away from the untestable File System Access wiring, the
 //                same reason transfer.mjs is split from public/transfer.js
+//   own-idea     New Project's own-idea screen: link cleanup, form validation
+//                and the "keep my words exactly" check, shared with vr-generate
+//                so the browser and the enforcement agree on what counts
 export const BROWSER_SHARED = [
   'stats.mjs', 'defaults.mjs', 'time.mjs', 'tokens.mjs', 'edit-plan.mjs', 'demo.mjs',
   'projects.mjs', 'sha256.mjs', 'transfer.mjs', 'learning.mjs', 'research.mjs',
-  'localfolder.mjs',
+  'localfolder.mjs', 'own-idea.mjs',
 ];
 
 const BANNER = [
