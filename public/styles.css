@@ -137,45 +137,6 @@ dialog.sheet::backdrop { background: rgba(10, 12, 18, .55); backdrop-filter: blu
 .sheet-body h2 { margin-bottom: 4px; }
 .sheet-body .btn { width: 100%; justify-content: flex-start; }
 
-@media (min-width: 1024px) {
-  body { padding-bottom: 32px; }
-  .topbar {
-    position: fixed; top: 0; left: 260px; right: 0; height: 64px; z-index: 25;
-    background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-    padding: 0 var(--space-lg); border-bottom: 1px solid var(--border);
-  }
-  .view { margin-left: 260px; max-width: 1280px; padding-top: calc(64px + var(--space-lg)); }
-  .brand {
-    position: fixed; top: 0; left: 0; width: 260px; height: 64px; z-index: 36;
-    padding-left: var(--space-md); margin: 0;
-  }
-  .nav {
-    position: fixed; top: 64px; left: 0; bottom: 0; width: 260px; z-index: 30;
-    display: flex; flex-direction: column; height: auto; padding: var(--space-sm);
-    border: 0; border-right: 1px solid var(--border); background: var(--surface-2); gap: 4px;
-  }
-  .nav a, .nav-more { flex-direction: row; justify-content: flex-start; gap: 10px; padding: 9px 12px; border-radius: var(--radius-sm); font-size: .9rem; }
-  .nav a:hover { background: var(--surface); color: var(--text); }
-  .nav a.active { background: var(--accent-soft); color: var(--accent); }
-  .nav-wide { display: flex; }
-  .nav-more { display: none; }
-  .topbar-search {
-    display: flex; align-items: center; gap: 8px; width: 320px; padding: 8px 12px;
-    background: var(--surface-2); border-radius: var(--radius-sm); color: var(--muted);
-  }
-  .topbar-search input { border: 0; background: none; padding: 0; width: 100%; color: var(--text); }
-  .topbar-search input:focus-visible { outline: none; }
-  .topbar-scan {
-    display: flex; align-items: center; gap: 6px; padding: 6px 12px; margin-left: auto;
-    background: var(--surface-2); border-radius: var(--radius-sm); font-size: .82rem; color: var(--text-2); white-space: nowrap;
-  }
-  .topbar-new { display: inline-flex; white-space: nowrap; }
-  #themeBtn { margin-left: 4px; }
-  dialog.sheet.sheet-side {
-    margin: 0 0 0 auto; height: 100vh; max-height: 100vh; width: min(420px, 100% - 32px);
-    border-radius: var(--radius-xl) 0 0 var(--radius-xl);
-  }
-}
 
 .view { max-width: 1200px; margin: 0 auto; padding: 16px; outline: none; }
 .page-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px; }
@@ -498,3 +459,50 @@ body.signed-out .topbar .brand { pointer-events: none; }
 /* Room for the sticky bar so it never covers the last card on the screen. */
 body:has(.sticky-actions) { padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px) + 70px); }
 @media (min-width: 1024px) { body:has(.sticky-actions) { padding-bottom: 32px; } }
+
+/* ---------- desktop shell: sidebar + top bar ----------
+   Deliberately last in the file: .view, .nav and .brand each already have an
+   unconditional base rule earlier on (mobile layout), and a media-query rule
+   loses a cascade tie against a later unconditional rule of the same
+   specificity regardless of whether the query matches — so this block has to
+   come after every rule it needs to win against, not just after the ones
+   that existed when it was first written. */
+@media (min-width: 1024px) {
+  body { padding-bottom: 32px; }
+  .topbar {
+    position: fixed; top: 0; left: 260px; right: 0; height: 64px; z-index: 25;
+    background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    padding: 0 var(--space-lg); border-bottom: 1px solid var(--border);
+  }
+  .view { margin-left: 260px; max-width: 1280px; padding-top: calc(64px + var(--space-lg)); }
+  .brand {
+    position: fixed; top: 0; left: 0; width: 260px; height: 64px; z-index: 36;
+    padding-left: var(--space-md); margin: 0;
+  }
+  .nav {
+    position: fixed; top: 64px; left: 0; bottom: 0; width: 260px; z-index: 30;
+    display: flex; flex-direction: column; height: auto; padding: var(--space-sm);
+    border: 0; border-right: 1px solid var(--border); background: var(--surface-2); gap: 4px;
+  }
+  .nav a, .nav-more { flex-direction: row; justify-content: flex-start; gap: 10px; padding: 9px 12px; border-radius: var(--radius-sm); font-size: .9rem; }
+  .nav a:hover { background: var(--surface); color: var(--text); }
+  .nav a.active { background: var(--accent-soft); color: var(--accent); }
+  .nav-wide { display: flex; }
+  .nav-more { display: none; }
+  .topbar-search {
+    display: flex; align-items: center; gap: 8px; width: 320px; padding: 8px 12px;
+    background: var(--surface-2); border-radius: var(--radius-sm); color: var(--muted);
+  }
+  .topbar-search input { border: 0; background: none; padding: 0; width: 100%; color: var(--text); }
+  .topbar-search input:focus-visible { outline: none; }
+  .topbar-scan {
+    display: flex; align-items: center; gap: 6px; padding: 6px 12px; margin-left: auto;
+    background: var(--surface-2); border-radius: var(--radius-sm); font-size: .82rem; color: var(--text-2); white-space: nowrap;
+  }
+  .topbar-new { display: inline-flex; white-space: nowrap; }
+  #themeBtn { margin-left: 4px; }
+  dialog.sheet.sheet-side {
+    margin: 0 0 0 auto; height: 100vh; max-height: 100vh; width: min(420px, 100% - 32px);
+    border-radius: var(--radius-xl) 0 0 var(--radius-xl);
+  }
+}
