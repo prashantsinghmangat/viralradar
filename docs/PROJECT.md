@@ -333,6 +333,18 @@ shared/              runtime-agnostic cores — Node, Deno and the browser all u
   tokens.mjs           import tokens: generate, hash, read an Authorization header
   projects.mjs         project folders: the two storage limits, the path layout,
                        the device naming and the upload rules
+  import-projects.mjs  project-folder specific import handling
+  localfolder.mjs      the local Chrome/Edge File System Access integration:
+                       subfolder layout, the per-project checklist, raw-footage
+                       cleanup
+  demo.mjs             read the optional on-camera demo walkthrough off a script
+                       (tool, prepare, steps, prompts, check) — never invents one
+  research.mjs         a Research Pack: verified facts read off a tool's own live
+                       pages, kept apart from anything a model merely claims
+  language.mjs         detect a video's spoken language from title/script, for
+                       the Radar language filter
+  own-idea.mjs         New Project from your own idea — generate, format your
+                       own script, or just save the idea as a note
   sha256.mjs           SHA-256 a chunk at a time, so a 2 GB video can be verified
                        without ever being in memory in one piece
   transfer.mjs         the device-to-device protocol: chunking, backpressure,
@@ -350,9 +362,11 @@ shared/              runtime-agnostic cores — Node, Deno and the browser all u
                      to say the same words.
 
 supabase/
-  migrations/        7 files: schema, policies, usage + schedule, model defaults,
-                     project folders + the storage bucket and its policies,
-                     video_ref + the private signalling channel
+  migrations/        13 files: schema, policies, usage + schedule, model
+                     defaults, project folders + the storage bucket and its
+                     policies, video_ref + the private signalling channel,
+                     script/project language + the demo column, the weekly
+                     goal, the own-idea columns
   tests/rls.sql      the isolation test, as one block for the dashboard
   functions/
     _shared/cors.ts    allow-list of origins, no wildcard
@@ -365,17 +379,27 @@ supabase/
     vr-purge-project-files/   deletes files from projects posted 14 days ago
 
 public/              the whole frontend — no build step, no framework
-  index.html           every screen, as one page
+  index.html           every screen, as one page; bottom tab bar on mobile
+                       (<1024px), a left sidebar + top bar on desktop
   app.js               screens, sign-in, Realtime, the AI buttons, project folders
   transfer.js          the untestable half of video transfer and nothing else:
                        RTCPeerConnection, presence, File System Access
   data.js              every database call, with the client injected so it tests
-  styles.css           one stylesheet, dark, phone-first
+  styles.css           one stylesheet, CSS custom properties for the design
+                       system (dark by default, a derived light theme), mobile-
+                       first with one breakpoint at 1024px
+  fonts/               self-hosted Plus Jakarta Sans + Inter (variable woff2,
+                       one file per family), so the PWA has its own type offline
   sw.js                service worker: shell cached, config always fresh, and the
                        one thing it is load-bearing for — answering the POST from
                        Android's Share menu, since this site has no server
   manifest.webmanifest, icons/      what makes it installable
   shared/              GENERATED copy of shared/*.mjs, imported as ES modules
+
+design/stitch/       the Google Stitch export the current visual design was
+                     restyled from — DESIGN.md is the token source for
+                     styles.css; the four screen exports are the closest
+                     visual reference for Radar, Script detail and Projects
 
 scripts/             build, sync-shared, inspect-db, test-rls, rls-plan,
                      db-url, make-icons
@@ -485,13 +509,19 @@ kept; the cloud version changes where the data comes from and adds the AI.
 
 | Screen | Today | Cloud version adds |
 |---|---|---|
-| **Radar** | trend cards by source, velocity score, Refresh now | **Write script**, **Find angles** and **Research Pack** on any trend card — research uses the trend's own URL, so no page is guessed |
+| **Radar** | trend cards by source, velocity score, Refresh now | **Write script**, **Find angles**, **Research Pack** and **Hook options** (3 opening-line choices, in a sheet) on any trend card — research uses the trend's own URL, so no page is guessed. A **weekly goal** card ("N of G videos this week"), G editable in Settings |
 | **Ideas** | grouped by day, Picked / Skip, filters | **Generate ideas**, and **Write script** / **Find angles** / **Research Pack** on every idea |
-| **Scripts** | board: To shoot → Shot → Edited → Posted, drag or arrows; detail view with teleprompter and copy buttons | arrives live when generated or imported elsewhere; the **edit plan** below the teleprompter, and **Make edit plan** when a script has none |
-| **Projects** | *new* | a folder per video: notes, links and files that reach the other device in a second. **Open project** from any script, an **Inbox** for anything shared in from Android, a per-item note saying which device it came from, and **Send a video** — straight to the other device over WebRTC, with the copy checked byte for byte |
+| **Scripts** | board: To shoot → Shot → Edited → Posted, drag or arrows; detail view with teleprompter and copy buttons | arrives live when generated or imported elsewhere; the **edit plan** below the teleprompter, **Make edit plan** when a script has none, **Hook options**, and a tickable **pre-flight checklist** on the demo section (saved per script, per device) |
+| **Projects** | *new* | a folder per video: notes, links and files that reach the other device in a second. **Open project** from any script, **+ New project** from your own idea (generate everything, format a script you already wrote, or just save the idea as a note), an **Inbox** for anything shared in from Android, a per-item note saying which device it came from, and **Send a video** — straight to the other device over WebRTC, with the copy checked byte for byte |
 | **Results** | totals, avg views, save rate, streak, bars by format/hook/len/CTA, top 5, full table | same numbers, computed in the browser |
 | **Import** | paste box, file upload, recent imports log | **Paste from Shorts Studio** button (clipboard), same on Ideas and Scripts |
-| **Settings** | watch folder, keywords, YouTube quota, LAN URLs, backup/restore | niche keywords, language, default length, AI order and models, **Test AI**, import token management, backup/restore, **this device's name**, and how much of the 300 MB of project files is used |
+| **Settings** | watch folder, keywords, YouTube quota, LAN URLs, backup/restore | niche keywords, language, default length, AI order and models, **Test AI**, import token management, backup/restore, **this device's name**, the **weekly goal** number, and how much of the 300 MB of project files is used |
+
+**Visual design.** Restyled from a Google Stitch export (`design/stitch/`):
+design tokens in `public/styles.css`, self-hosted Plus Jakarta Sans + Inter, a
+bottom tab bar on mobile and a left sidebar + top bar (search, daily scan
+time, **+ New script**) on desktop at ≥1024px. Behaviour is unchanged —
+nothing in this section moved, only how it looks.
 
 **The everyday flow**
 
@@ -546,6 +576,8 @@ except the optional folder watcher.
 | 15. Import research packs and notes; forward-compatible bundles | **done, migration pushed, `vr-import` redeployed** |
 | 16. Local project folders, mirrored onto disk | **built and tested; migration NOT yet pushed; the File System Access half (choosing a folder, a real write, a real receive-to-folder) NOT yet run live — same untested category as phase 12, see "Testing the half that cannot be tested"** |
 | 17. Language sheet, a demo walkthrough, the Radar language filter, deleting a project | **built and tested (10 tamper cases caught); migration NOT yet pushed, `vr-generate` and `vr-refresh-trends` NOT yet redeployed — nothing in this phase has been exercised against a real request yet** |
+| 18. New Project from your own idea (generate, format your own script, or save-only) | **built and tested; migration NOT yet pushed (Step 14g), `vr-generate` NOT yet redeployed** |
+| 19. Weekly goal, Hook options, and a visual restyle from a Stitch export | **built and tested; the `weekly_goal` migration NOT yet pushed (Step 14h), `vr-generate` NOT yet redeployed for the new `hooks` kind; the restyle itself is frontend-only, nothing to deploy for it** |
 
 Phase 10 originally also contained a SQLite → Postgres migration. It was
 dropped, not skipped: no local database ever held any data, so there was

@@ -20,33 +20,40 @@ installable on your phone's home screen like an app.
 ## The screens
 
 - **Radar** — today's trends, fastest-growing first, refreshed automatically at
-  **7:00 AM IST**, in whichever **languages** Settings is set to show.
-  *Copy for Shorts Studio* copies a title, link and one-line summary ready to
-  paste; *Write script*, *Find angles* and *Research Pack* turn one into a
-  video.
+  **7:00 AM IST**, in whichever **languages** Settings is set to show. A
+  **weekly goal** card tracks "N of G videos this week" against your real
+  Results, G editable in Settings. *Copy for Shorts Studio* copies a title,
+  link and one-line summary ready to paste; *Write script*, *Find angles*,
+  *Research Pack* and **Hook options** (3 opening-line choices) turn one into
+  a video.
 - **Ideas** — your ideas by day. Mark each **Picked** or **Skip**. *Write ideas
   with AI* adds fresh ones for your niche, and every card has *Write script*,
   *Find angles* and *Research Pack*.
 - **Scripts** — a board running *To shoot → Shot → Edited → Posted*. Drag cards
   on the laptop, tap the arrow on the phone. Open one for the big-text
-  **teleprompter**, one-tap copy for every caption and hashtag, and the **edit
-  plan**: a shot-by-shot timeline with captions, music and a checklist.
+  **teleprompter**, **Hook options**, one-tap copy for every caption and
+  hashtag, a tickable **pre-flight checklist** on the demo section (saved per
+  script, on this device), and the **edit plan**: a shot-by-shot timeline with
+  captions, music and a checklist.
 - **Projects** — a folder per video, and the quickest way to get something from
-  your phone to your laptop or back. Drop in the reference screenshots, the link
-  to the tool, the thumbnail draft, and the line you thought of on the bus.
-  Whatever you add appears on your other device a second later, saying which
-  device it came from. **Open project** on any script makes its folder. Videos
-  go device to device from here, with the copy checked byte for byte.
-  **Archive** hides a folder from the list without touching anything in it;
-  **Delete project** asks first, saying exactly what it removes.
+  your phone to your laptop or back. **+ New project** starts one straight from
+  your own idea — AI writes everything, formats a script you already wrote
+  (keeping your words exactly, if you ask), or just saves the idea as a note.
+  Drop in reference screenshots, the link to the tool, the thumbnail draft, and
+  the line you thought of on the bus. Whatever you add appears on your other
+  device a second later, saying which device it came from. **Open project** on
+  any script makes its folder. Videos go device to device from here, with the
+  copy checked byte for byte. **Archive** hides a folder from the list without
+  touching anything in it; **Delete project** asks first, saying exactly what
+  it removes.
 - **Results** — totals, posting streak, your top 5, and what actually works
   broken down by format, hook, length and CTA.
 - **Import** — paste or upload a Shorts Studio export.
 - **Settings** — niche keywords, language, script length, which AI to use,
   today's quota, **Test AI** to check both providers are answering, which
-  **Radar languages** to show trends in, what to call this device, your
-  connected **local project folder**, and how much of your project-file space
-  is used.
+  **Radar languages** to show trends in, your **weekly video goal**, what to
+  call this device, your connected **local project folder**, and how much of
+  your project-file space is used.
 
 Everything syncs. An import on the laptop appears on the phone a second or two
 later, with no refresh.
@@ -329,15 +336,17 @@ them work out their own addresses; no video goes anywhere near them. There is
 deliberately no TURN relay, which is why both devices have to be on the same
 network.
 
-**More detail:** [PROJECT.md](PROJECT.md) — architecture, the data model, the
-security model, decisions, mistakes worth knowing, and current status.
+**More detail:** [docs/PROJECT.md](docs/PROJECT.md) — architecture, the data
+model, the security model, decisions, mistakes worth knowing, and current
+status.
 
 ---
 
 ## Running it yourself
 
-[SETUP.md](SETUP.md) is every manual step in order: database, login, API keys,
-deploys and the phone. It assumes nothing and says why each step exists.
+[docs/SETUP.md](docs/SETUP.md) is every manual step in order: database, login,
+API keys, deploys and the phone. It assumes nothing and says why each step
+exists.
 
 ```
 npm install

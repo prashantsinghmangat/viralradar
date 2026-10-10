@@ -4,10 +4,12 @@ This is the full list of manual steps, in order.
 
 **Almost all of these are done.** The app is live at
 https://ytshortradar.netlify.app, signs you in, syncs between laptop and phone,
-imports, generates and refreshes trends on schedule. All seven migrations are
-applied, and `npm run test:rls` passes **309 assertions and 7 proofs** against
-the real database — including the project-file bucket and the private channel
-the two devices signal on.
+imports, generates and refreshes trends on schedule. Most of the 13 migrations
+are applied — the newest few are tracked in "What is still outstanding" below
+until they have actually been pushed and verified — and `npm run test:rls`
+passed **309 assertions and 7 proofs** against the real database as of the
+project-folders and video-transfer work, including the project-file bucket and
+the private channel the two devices signal on.
 
 So this document now does two jobs: it is the **record** of how the live setup
 was put together, and the **recipe** if it ever has to be done again — a new
@@ -23,6 +25,9 @@ features:
 | 11b | set `cron_config.purge_function_url`, or the nightly cleanup does nothing |
 | 14b | reload the installed PWA so its service worker picks up the Share Target |
 | 14c | run a video transfer between two devices on one network |
+| 14f | push the language/demo migration, redeploy `vr-generate` and `vr-refresh-trends` |
+| 14g | push the own-idea migration, redeploy `vr-generate` |
+| 14h | push the weekly-goal migration, redeploy `vr-generate` for the new `hooks` kind |
 | 16 | the folder watcher — optional, not built, probably never needed |
 
 The local app also still works, untouched, on the `local-sqlite` branch:
@@ -853,6 +858,32 @@ Then a few quick checks:
 3. Close the tab while a script from New Project is still writing, then
    reopen it: it should say "This script didn't finish" with **Retry**, the
    same as a plain "Write script" would.
+
+### Step 14h. Push the weekly-goal migration and redeploy vr-generate
+
+```powershell
+cd D:\Project\viralradar
+npx supabase db push
+npx supabase functions deploy vr-generate --use-api
+```
+
+This adds `settings.weekly_goal` (default 5, nothing dropped) and a new
+`hooks` kind to `vr-generate` — 3 opening-line options for a subject, never a
+whole angle or a score. vr-research and the other functions are unchanged.
+
+Then a few quick checks:
+
+1. **Settings → Weekly goal.** Change the number, save, then open **Radar** —
+   the weekly goal card should read "N of (your number) videos this week",
+   with N counted from Results posted since Monday.
+2. On a Radar trend card, or a script's own screen, tap **Hook options**. A
+   sheet opens (from the bottom on a phone, the right edge on a wide screen)
+   with 3 different opening lines. **Copy hook** copies one; **Use this hook**
+   opens Write script with that line carried in as the angle.
+3. The restyle itself (design tokens, the bottom tab bar / sidebar shell,
+   self-hosted fonts) needs no migration or redeploy — reload the installed
+   PWA once so its service worker picks up the new shell files (fonts,
+   `index.html`, `styles.css`), the same as Step 14b.
 
 ## Step 15. Close the door (optional)
 
