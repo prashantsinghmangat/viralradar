@@ -736,14 +736,38 @@ test('runOwnIdeaPipeline shows a distinct step label at each stage', () => {
 
 test('a failed research step is swallowed: the pipeline continues without a pack rather than failing the whole thing', () => {
   const fn = appjs.slice(appjs.indexOf('async function runOwnIdeaPipeline'), appjs.indexOf('actions.generateIdeas'));
-  const researchBlock = fn.slice(fn.indexOf("mode === 'generate'"), fn.indexOf('pendingGen.set(id, { status: \'working\', kind: \'own_idea\', step: GENERATING.script }'));
+  const researchBlock = fn.slice(fn.indexOf("mode === 'generate'"), fn.indexOf("pendingGen.set(id, { status: 'working', kind: 'own_idea', step: GENERATING.script"));
   assert.match(researchBlock, /try \{/);
   assert.match(researchBlock, /data\.ai\.research\(/);
   assert.match(researchBlock, /catch \(e\) \{/);
-  assert.match(researchBlock, /continuing without them/i);
+  assert.match(researchBlock, /written without research/i);
   // The catch must not rethrow — a caught error that is thrown again would
   // still fail the whole pipeline, defeating the point of catching it.
   assert.ok(!/throw/.test(researchBlock), 'the research failure must not propagate and stop the script from being written');
+  // demoSource must stay null on this path — not reassigned anywhere inside
+  // the catch — which is what makes the eventual script's demo default to
+  // "Not checked yet" the same way one with no pack at all would.
+  const catchBlock = researchBlock.slice(researchBlock.indexOf('catch (e) {'));
+  assert.ok(!/demoSource\s*=/.test(catchBlock), 'the catch must not set demoSource — leave it null');
+});
+
+test('the research warning is a visible, persistent part of the progress view — not only a toast — and survives every later step', () => {
+  const fn = appjs.slice(appjs.indexOf('async function runOwnIdeaPipeline'), appjs.indexOf('actions.generateIdeas'));
+  assert.match(fn, /let warning = '';/);
+  const catchBlock = fn.slice(fn.indexOf('catch (e) {', fn.indexOf("mode === 'generate'")), fn.indexOf('toast(warning'));
+  assert.match(catchBlock, /warning = `Couldn't check your links/);
+  // Set on every pendingGen entry from here on, not just once — a set() call
+  // replaces the whole stored entry, so a warning not re-included on the next
+  // one would silently vanish the moment the "Writing script…" step starts.
+  const sets = [...fn.matchAll(/pendingGen\.set\(id, \{ status: 'working'[^}]*\}\)/g)].map((m) => m[0]);
+  assert.ok(sets.length >= 2, 'expected at least the research and writing steps to set pendingGen');
+  for (const set of sets.slice(1)) {
+    assert.match(set, /warning/, `a later working state must still carry the warning forward: ${set}`);
+  }
+  // And renderPendingGeneration must actually show it, persistently, while working.
+  const renderFn = appjs.slice(appjs.indexOf('function renderPendingGeneration'), appjs.indexOf('actions.retryPendingGeneration'));
+  assert.match(renderFn, /pending\.warning/);
+  assert.match(renderFn, /esc\(pending\.warning\)/, 'the warning text must be escaped like everything else put on screen');
 });
 
 test('research only runs for mode "generate", and only when links were given', () => {

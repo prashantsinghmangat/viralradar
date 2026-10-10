@@ -379,7 +379,7 @@ public/              the whole frontend — no build step, no framework
 
 scripts/             build, sync-shared, inspect-db, test-rls, rls-plan,
                      db-url, make-icons
-test/                33 files, 585 tests
+test/                33 files, 586 tests
 ```
 
 **Why `_shared/core/` is a copy.** A deployed Edge Function only receives files
@@ -992,8 +992,11 @@ Modes a) and b) navigate straight to the new script's screen with a
 step-by-step progress view — `runOwnIdeaPipeline()`, `runPendingGeneration()`'s
 multi-step sibling, reusing the exact same `pendingGen` Map and
 `localStorage` save so a closed tab still offers Retry on reopening. A failed
-research step is caught, not thrown: the pipeline carries on without a pack
-and says so, rather than failing the whole script over one unreachable link.
+research step is caught, not thrown: the pipeline carries on without a pack,
+with a warning ("Couldn't check your links…") shown on the progress view
+itself and carried forward through every later step — not just a toast that
+fades — and the resulting script's demo defaults to "Not checked yet" the
+same way one with no pack at all would, because nothing overrode it.
 
 ### Testing the half that cannot be tested
 

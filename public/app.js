@@ -2685,7 +2685,11 @@ function renderPendingGeneration(key, { onMessage } = {}) {
     // A multi-step pipeline (New Project's own-idea modes) sets its own label
     // for whichever step is running; everything else keys off GENERATING by kind.
     const label = pending.step || GENERATING[pending.kind] || 'Working…';
-    return `<div class="card stack"><p class="small"><span class="spin"></span> ${esc(label)}</p></div>`;
+    // A non-fatal problem earlier in the pipeline (a research step that
+    // failed) — carried forward so it stays visible through every later step,
+    // not shown once and lost the next time this re-renders.
+    const warning = pending.warning ? `<div class="notice">${esc(pending.warning)}</div>` : '';
+    return `<div class="card stack">${warning}<p class="small"><span class="spin"></span> ${esc(label)}</p></div>`;
   }
   return `<div class="card stack">
     <div class="notice">${esc(onMessage ? onMessage(pending.message) : pending.message)}</div>
@@ -2919,6 +2923,12 @@ async function runOwnIdeaPipeline(id, request) {
   try {
     let research = '';
     let demoSource = null;
+    // Carried into every later pendingGen.set() below, not shown once and
+    // dropped: each set() replaces the whole entry, and losing the warning
+    // partway through would make the script that comes back look like it was
+    // researched when it was not — exactly what demoSource staying null
+    // already prevents in the demo itself (see readDemo()'s checked default).
+    let warning = '';
     if (request.mode === 'generate' && request.links.length) {
       try {
         const found = await data.ai.research({ topic: request.title, urls: request.links, project_id: request.projectId });
@@ -2929,12 +2939,15 @@ async function runOwnIdeaPipeline(id, request) {
         // script from being written, only its demo from being able to claim
         // more confidence than was actually earned — see packDemoSource()'s
         // own checked/unchecked split for the no-pack-at-all case, which this
-        // falls into when nothing was fetched.
-        toast(`Could not check your links (${e.message}) — continuing without them.`, true, 7000);
+        // falls into when nothing was fetched (demoSource stays null, so the
+        // demo defaults to "Not checked yet" the same way it would with no
+        // pack at all).
+        warning = `Couldn't check your links (${e.message}) — script written without research.`;
+        toast(warning, true, 7000);
       }
     }
 
-    pendingGen.set(id, { status: 'working', kind: 'own_idea', step: GENERATING.script });
+    pendingGen.set(id, { status: 'working', kind: 'own_idea', step: GENERATING.script, warning });
     render();
     const genBody = request.mode === 'own_script'
       ? {
@@ -2949,7 +2962,7 @@ async function runOwnIdeaPipeline(id, request) {
       };
     const written = await data.ai.generate(genBody);
 
-    pendingGen.set(id, { status: 'working', kind: 'own_idea', step: GENERATING.edit_plan });
+    pendingGen.set(id, { status: 'working', kind: 'own_idea', step: GENERATING.edit_plan, warning });
     render();
     await data.ai.generate({ kind: 'edit_plan', script_id: id, language: request.language, length: request.length });
 

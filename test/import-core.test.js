@@ -101,6 +101,13 @@ test('an import never sends the pipeline columns, so stage and status survive', 
   const store = db.storeFor(USER_A);
   await runImport(wrap('script', [script('s1', 'Old title')]), store);
   db.setColumn('scripts', USER_A, 's1', 'stage', 'posted');
+  // language and own_idea are set the same way vr-generate sets them — a
+  // direct update(), never through the contract — for exactly the same
+  // reason stage and status are kept out of it: a plain re-import from
+  // Shorts Studio knows nothing of either and would otherwise null them
+  // straight back out.
+  db.setColumn('scripts', USER_A, 's1', 'language', 'Hindi');
+  db.setColumn('scripts', USER_A, 's1', 'own_idea', true);
   await runImport(wrap('ideas', [{ id: 'i1', title: 'Idea' }]), store);
   db.setColumn('ideas', USER_A, 'i1', 'status', 'picked');
 
@@ -110,6 +117,8 @@ test('an import never sends the pipeline columns, so stage and status survive', 
 
   assert.equal(db.get('scripts', USER_A, 's1').title, 'New title');
   assert.equal(db.get('scripts', USER_A, 's1').stage, 'posted', 'a re-import must not drag a script back to "to shoot"');
+  assert.equal(db.get('scripts', USER_A, 's1').language, 'Hindi', 'a re-import must not reset the script\'s own language');
+  assert.equal(db.get('scripts', USER_A, 's1').own_idea, true, 'a re-import must not clear the "My idea" badge');
   assert.equal(db.get('ideas', USER_A, 'i1').title, 'Idea renamed');
   assert.equal(db.get('ideas', USER_A, 'i1').status, 'picked');
 
@@ -118,6 +127,8 @@ test('an import never sends the pipeline columns, so stage and status survive', 
     for (const row of call.rows) {
       assert.equal('stage' in row, false, 'stage must never be sent by an import');
       assert.equal('status' in row, false, 'status must never be sent by an import');
+      assert.equal('language' in row, false, 'language must never be sent by an import — see shared/import-core.mjs COLUMNS.script');
+      assert.equal('own_idea' in row, false, 'own_idea must never be sent by an import — same reason');
       assert.equal('created_at' in row, false, 'created_at belongs to the database');
       assert.equal('updated_at' in row, false, 'updated_at belongs to the trigger');
     }
