@@ -19,10 +19,13 @@
   --border: #e2e5ec;
   --text: #10131a;
   --text-2: #4b5163;
-  --muted: #7c8294;
+  /* Every colour pair in here clears 4.5:1 against the surface it is used on;
+     the numbers are checked by the axe pass in the UI suite, not by eye. */
+  --muted: #5c6270;
   --accent: #2563eb;
   --accent-ink: #ffffff;
   --accent-soft: #e8eefc;
+  --accent-on-soft: #1b4ed8;
   --accent-hot: #e0383d;
   --accent-hot-soft: #fdeaea;
   --series-1: #2563eb;
@@ -31,11 +34,11 @@
   --good-soft: #e3f4ea;
   --bad: #c43a3a;
   --bad-soft: #fbe9e9;
-  --warn: #9a6400;
+  --warn: #7a4f00;
   --warn-soft: #fdf1d8;
-  --src-youtube: #c23b5a;
-  --src-hn: #2563eb;
-  --src-reddit: #c05a1f;
+  --src-youtube: #a81e45;
+  --src-hn: #1b4ed8;
+  --src-reddit: #9a4512;
   --src-github: #0f7b3f;
   --shadow: 0 1px 2px rgba(0,0,0,.05), 0 2px 8px rgba(0,0,0,.04);
   --shadow-lg: 0 12px 32px rgba(16,19,26,.14);
@@ -57,10 +60,10 @@
   :root:not([data-theme="light"]) {
     color-scheme: dark;
     --bg: #0f1117; --surface: #1a1d27; --surface-2: #242938; --surface-3: #2d3344; --border: rgba(255,255,255,.08);
-    --text: #f8fafc; --text-2: #c2c6d6; --muted: #8c909f;
-    --accent: #3b82f6; --accent-ink: #ffffff; --accent-soft: rgba(59,130,246,.16); --series-1: #3b82f6; --grid: #2a2a28;
+    --text: #f8fafc; --text-2: #c2c6d6; --muted: #a2a7b8;
+    --accent: #4d8eff; --accent-ink: #00224d; --accent-soft: rgba(77,142,255,.18); --accent-on-soft: #8fb8ff; --series-1: #4d8eff; --grid: #2a2a28;
     --accent-hot: #ff5757; --accent-hot-soft: rgba(255,87,87,.16);
-    --good: #10b981; --good-soft: rgba(16,185,129,.16); --bad: #ef4444; --bad-soft: rgba(239,68,68,.16); --warn: #f59e0b; --warn-soft: rgba(245,158,11,.16);
+    --good: #10b981; --good-soft: rgba(16,185,129,.16); --bad: #f87171; --bad-soft: rgba(248,113,113,.16); --warn: #f59e0b; --warn-soft: rgba(245,158,11,.16);
     --src-youtube: #ff9e99; --src-hn: #adc6ff; --src-reddit: #ffb347; --src-github: #4edea3;
     --shadow: 0 1px 2px rgba(0,0,0,.4);
     --shadow-lg: 0 12px 32px rgba(0,0,0,.45);
@@ -69,10 +72,10 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
   --bg: #0f1117; --surface: #1a1d27; --surface-2: #242938; --surface-3: #2d3344; --border: rgba(255,255,255,.08);
-  --text: #f8fafc; --text-2: #c2c6d6; --muted: #8c909f;
-  --accent: #3b82f6; --accent-ink: #ffffff; --accent-soft: rgba(59,130,246,.16); --series-1: #3b82f6; --grid: #2a2a28;
+  --text: #f8fafc; --text-2: #c2c6d6; --muted: #a2a7b8;
+  --accent: #4d8eff; --accent-ink: #00224d; --accent-soft: rgba(77,142,255,.18); --accent-on-soft: #8fb8ff; --series-1: #4d8eff; --grid: #2a2a28;
   --accent-hot: #ff5757; --accent-hot-soft: rgba(255,87,87,.16);
-  --good: #10b981; --good-soft: rgba(16,185,129,.16); --bad: #ef4444; --bad-soft: rgba(239,68,68,.16); --warn: #f59e0b; --warn-soft: rgba(245,158,11,.16);
+  --good: #10b981; --good-soft: rgba(16,185,129,.16); --bad: #f87171; --bad-soft: rgba(248,113,113,.16); --warn: #f59e0b; --warn-soft: rgba(245,158,11,.16);
   --src-youtube: #ff9e99; --src-hn: #adc6ff; --src-reddit: #ffb347; --src-github: #4edea3;
   --shadow: 0 1px 2px rgba(0,0,0,.4);
   --shadow-lg: 0 12px 32px rgba(0,0,0,.45);
@@ -94,6 +97,24 @@ h3 { font-size: .95rem; margin: 0 0 .35rem; }
 .muted { color: var(--muted); }
 .small { font-size: .85rem; }
 .nowrap { white-space: nowrap; }
+
+/* Long text must never set the width of its container.
+   A pasted prompt, a tracking-laden URL or a 40-character hashtag is one
+   unbreakable token; left alone it forces its card wide, which pushes the
+   page wider than the phone and drags neighbouring cards out of line.
+   `anywhere` rather than `break-word` on purpose: only `anywhere` also
+   shrinks the element's min-content width, which is what the grid measures.
+   Written with :where() so it carries no specificity and any component rule
+   can still opt out. Buttons and table cells are left alone: they set their
+   own wrapping, and breaking a button label mid-word reads as damage. */
+:where(div, span, p, h1, h2, h3, h4, h5, li, dd, dt, pre, a, summary, label, figcaption) {
+  overflow-wrap: anywhere;
+}
+:where(button, .btn, .chip, th, td) { overflow-wrap: normal; }
+pre { overflow-wrap: anywhere; white-space: pre-wrap; }
+/* Grid and flex children default to min-width:auto, which lets that same
+   long token overflow the track it was given. */
+.grid > *, .board > *, .col, .card, .tiles > *, .charts > * { min-width: 0; }
 
 /* Top bar + navigation */
 .topbar {
@@ -159,8 +180,14 @@ button:disabled { opacity: .55; cursor: default; }
 .sm { min-height: 32px; padding: 4px 10px; font-size: .82rem; border-radius: 8px; }
 .icon-btn { min-height: 36px; width: 36px; padding: 0; border-radius: 50%; font-size: 1.1rem; }
 .copied { background: var(--good-soft) !important; color: var(--good) !important; border-color: var(--good) !important; }
-input[type=text], textarea, select {
-  font: inherit; width: 100%; padding: 10px 12px; border-radius: 10px;
+
+/* Every text-entry control, not just [type=text]. The sign-in email and
+   password boxes and the weekly-goal number box matched none of the old
+   selector, so they shipped completely unstyled — 21px tall, system border,
+   and far under the minimum tap size. */
+input:not([type=checkbox]):not([type=radio]):not([type=file]):not([type=hidden]),
+textarea, select {
+  font: inherit; width: 100%; min-height: 44px; padding: 10px 12px; border-radius: 10px;
   border: 1px solid var(--border); background: var(--surface); color: var(--text);
 }
 input:focus, textarea:focus, select:focus, button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -172,7 +199,7 @@ label.field { display: block; font-weight: 600; font-size: .85rem; margin: 0 0 6
   min-height: 32px; padding: 4px 12px; border-radius: var(--radius-full); font-family: var(--font-label); font-size: .82rem; font-weight: 600;
   border: 1px solid var(--border); background: var(--surface); color: var(--text-2);
 }
-.chip.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.chip.on { background: var(--accent-soft); color: var(--accent-on-soft); border-color: var(--accent); }
 .chip-row { display: flex; align-items: center; gap: 6px; overflow-x: auto; -ms-overflow-style: none; scrollbar-width: none; padding-bottom: 2px; }
 .chip-row::-webkit-scrollbar { display: none; }
 .chip-row .chip { flex-shrink: 0; }
@@ -181,7 +208,7 @@ label.field { display: block; font-weight: 600; font-size: .85rem; margin: 0 0 6
 .badge.good { background: var(--good-soft); color: var(--good); }
 .badge.bad { background: var(--bad-soft); color: var(--bad); }
 .badge.warn { background: var(--warn-soft); color: var(--warn); }
-.badge.accent { background: var(--accent-soft); color: var(--accent); }
+.badge.accent { background: var(--accent-soft); color: var(--accent-on-soft); }
 .badge.hot { background: var(--accent-hot-soft); color: var(--accent-hot); }
 .badge.source-youtube { background: var(--accent-hot-soft); color: var(--src-youtube); }
 .badge.source-hn { background: var(--accent-soft); color: var(--src-hn); }
@@ -236,7 +263,8 @@ dialog.new-project-dialog .sheet { max-height: calc(100vh - 32px); overflow-y: a
 .idea dt { color: var(--muted); font-weight: 600; }
 .idea dd { margin: 0; overflow-wrap: anywhere; }
 .idea.picked { border-color: var(--good); }
-.idea.skipped { opacity: .55; }
+/* Dimmed, but never below 4.5:1 — opacity applies to the text too. */
+.idea.skipped { opacity: .8; }
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
 .seg button { border: 0; border-radius: 0; min-height: 34px; }
 .seg button + button { border-left: 1px solid var(--border); }
@@ -245,7 +273,7 @@ dialog.new-project-dialog .sheet { max-height: calc(100vh - 32px); overflow-y: a
 .seg button.on { background: var(--accent); color: var(--accent-ink); }
 
 /* Scripts board */
-.board { display: grid; gap: 12px; grid-template-columns: 1fr; }
+.board { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); }
 @media (min-width: 1024px) { .board { grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: start; } }
 .col { background: var(--surface-2); border-radius: var(--radius); padding: 10px; min-height: 80px; transition: background .15s; }
 .col.drop { background: var(--accent-soft); outline: 2px dashed var(--accent); }
@@ -329,7 +357,8 @@ tr:last-child td { border-bottom: 0; }
    off the page; yellow means go and check it before recording. */
 .pack-block { margin-bottom: 18px; padding: 12px; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--surface-2); display: grid; gap: 10px; }
 .pack-block .page-head { flex-wrap: wrap; gap: 8px; }
-.pack-url { font-size: .82rem; overflow-wrap: anywhere; }
+.pack-link { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; }
+.pack-url { font-size: .82rem; overflow-wrap: anywhere; min-width: 0; }
 .pack-steps { margin: 0; padding-left: 20px; display: grid; gap: 6px; font-size: .9rem; }
 .pack-steps li { overflow-wrap: anywhere; }
 .pack-block dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: .88rem; }
@@ -409,7 +438,9 @@ tr:last-child td { border-bottom: 0; }
   background: var(--text); color: var(--bg); box-shadow: 0 6px 24px rgba(0,0,0,.25);
   animation: toast-in .2s ease-out;
 }
-.toast.bad { background: var(--bad); color: #fff; }
+/* Not var(--bad): that tone is tuned to be read AS text on a dark surface, so
+   white sitting ON it only reaches 3.3:1. This one carries white at 6.5:1. */
+.toast.bad { background: #b91c1c; color: #fff; }
 @keyframes toast-in { from { transform: translateY(10px); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
 
@@ -469,24 +500,26 @@ body:has(.sticky-actions) { padding-bottom: calc(var(--nav-h) + env(safe-area-in
    that existed when it was first written. */
 @media (min-width: 1024px) {
   body { padding-bottom: 32px; }
+  /* The top bar spans the whole width and keeps its blur. Nothing inside it is
+     position:fixed any more — see the note in index.html — so the blur cannot
+     trap the sidebar. The brand simply occupies the sidebar's column as an
+     ordinary flex child, which is what lines the two up. */
   .topbar {
-    position: fixed; top: 0; left: 260px; right: 0; height: 64px; z-index: 25;
+    position: fixed; top: 0; left: 0; right: 0; height: 64px; z-index: 25;
     background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-    padding: 0 var(--space-lg); border-bottom: 1px solid var(--border);
+    padding: 0 var(--space-lg) 0 0; border-bottom: 1px solid var(--border);
   }
   .view { margin-left: 260px; max-width: 1280px; padding-top: calc(64px + var(--space-lg)); }
-  .brand {
-    position: fixed; top: 0; left: 0; width: 260px; height: 64px; z-index: 36;
-    padding-left: var(--space-md); margin: 0;
-  }
+  .brand { flex: 0 0 260px; height: 64px; padding-left: var(--space-md); margin: 0; }
   .nav {
-    position: fixed; top: 64px; left: 0; bottom: 0; width: 260px; z-index: 30;
+    position: fixed; top: 64px; left: 0; bottom: 0; width: 260px; z-index: 24;
     display: flex; flex-direction: column; height: auto; padding: var(--space-sm);
     border: 0; border-right: 1px solid var(--border); background: var(--surface-2); gap: 4px;
+    overflow-y: auto;
   }
   .nav a, .nav-more { flex-direction: row; justify-content: flex-start; gap: 10px; padding: 9px 12px; border-radius: var(--radius-sm); font-size: .9rem; }
   .nav a:hover { background: var(--surface); color: var(--text); }
-  .nav a.active { background: var(--accent-soft); color: var(--accent); }
+  .nav a.active { background: var(--accent-soft); color: var(--accent-on-soft); }
   .nav-wide { display: flex; }
   .nav-more { display: none; }
   .topbar-search {
@@ -505,4 +538,18 @@ body:has(.sticky-actions) { padding-bottom: calc(var(--nav-h) + env(safe-area-in
     margin: 0 0 0 auto; height: 100vh; max-height: 100vh; width: min(420px, 100% - 32px);
     border-radius: var(--radius-xl) 0 0 var(--radius-xl);
   }
+}
+
+/* Phone widths: nothing you are meant to hit is smaller than 44x44, which is
+   the floor the design system sets and the floor a thumb needs. Applied by
+   width rather than by pointer type so a narrow desktop window gets it too —
+   that is the same window someone resizes to test with. */
+@media (max-width: 767px) {
+  button, .btn, .seg button, select { min-height: 44px; }
+  .chip { min-height: 44px; min-width: 44px; }
+  .sm { min-height: 44px; min-width: 44px; padding: 8px 12px; }
+  .icon-btn { min-height: 44px; width: 44px; }
+  .linkish { min-height: 44px; display: inline-flex; align-items: center; }
+  .brand { min-height: 44px; }
+  .check-item { min-height: 44px; align-items: center; }
 }

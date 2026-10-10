@@ -543,8 +543,11 @@ const liveBadge = (url, reachable) => {
   return `<span class="badge ${reachable ? 'good' : 'bad'}">${reachable ? '● Live' : '✕ Not reachable'}</span>`;
 };
 
+// The URL and its badge are one wrapping row, not two inline boxes: a long
+// URL wraps to several lines, and an inline badge hanging off the end of it
+// sat on top of the last line instead of after it.
 const packLink = (url, reachable) => (url
-  ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" class="pack-url">${esc(url)}</a> ${liveBadge(url, reachable)}`
+  ? `<span class="pack-link"><a href="${esc(url)}" target="_blank" rel="noopener noreferrer" class="pack-url">${esc(url)}</a>${liveBadge(url, reachable)}</span>`
   : '<span class="muted small">no URL</span>');
 
 const packList = (title, items) => (items && items.length
@@ -1460,7 +1463,7 @@ async function renderResults() {
     </div>
 
     <h2>All results</h2>
-    <div class="table-wrap"><table>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="All results"><table>
       <thead><tr><th>Posted</th><th>Title</th><th>Platforms</th><th>Format</th><th>Hook</th><th>Len</th><th>CTA</th>
         <th class="num">Views</th><th class="num">Likes</th><th class="num">Comments</th><th class="num">Shares</th><th class="num">Saves</th><th class="num">Save %</th><th class="num">Follows</th></tr></thead>
       <tbody>${rows.map((r) => `<tr>
@@ -3143,7 +3146,7 @@ async function renderSettings() {
 
       <section class="card stack">
         <h2>Niche keywords</h2>
-        <textarea id="keywords" rows="7" style="font-family:inherit">${esc((s.niche_keywords || []).join('\n'))}</textarea>
+        <textarea id="keywords" rows="7" aria-label="Niche keywords, one per line" style="font-family:inherit">${esc((s.niche_keywords || []).join('\n'))}</textarea>
         <p class="muted small">One per line. Each keyword is one YouTube search per refresh; the radar stops at 25 searches a day. Today: <b>${yt.requests}</b> searches, <b>${fmt(yt.units)}</b> units.</p>
         <div><button type="button" class="primary" data-action="saveKeywords">Save keywords</button></div>
       </section>

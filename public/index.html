@@ -19,16 +19,6 @@
 <body>
   <header class="topbar">
     <a class="brand" href="#/radar"><span class="logo" aria-hidden="true"></span>ViralRadar</a>
-    <nav class="nav" id="nav" aria-label="Main">
-      <a href="#/radar" data-route="radar"><span class="ico">📡</span><span>Radar</span></a>
-      <a href="#/ideas" data-route="ideas"><span class="ico">💡</span><span>Ideas</span></a>
-      <a href="#/scripts" data-route="scripts"><span class="ico">🎬</span><span>Scripts</span></a>
-      <a href="#/projects" data-route="projects"><span class="ico">📁</span><span>Projects</span></a>
-      <a href="#/results" data-route="results" class="nav-wide"><span class="ico">📈</span><span>Results</span></a>
-      <a href="#/import" data-route="import" class="nav-wide"><span class="ico">⬇️</span><span>Import</span></a>
-      <a href="#/settings" data-route="settings" class="nav-wide"><span class="ico">⚙️</span><span>Settings</span></a>
-      <button type="button" class="nav-more" id="moreBtn" aria-haspopup="dialog" aria-label="More"><span class="ico">⋯</span><span>More</span></button>
-    </nav>
     <div class="topbar-search" id="topSearchWrap">
       <span class="ico" aria-hidden="true">🔎</span>
       <input type="text" id="topSearch" placeholder="Search this screen…" aria-label="Search this screen">
@@ -37,6 +27,24 @@
     <button type="button" class="primary topbar-new" id="newScriptBtn" data-action="newScript">+ New script</button>
     <button class="icon-btn" id="themeBtn" type="button" aria-label="Toggle light/dark mode" title="Toggle light/dark">◐</button>
   </header>
+
+  <!-- Deliberately a SIBLING of the header, not a child of it. The header
+       carries a backdrop-filter, which makes it the containing block for any
+       position:fixed descendant — so a nav inside it would be positioned
+       against the header's own box instead of the viewport. That is what
+       collapsed the desktop sidebar to 16px and spilled its links across the
+       page. The same trap is noted against the phone's bottom bar in
+       styles.css; out here, neither can fall into it. -->
+  <nav class="nav" id="nav" aria-label="Main">
+    <a href="#/radar" data-route="radar"><span class="ico">📡</span><span>Radar</span></a>
+    <a href="#/ideas" data-route="ideas"><span class="ico">💡</span><span>Ideas</span></a>
+    <a href="#/scripts" data-route="scripts"><span class="ico">🎬</span><span>Scripts</span></a>
+    <a href="#/projects" data-route="projects"><span class="ico">📁</span><span>Projects</span></a>
+    <a href="#/results" data-route="results" class="nav-wide"><span class="ico">📈</span><span>Results</span></a>
+    <a href="#/import" data-route="import" class="nav-wide"><span class="ico">⬇️</span><span>Import</span></a>
+    <a href="#/settings" data-route="settings" class="nav-wide"><span class="ico">⚙️</span><span>Settings</span></a>
+    <button type="button" class="nav-more" id="moreBtn" aria-haspopup="dialog" aria-label="More"><span class="ico">⋯</span><span>More</span></button>
+  </nav>
 
   <!-- The "More" sheet, for the 3 screens + research packs that don't fit the
        mobile bottom bar. Desktop shows all of these in the sidebar instead,
