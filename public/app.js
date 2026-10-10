@@ -126,6 +126,11 @@ $('#themeBtn').addEventListener('click', () => {
   try { localStorage.setItem('vr-theme', root.dataset.theme); } catch { /* private mode */ }
 });
 
+// Declared early: several top-level wiring blocks below (the More sheet's
+// nav, the desktop top bar's New script button) add to this before the
+// router section — where it used to live — ever runs.
+const actions = {};
+
 // ---------- "More" sheet (mobile nav overflow) ----------
 const moreBtn = $('#moreBtn');
 const moreSheet = $('#moreSheet');
@@ -296,7 +301,6 @@ window.addEventListener('hashchange', () => { copyStore = []; render().then(() =
 // function, for the hook sheet, which lives outside #view (so it can be
 // anchored to the right edge on desktop) and so would never reach this
 // listener on its own.
-const actions = {};
 async function handleActionClick(e) {
   const btn = e.target.closest('[data-copy],[data-action]');
   if (!btn) return;
