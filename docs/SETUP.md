@@ -388,13 +388,17 @@ Netlify deploys from GitHub, so this has to exist before Part 3.
 cd D:\Project\viralradar
 git remote add origin https://github.com/<your-username>/viralradar.git
 git push -u origin main
-git push origin cloud
+git push origin local-sqlite
 ```
 
 Both branches end up on GitHub:
 
-- `main` — the old local-only version, untouched, still runs with `npm start`
-- `cloud` — the new synced version, which is what Netlify will deploy
+- `main` — the synced cloud version, and what Netlify deploys
+- `local-sqlite` — the old local-only version, untouched, still runs with
+  `npm start` (tagged `v1-local`); it is never deployed
+
+An abandoned `cloud` branch also exists on the remote, from before `main`
+became the production branch. Nothing reads it; ignore it.
 
 If git asks you to sign in, a browser window will open; approve it there.
 
@@ -572,7 +576,7 @@ security. It belongs only in Supabase secrets.
 Your site gets an address like `https://viralradar-abc123.netlify.app`. You can
 rename it under **Site configuration → Change site name**.
 
-From then on, every push to the `cloud` branch redeploys automatically.
+From then on, every push to the `main` branch redeploys automatically.
 
 ## Step 13. Log in
 
