@@ -1,8 +1,8 @@
-// vr-generate: ask an AI for ideas, a script, or an edit plan.
+// vr-generate: ask an AI for ideas, a script, an edit plan or cover ideas.
 //
 //   POST /functions/v1/vr-generate
 //   Authorization: Bearer <user JWT>
-//   Body: { kind: "ideas" | "angles" | "hooks" | "script" | "edit_plan" | "test", ... }
+//   Body: { kind: "ideas" | "angles" | "hooks" | "script" | "edit_plan" | "thumbnail" | "test", ... }
 //
 // This function exists only because of the API keys. They are read from its
 // environment and never leave it — not to the browser, not to the phone, not
@@ -16,7 +16,10 @@
 import { authenticate, AuthError } from '../_shared/auth.ts';
 import { corsHeaders, json, preflight } from '../_shared/cors.ts';
 import { generateJson, testProviders } from '../_shared/core/generate-core.mjs';
-import { ideasPrompt, anglesPrompt, hooksPrompt, scriptPrompt, editPlanPrompt, formatScriptPrompt } from '../_shared/core/prompts.mjs';
+import {
+  ideasPrompt, anglesPrompt, hooksPrompt, scriptPrompt, editPlanPrompt, formatScriptPrompt, thumbnailPrompt,
+} from '../_shared/core/prompts.mjs';
+import { readBrandKit, readThumbnail } from '../_shared/core/thumbnail.mjs';
 import { resultsLesson } from '../_shared/core/learning.mjs';
 import { runImport } from '../_shared/core/import-core.mjs';
 import { istDay } from '../_shared/core/time.mjs';
@@ -26,7 +29,10 @@ import {
   DEFAULT_KEYWORDS, DEFAULT_LANGUAGE, DEFAULT_LENGTH,
 } from '../_shared/core/defaults.mjs';
 
-const KINDS = ['ideas', 'angles', 'hooks', 'script', 'format_script', 'edit_plan', 'test'];
+const KINDS = ['ideas', 'angles', 'hooks', 'script', 'format_script', 'edit_plan', 'thumbnail', 'test'];
+// Written for a script that already exists, saved back into its `raw`, and
+// never sent a language of their own: both read the script's.
+const SCRIPT_ADDON_KINDS = ['edit_plan', 'thumbnail'];
 // A script written straight from the creator's own words, same as 'script'
 // everywhere except which prompt builds it and the keep_exact check below.
 const SCRIPT_KINDS = ['script', 'format_script'];
@@ -54,6 +60,10 @@ async function settingsFor(client: { from: Function }, userId: string) {
     length: (data?.default_length || DEFAULT_LENGTH).trim(),
     keywords: Array.isArray(data?.niche_keywords) && data.niche_keywords.length
       ? data.niche_keywords : DEFAULT_KEYWORDS,
+    // Read here rather than sent from the browser, the same reason the lesson
+    // is: the page could be out of date, and a cover briefed against last
+    // week's colours is a cover that has to be made twice.
+    brand: readBrandKit(data ?? {}),
   };
 }
 
@@ -153,8 +163,12 @@ Deno.serve(async (req: Request) => {
     const language = String(body.language || settings.language);
     const length = String(body.length || settings.length);
 
-    // ---- an edit plan for a script that already exists ----
-    if (kind === 'edit_plan') {
+    // ---- an edit plan, or cover ideas, for a script that already exists ----
+    //
+    // Both are add-ons to a script rather than items of their own: they are
+    // written from it, saved back into its `raw` beside whatever an import
+    // left there, and returned so the screen can draw them without a re-read.
+    if (SCRIPT_ADDON_KINDS.includes(kind)) {
       const scriptId = String(body.script_id ?? '');
       if (!scriptId) return json(req, { ok: false, error: 'Which script? No script_id was sent.' }, 400);
 
@@ -164,21 +178,40 @@ Deno.serve(async (req: Request) => {
 
       // The script's OWN language, if the sheet set one when it was written —
       // never the account-wide default, and never whatever this particular
-      // request happened to send. An edit plan has to match the script it is
-      // for, not the language someone was last generating something else in.
+      // request happened to send. An edit plan, and the four words on a cover,
+      // have to match the script they are for, not the language someone was
+      // last generating something else in.
       const scriptLanguage = script.language || language;
 
-      const result = await generateJson({ ...ask, prompt: editPlanPrompt({ script, language: scriptLanguage, length, today }) });
+      const prompt = kind === 'thumbnail'
+        ? thumbnailPrompt({ script, language: scriptLanguage, brand: settings.brand, today })
+        : editPlanPrompt({ script, language: scriptLanguage, length, today });
+      const result = await generateJson({ ...ask, prompt });
       await countCall(client, userId, result.provider);
 
-      // The plan lives inside raw, where an imported one lives, so one piece of
-      // code reads both. Everything else in raw is left exactly as it was.
-      const raw = { ...(script.raw ?? {}), edit_plan: result.value };
-      const { error: saveError } = await client.from('scripts').update({ raw }).eq('id', scriptId);
-      if (saveError) return json(req, { ok: false, error: `Could not save the edit plan: ${saveError.message}` }, 500);
+      // Cover ideas with no usable concept in them are worth saying so about
+      // rather than saving: the screen would show its empty state back, which
+      // reads as "the button did nothing".
+      if (kind === 'thumbnail' && !readThumbnail({ raw: { thumbnail: result.value } })) {
+        return json(req, { ok: false, error: `${result.provider} replied, but with no usable cover ideas in it. Try again.` }, 502);
+      }
 
-      console.log(`[vr-generate] edit_plan for ${scriptId} by ${result.provider}`);
-      return json(req, { ok: true, kind, provider: result.provider, model: result.model, script_id: scriptId, edit_plan: result.value });
+      // It lives inside raw, where an imported one lives, so one piece of code
+      // reads both. Everything else in raw is left exactly as it was.
+      const field = kind === 'thumbnail' ? 'thumbnail' : 'edit_plan';
+      const raw = { ...(script.raw ?? {}), [field]: result.value };
+      const { error: saveError } = await client.from('scripts').update({ raw }).eq('id', scriptId);
+      if (saveError) {
+        const what = kind === 'thumbnail' ? 'the cover ideas' : 'the edit plan';
+        return json(req, { ok: false, error: `Could not save ${what}: ${saveError.message}` }, 500);
+      }
+
+      console.log(`[vr-generate] ${kind} for ${scriptId} by ${result.provider}`);
+      return json(req, {
+        ok: true, kind, provider: result.provider, model: result.model, script_id: scriptId,
+        [field]: result.value,
+        message: kind === 'thumbnail' ? 'Cover ideas ready' : 'Edit plan ready',
+      });
     }
 
     // Every remaining kind leans on what has already worked, when there is

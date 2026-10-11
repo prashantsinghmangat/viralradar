@@ -784,9 +784,14 @@ deploy, since the feature is entirely in the browser.
 5. If the project has a script (**🎬 Its script** on the project's own
    screen), rescan and check that `02-script/script.md` and
    `02-script/captions.txt` reflect it; if the script carries an edit plan,
-   `04-edit/edit-plan.md` too.
+   `04-edit/edit-plan.md` too, and if it carries cover ideas,
+   `06-cover/cover-brief.md` with all three concepts in it.
 6. Drop any file into `05-final`. The checklist should show a final video, and
    — if the script is not already Edited or Posted — offer to move it there.
+   Then drop any image into `06-cover` and rescan: **Cover** ticks only now,
+   not when `cover-brief.md` alone was written. Delete your image again and the
+   tick goes away while the brief stays — a sync only ever rewrites that one
+   file, and never anything else in `06-cover`.
 7. Rename the project's title and rescan. The folder on disk must **not**
    rename or duplicate; it keeps the name it was given the first time.
 8. **Settings → Reconnect / Forget this folder.** Forgetting it and choosing
@@ -820,6 +825,14 @@ Then a few quick checks:
    card on the **Scripts** board.
 3. If it has a demo, **"How to do the demo"** appears above the edit plan,
    with each prompt in its own block with a **Copy** button.
+3b. **Make cover ideas** below the edit plan. No Language/Length sheet should
+   appear — the cover always uses the script's own language. Three concept
+   cards should land, each with its cover text (4 words or fewer, in that
+   language), layout, colours, photo and screenshot notes, and three separate
+   Copy buttons: image prompt, Canva steps, Stitch prompt. Check an image
+   prompt mentions no face, no interface and no text. Then fill in
+   **Settings → Brand kit** and press **↻ Redo**: the new concepts should use
+   your colours and put your face on the side you chose.
 4. **Settings → Radar languages.** Uncheck everything but one language you
    do not usually get trends in, save, then **Refresh now**. The summary
    should say *"Filtered out N videos in other languages"* when it drops any.

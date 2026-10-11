@@ -117,7 +117,7 @@ maintained by a trigger.
 | `scripts` | `(user_id, id)` | topic, title, `beats` jsonb, captions, `hashtags[]`, `broll[]`, audio, `stage` to_shoot/shot/edited/posted, `language` |
 | `results` | `(user_id, id)` | posted_on, `platforms[]`, format, hook, len, cta, views/likes/comments/shares/saves/follows, `script_id` |
 | `trends` | `(user_id, url)` | title, source, summary, thumbnail, views, views_per_hour, score, fetched_on, `extra` jsonb |
-| `settings` | `user_id` | `niche_keywords[]`, language, default_length, `ai_order[]`, gemini_model, openrouter_model, `radar_languages[]` |
+| `settings` | `user_id` | `niche_keywords[]`, language, default_length, `ai_order[]`, gemini_model, openrouter_model, `radar_languages[]`, the brand kit (`brand_colors[]` ≤ 3, brand_font, brand_handle, brand_face `''`/left/right) |
 | `usage` | `(user_id, date, provider)` | units, requests — YouTube quota and AI call counts |
 | `import_tokens` | `id` | `token_hash` (SHA-256 only), label, last_used_at |
 | `projects` | `(user_id, id)` | title, `script_id`, `status` active/posted/archived, `is_inbox`, `posted_at`, `local_folder_name`, `language` |
@@ -132,7 +132,10 @@ Notes that matter:
   `date` / `created_at` / `logged_at`, falling back to import time. The UI sorts
   by it.
 - **`raw` jsonb** keeps the original export item whole, so a new Shorts Studio
-  field is never lost even though no column exists for it.
+  field is never lost even though no column exists for it. Three things ride in
+  there rather than in columns of their own — `edit_plan`, `demo` and
+  `thumbnail` — which is why each of them can be imported from Shorts Studio
+  and written here by `vr-generate` with no migration either way.
 - **`status` and `stage` are never written by an import**, so re-importing a
   script cannot drag it back from "posted" to "to shoot".
 - **`results.script_id` is not a foreign key** on purpose: a bundle export can
@@ -324,6 +327,8 @@ shared/              runtime-agnostic cores — Node, Deno and the browser all u
   generate-core.mjs    ask an AI, fall back to the next, repair bad JSON
   prompts.mjs          prompt rules, output shapes, JSON extraction
   edit-plan.mjs        read and render the optional edit_plan on a script
+  thumbnail.mjs        the optional thumbnail on a script (three cover
+                       concepts), the brand kit, and the cover brief
   learning.mjs         what logged results say, as something a prompt can lean
                        on — with the thresholds that keep it quiet until there
                        is enough to say
@@ -511,11 +516,11 @@ kept; the cloud version changes where the data comes from and adds the AI.
 |---|---|---|
 | **Radar** | trend cards by source, velocity score, Refresh now | **Write script**, **Find angles**, **Research Pack** and **Hook options** (3 opening-line choices, in a sheet) on any trend card — research uses the trend's own URL, so no page is guessed. A **weekly goal** card ("N of G videos this week"), G editable in Settings |
 | **Ideas** | grouped by day, Picked / Skip, filters | **Generate ideas**, and **Write script** / **Find angles** / **Research Pack** on every idea |
-| **Scripts** | board: To shoot → Shot → Edited → Posted, drag or arrows; detail view with teleprompter and copy buttons | arrives live when generated or imported elsewhere; the **edit plan** below the teleprompter, **Make edit plan** when a script has none, **Hook options**, and a tickable **pre-flight checklist** on the demo section (saved per script, per device) |
+| **Scripts** | board: To shoot → Shot → Edited → Posted, drag or arrows; detail view with teleprompter and copy buttons | arrives live when generated or imported elsewhere; the **edit plan** below the teleprompter, **Make edit plan** when a script has none, the **Cover** section below that (**Make cover ideas** → three concepts, each with its cover text, layout, colours, photo and screenshot notes and separate Copy buttons for the image prompt, the Canva steps and the Stitch prompt), **Hook options**, and a tickable **pre-flight checklist** on the demo section (saved per script, per device) |
 | **Projects** | *new* | a folder per video: notes, links and files that reach the other device in a second. **Open project** from any script, **+ New project** from your own idea (generate everything, format a script you already wrote, or just save the idea as a note), an **Inbox** for anything shared in from Android, a per-item note saying which device it came from, and **Send a video** — straight to the other device over WebRTC, with the copy checked byte for byte |
 | **Results** | totals, avg views, save rate, streak, bars by format/hook/len/CTA, top 5, full table | same numbers, computed in the browser |
 | **Import** | paste box, file upload, recent imports log | **Paste from Shorts Studio** button (clipboard), same on Ideas and Scripts |
-| **Settings** | watch folder, keywords, YouTube quota, LAN URLs, backup/restore | niche keywords, language, default length, AI order and models, **Test AI**, import token management, backup/restore, **this device's name**, the **weekly goal** number, and how much of the 300 MB of project files is used |
+| **Settings** | watch folder, keywords, YouTube quota, LAN URLs, backup/restore | niche keywords, language, default length, AI order and models, **Test AI**, a **brand kit** (up to 3 colours, a font preference, the handle and which side the face sits on — all optional, used in every cover idea), import token management, backup/restore, **this device's name**, the **weekly goal** number, and how much of the 300 MB of project files is used |
 
 **Visual design.** Restyled from a Google Stitch export (`design/stitch/`):
 design tokens in `public/styles.css`, self-hosted Plus Jakarta Sans + Inter, a
@@ -607,7 +612,7 @@ and all seven screens read and write the real database:
   without anything being open.
 - **Ideas / Scripts / Results** — all the local app's screens, including the
   teleprompter, the board, the analytics, and the edit plan below the script.
-- **AI** — ideas, scripts and edit plans, from Gemini, falling back to
+- **AI** — ideas, scripts, edit plans and cover ideas, from Gemini, falling back to
   OpenRouter. Verified live in both directions: with `gemini_model` pointed at a
   model that does not exist, all three came back from OpenRouter and were
   written with `source = 'openrouter'`. Test AI shows both answering
@@ -858,7 +863,7 @@ Chrome and Edge on desktop can give a website write access to a folder a person
 chose — the File System Access API — and that is the second, optional half of
 a project folder: one subfolder on the laptop per project (`01-research`
 through `06-cover`), kept in step with the research pack, the script, the
-captions and the edit plan that already live in the database. Everywhere else
+captions, the edit plan and the cover brief that already live in the database. Everywhere else
 the API does not exist, and Settings says so rather than showing a dead button.
 
 **Same split as video transfer, for the same reason.** A real
@@ -875,9 +880,12 @@ and the IndexedDB handle that survives between visits.
 **The one rule that matters most: never touch a file the app did not make.**
 A sync only ever writes or deletes a name on a fixed list —
 `research-pack.md`, `note-<id>.md`, `script.md`, `captions.txt`,
-`edit-plan.md` — and `isGeneratedName()` is the single gate every write and
-delete goes through. Raw footage, a half-finished edit, a screenshot dragged
-in by hand: none of it matches, so none of it is ever at risk. This is the
+`edit-plan.md`, `cover-brief.md` — and `isGeneratedName()` is the single gate
+every write and delete goes through. Raw footage, a half-finished edit, a
+screenshot dragged in by hand: none of it matches, so none of it is ever at
+risk. `06-cover` is where that gate earns its keep: `cover-brief.md` is
+rewritten every sync, and the finished cover image beside it matches nothing —
+which is also why the Cover tick is read from a file that is *not* generated. This is the
 property the tamper tests bite hardest on — widening the pattern to "anything
 ending in `.md`", or letting a sync delete any name instead of only ones
 `isGeneratedName()` allows, both fail the suite immediately.
@@ -928,9 +936,22 @@ touch the others:
   `shared/import-core.mjs` — a column listed there is overwritten by every
   future import of the same script, including a plain re-import from Shorts
   Studio that has never heard of this concept, which would null it straight
-  back out. `edit_plan` generation reads `script.language` directly and
-  ignores whatever the request asked for, so an edit plan can never drift from
-  the script it is for.
+  back out. `edit_plan` and `thumbnail` generation read `script.language`
+  directly and ignore whatever the request asked for, so an edit plan — or the
+  four words on a cover — can never drift from the script it is for.
+
+- **The cover.** `shared/thumbnail.mjs` mirrors `shared/edit-plan.mjs` the same
+  way `shared/demo.mjs` does: a `thumbnail` field (`concepts[]` of `name`,
+  `cover_text`, `layout`, `colors[]`, `my_photo`, `screenshot`, `image_prompt`,
+  `canva_steps[]`, `stitch_prompt`, plus `safe_area_note`) rides in `raw`, so
+  nothing has to change the day Shorts Studio starts exporting one. What is
+  interesting is the rule the prompt is shaped around: a cover is **briefed,
+  never generated**. The face is always the creator's real photo, the tool's
+  screen is always a real screenshot, and `image_prompt` is for the background
+  alone — no face, no interface, no logos, no text. The brand kit (on the
+  settings row, read by `readBrandKit()`) is read server-side like the results
+  lesson is, and with nothing filled in the prompt is byte-for-byte the
+  unbranded one rather than carrying an empty heading.
 
 - **The demo walkthrough.** `shared/demo.mjs` mirrors `shared/edit-plan.mjs`
   exactly: a `demo` field (`tool`, `url`, `prepare[]`, `steps[]`, `prompts[]`,

@@ -284,6 +284,88 @@ quick to check and easy to get wrong.
 ${jsonOnly(EDIT_PLAN_SHAPE, 'SHAPE')}`;
 }
 
+// ---------- the cover / thumbnail ----------
+//
+// Three concepts for the image that sells the video, each one buildable by
+// hand in Canva free. The rules below are the whole feature — see the module
+// comment in shared/thumbnail.mjs for why a cover is briefed rather than
+// generated.
+const THUMBNAIL_SHAPE = `{
+  "concepts": [{
+    "name": "what kind of cover this is, e.g. \\"Before / After\\", \\"Shocked reaction + result\\", \\"Big question\\"",
+    "cover_text": "at most 4 words, in the spoken language given above",
+    "layout": "where the face, the tool screenshot, the text and any arrow go",
+    "colors": ["2 to 3 colours"],
+    "my_photo": "which expression or pose to use, or which frame of the video to grab",
+    "screenshot": "which real screen of the tool to capture",
+    "image_prompt": "for a free AI image tool: the background or effect ONLY",
+    "canva_steps": ["one step of assembling it in Canva free, in the order you do them"],
+    "stitch_prompt": "a Stitch prompt for this cover layout at 1080x1920"
+  }],
+  "safe_area_note": "one line on where text must stay so no platform crops it"
+}`;
+
+/** The brand kit block, or nothing at all when none of it is filled in. */
+const brandBlock = (brand) => {
+  if (!brand || !brand.set) return '';
+  const lines = [
+    brand.colors.length && `  brand colours: ${brand.colors.join(', ')} — use these for the text and the shapes`,
+    brand.font && `  font preference: ${brand.font}`,
+    brand.handle && `  handle to put small in a corner: ${brand.handle}`,
+    brand.face && `  the face usually sits on the ${brand.face} of the frame`,
+  ].filter(Boolean);
+  return `
+The creator's brand kit. Every concept must use it:
+${lines.join('\n')}
+`;
+};
+
+export function thumbnailPrompt({ script, language = 'English', brand = null, today, count = 3 } = {}) {
+  const beats = (script?.beats || [])
+    .map((b) => [b.t, b.say, b.screen && `(on screen: ${b.screen})`].filter(Boolean).join(' — '))
+    .join('\n');
+  const hook = script?.hook || script?.beats?.[0]?.say || '';
+  const demo = script?.demo || script?.raw?.demo || null;
+  const demoBlock = demo ? `
+What is actually on screen in this video:
+  tool:  ${demo.tool || 'not given'}${demo.url ? ` (${demo.url})` : ''}
+  steps: ${(demo.steps || []).join(' / ') || 'not given'}
+  shown as working by: ${(demo.check || []).join(' / ') || 'not given'}
+` : '';
+  // The edit plan, when one exists, has already decided which moment of the
+  // video the cover should come from. Re-deciding it here would put a cover on
+  // a frame the edit never cuts to.
+  const cover = script?.edit_plan?.cover || script?.raw?.edit_plan?.cover || null;
+  const coverBlock = cover && (cover.frame || cover.text) ? `
+The edit plan already picked the cover frame — build at least one concept on it:
+  frame: ${cover.frame || 'not given'}
+  text:  ${cover.text || 'not given'}
+` : '';
+
+  return `You design the cover image (the thumbnail) for a vertical short video that has already been written.
+Give ${count} genuinely different concepts for it. Today is ${today}.
+
+Title: ${script?.title || script?.yt_title || 'untitled'}
+Topic: ${script?.topic || 'not given'}
+Hook:  ${hook || 'not given'}
+Spoken language: ${language}.
+
+The script, beat by beat:
+${beats || '(no beats; work from the title and topic)'}
+${demoBlock}${coverBlock}${brandBlock(brand)}
+Rules — every one of these applies to every concept:
+1. The cover must show something the video REALLY shows. Never promise a result, a number or a screen that is not in the script above. No invented results.
+2. All cover text must sit inside the centre 3:4 area of the 1080x1920 frame (the middle 1080x1440), so Instagram's grid crop never cuts a word off.
+3. High contrast, and readable on a phone at thumbnail size: at most 4 words, big and heavy, never thin text over a busy photo.
+4. The creator's face is ALWAYS their own real photo or a real frame of the video. Never an AI-generated face, never a stock face, never a drawn one.
+5. The tool's screen is ALWAYS a real screenshot the creator captures. Never an AI rendering of a user interface.
+6. "image_prompt" is for a free AI image tool and describes the BACKGROUND or an effect ONLY: no face, no user interface, no logos or brand marks, and no text anywhere in the image — the words are set in Canva, on top.
+7. "canva_steps" must be followable in Canva's free plan alone, with no paid element, no paid font and no paid stock photo.
+8. Each concept must be a different KIND of cover, not the same cover reworded. If two would end up looking alike, replace one.
+
+${jsonOnly(THUMBNAIL_SHAPE, 'SHAPE')}`;
+}
+
 export const fixJsonPrompt = (bad) =>
   `The text below was supposed to be valid JSON but it cannot be parsed. Fix it.
 Return ONLY the corrected JSON: no code fences, no explanation, no extra keys.

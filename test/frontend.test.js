@@ -115,7 +115,7 @@ test('user text is escaped wherever it is put into HTML', () => {
   // model-written text on screen, so they are the ones that matter most.
   // encodeURIComponent() is on the list for a different reason: it percent-
   // encodes, so its output cannot be markup at all.
-  const safe = /^(esc\(|fmt\(|compact\(|ago\(|when\(|copyBtn\(|hbars\(|format\(|formatBytes\(|renderEditPlan\(|renderDemo\(|renderOriginalIdea\(|renderPendingGeneration\(|PASTE_BUTTON\(|makeButton\(|devicesLine\(|renderAngles\(|ANGLES_BUTTON\(|HOOKS_BUTTON\(|hookSheetHead\(|renderPack\(|RESEARCH_BUTTON\(|packLink\(|packList\(|liveBadge\(|factClass\(|renderLocalFolderSettings\(|encodeURIComponent\(|GENERATING\[|KIND_ICON|SOURCE|LIVE_LABEL|STAGES|LENGTHS|DEFAULT_AI_ORDER)/;
+  const safe = /^(esc\(|fmt\(|compact\(|ago\(|when\(|copyBtn\(|hbars\(|format\(|formatBytes\(|renderEditPlan\(|renderThumbnail\(|coverRows?\(|coverPrompt\(|renderDemo\(|renderOriginalIdea\(|renderPendingGeneration\(|PASTE_BUTTON\(|makeButton\(|devicesLine\(|renderAngles\(|ANGLES_BUTTON\(|HOOKS_BUTTON\(|hookSheetHead\(|renderPack\(|RESEARCH_BUTTON\(|packLink\(|packList\(|liveBadge\(|factClass\(|renderLocalFolderSettings\(|encodeURIComponent\(|GENERATING\[|MAX_BRAND_COLORS|FACE_POSITIONS|KIND_ICON|SOURCE|LIVE_LABEL|STAGES|LENGTHS|DEFAULT_AI_ORDER)/;
   const bad = [];
   for (const literal of htmlLiterals) {
     for (const m of literal.matchAll(/\$\{([^{}]*)\}/g)) {
@@ -602,6 +602,54 @@ test('the demo section says "Not checked yet" only when the pack behind it was n
   assert.match(fn, /demo\.checked === false/, 'the gate must be the explicit false, not falsy');
   assert.match(fn, /Not checked yet/);
   assert.match(fn, /Re-check links/, 'the notice should point at the fix, not just the problem');
+});
+
+// ---------- cover ----------
+
+test('the Cover section sits below the edit plan, with the same loading, failed and Retry pattern', () => {
+  const detail = appjs.slice(appjs.indexOf('${renderOriginalIdea(s)}'), appjs.indexOf('<h2 style="margin:22px 0 10px">Ready to post'));
+  const planAt = detail.indexOf('renderEditPlan(s)');
+  const coverAt = detail.indexOf('renderThumbnail(s)');
+  assert.ok(planAt !== -1 && coverAt > planAt, 'the Cover section belongs under the edit plan');
+
+  // The same renderPendingGeneration() wrapper the edit plan uses, so the
+  // loading state, the failure message and the Retry button are not a second
+  // implementation of the same three states.
+  assert.match(detail, /renderPendingGeneration\(`thumbnail:\$\{s\.id\}`/);
+  assert.match(detail, /Could not make cover ideas/);
+  assert.match(appjs, /thumbnail: 'Designing cover ideas/, 'the loading label is keyed by kind');
+
+  // And the button goes through runPendingGeneration with the matching key, so
+  // the card that appears is the one the destination screen is watching for.
+  assert.match(appjs, /actions\.makeCoverIdeas = \(btn\) => runPendingGeneration\(`thumbnail:\$\{btn\.dataset\.id\}`, \{ kind: 'thumbnail', script_id: btn\.dataset\.id \}\)/);
+});
+
+test('the Cover section says to use a real photo and a real screenshot, in both of its states', () => {
+  // The one instruction the feature rests on. It has to be on screen before
+  // any ideas exist as well as after, because the empty state is where
+  // somebody decides what they are about to make.
+  const fn = appjs.slice(appjs.indexOf('const COVER_NOTE'), appjs.indexOf('actions.setStage'));
+  assert.match(fn, /const COVER_NOTE = 'Use your real photo/, 'one string, shown in both states');
+  assert.equal(fn.match(/esc\(COVER_NOTE\)/g).length, 2, 'the note belongs in the empty state and the filled one');
+  assert.match(appjs, /Use your real photo and a real screenshot of the tool\./);
+  // The image prompt's limit, said where the Copy button is.
+  assert.match(fn, /background only — never your face,/);
+});
+
+test('the brand kit form keeps at most three colours and only a face side the database allows', () => {
+  const fn = appjs.slice(appjs.indexOf('actions.saveBrandKit'), appjs.indexOf('actions.testAi'));
+  assert.match(fn, /slice\(0, MAX_BRAND_COLORS\)/, 'the cap comes from the shared module, not a literal here');
+  assert.match(fn, /FACE_POSITIONS\.includes\(face\)/);
+  for (const column of ['brand_colors', 'brand_font', 'brand_handle', 'brand_face']) {
+    assert.ok(fn.includes(column), `${column} is never saved`);
+  }
+  // The form renders through the same reader the prompt uses, so what is on
+  // screen is what a generation would actually be given.
+  const screen = appjs.slice(appjs.indexOf('async function renderSettings'), appjs.indexOf('const saveSettings'));
+  assert.match(screen, /const brand = readBrandKit\(s\)/);
+  assert.match(screen, /<h2>Brand kit<\/h2>/);
+  assert.match(screen, /esc\(brand\.colors\.join\(', '\)\)/, 'a saved colour goes into a value attribute');
+  assert.match(screen, /esc\(brand\.handle\)/);
 });
 
 // ---------- navigating to where a result will appear ----------

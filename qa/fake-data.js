@@ -112,6 +112,40 @@ const EDIT_PLAN = {
   checklist: ['Captions burned in', 'No watermark', 'Hook under 3 seconds'],
 };
 
+// Three concepts, deliberately awkward: a long layout note, a cover text that
+// is too long for its own rule, Devanagari, and one concept with almost
+// nothing in it — the cards have to survive all four.
+const THUMBNAIL = {
+  safe_area_note: 'Keep every word inside the middle 1080x1440 so the Instagram grid crop never cuts one off.',
+  concepts: [
+    {
+      name: 'Before / After',
+      cover_text: 'PEHLE AUR BAAD',
+      layout: 'Face bottom-left, the tool screenshot top-right, a thick arrow between them, text across the middle. ' + LONG_NOSPACE,
+      colors: ['#ff4d00', '#111111', 'white'],
+      my_photo: 'Shocked, mouth open, looking at the screenshot',
+      screenshot: 'The finished export, with the watermark-free badge visible',
+      image_prompt: 'A dark navy gradient with a soft orange glow from the bottom-left corner, no text, no faces, no interface',
+      canva_steps: ['New design, 1080 x 1920', 'Drop the background in and lock it', 'Cut your photo out with the free background remover', LONG_PROMPT],
+      stitch_prompt: 'A 1080x1920 vertical cover: bold four-word headline centred, cut-out photo bottom-left, product screenshot top-right. ' + LONG_NOSPACE,
+    },
+    {
+      name: DEVANAGARI,
+      cover_text: DEVANAGARI.slice(0, 18),
+      layout: 'चेहरा दाईं तरफ, स्क्रीनशॉट बाईं तरफ',
+      colors: ['#111111', '#ffd400'],
+      my_photo: 'Pointing at the screen, eyebrows up',
+      screenshot: 'The tool’s home screen with the free plan selected',
+      image_prompt: 'A flat yellow field with soft diagonal shadows, no text, no faces, no interface',
+      canva_steps: ['New design, 1080 x 1920', 'Set the headline in a heavy free sans'],
+      stitch_prompt: 'A 1080x1920 vertical cover, yellow field, heavy Devanagari headline, photo right.',
+    },
+    // Almost empty: a model that answered thinly must not leave a card with
+    // headings and nothing under them.
+    { name: 'Big question', cover_text: 'YE KAISE?', layout: '', colors: [], my_photo: '', screenshot: '', image_prompt: '', canva_steps: [], stitch_prompt: '' },
+  ],
+};
+
 const FULL_SCRIPT = {
   id: 'scr_full', topic: HINGLISH, title: HINGLISH, stage: 'to_shoot', language: 'Hinglish',
   own_idea: true, source: 'gemini', origin_at: agoISO(20),
@@ -126,7 +160,7 @@ const FULL_SCRIPT = {
   pinned_comment: 'Link is in the description.', broll: ['Typing on a keyboard', 'The export finishing'],
   audio: 'Upbeat lofi, low under the voice',
   raw: {
-    created_at: agoISO(20), demo: DEMO, edit_plan: EDIT_PLAN,
+    created_at: agoISO(20), demo: DEMO, edit_plan: EDIT_PLAN, thumbnail: THUMBNAIL,
     original: { mode: 'generate', title: HINGLISH, details: 'My own idea, typed out.', links: [LONG_URL] },
   },
 };
@@ -170,6 +204,8 @@ const SETTINGS_ROW = {
   ai_order: ['gemini', 'openrouter'],
   gemini_model: 'gemini-2.5-flash', openrouter_model: 'meta-llama/llama-3.3-70b-instruct:free',
   radar_languages: ['hi', 'en'], weekly_goal: 5,
+  brand_colors: ['#ff4d00', '#111111', 'white'], brand_font: 'bold sans, very heavy',
+  brand_handle: '@' + LONG_NOSPACE.slice(0, 24), brand_face: 'left',
 };
 
 const PACK = {

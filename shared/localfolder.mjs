@@ -22,12 +22,16 @@
 // THE ONE RULE THAT MATTERS MOST
 //   Only the files this module generates are ever overwritten or deleted by a
 //   sync — a fixed, named list (research-pack.md, note-<id>.md, script.md,
-//   captions.txt, edit-plan.md). Anything else a person put in the folder —
+//   captions.txt, edit-plan.md, cover-brief.md). Anything else a person put in the folder —
 //   b-roll, a half-finished edit, a screenshot dragged in by hand — is never
 //   touched. isGeneratedName() is the single gate every write and delete goes
 //   through, and it is the thing test/localfolder.test.js holds to hardest.
+//   06-cover is the one subfolder where that gate matters most: cover-brief.md
+//   is generated and may be rewritten, and the finished cover image sitting
+//   next to it never matches the gate at all.
 
 import { readEditPlan, editPlanText } from './edit-plan.mjs';
+import { coverBriefMarkdown } from './thumbnail.mjs';
 
 export const SUBFOLDERS = ['01-research', '02-script', '03-raw', '04-edit', '05-final', '06-cover'];
 
@@ -184,6 +188,11 @@ export function editPlanFileText(script) {
   return editPlanText(readEditPlan(script));
 }
 
+/** All three cover concepts as one brief, for building the cover at the desk. */
+export function coverBriefFileText(script) {
+  return coverBriefMarkdown(script);
+}
+
 // ---------- which files should exist right now ----------
 
 /**
@@ -217,23 +226,34 @@ export function wantedFiles({ items = [], script = null } = {}) {
     files.push({ subfolder: '02-script', name: 'captions.txt', content: captionsText(script) });
     const plan = editPlanFileText(script);
     if (plan) files.push({ subfolder: '04-edit', name: 'edit-plan.md', content: plan });
+    // Written next to where the finished cover image goes, so the brief and
+    // the thing it briefs are in the same folder. The Cover tick stays a
+    // question about an image — see scanProject().
+    const brief = coverBriefFileText(script);
+    if (brief) files.push({ subfolder: '06-cover', name: 'cover-brief.md', content: brief });
   }
 
   return files;
 }
 
+/** The one name the sync writes into 06-cover. Everything else there is yours. */
+export const COVER_BRIEF_NAME = 'cover-brief.md';
+
 /**
  * Is this name one the sync itself would ever write? The gate every write and
- * delete goes through — see the module comment. 03-raw, 05-final and 06-cover
- * are never auto-managed at all: nothing in them ever matches, so a sync can
- * never remove so much as one byte of actual footage.
+ * delete goes through — see the module comment. 03-raw and 05-final are never
+ * auto-managed at all, and in 06-cover exactly one name matches — so a sync
+ * can never remove so much as one byte of actual footage, and never the cover
+ * image either.
  */
 export function isGeneratedName(subfolder, name) {
   if (subfolder === '01-research') return name === 'research-pack.md' || /^research-pack-\d+\.md$/.test(name) || /^note-.+\.md$/.test(name);
   if (subfolder === '02-script') return name === 'script.md' || name === 'captions.txt';
   if (subfolder === '04-edit') return name === 'edit-plan.md';
+  if (subfolder === '06-cover') return name === COVER_BRIEF_NAME;
   return false;
 }
+
 
 /**
  * What a sync should write and delete in one subfolder, given what is
@@ -349,7 +369,7 @@ export async function syncGeneratedFiles(root, folderName, files) {
   // Every subfolder isGeneratedName() knows about, not only ones with
   // something wanted right now — a subfolder that lost its last note still
   // needs that note's file removed.
-  const subfolders = new Set([...bySubfolder.keys(), '01-research', '02-script', '04-edit']);
+  const subfolders = new Set([...bySubfolder.keys(), '01-research', '02-script', '04-edit', '06-cover']);
 
   for (const sub of subfolders) {
     const dir = await project.getDirectoryHandle(sub, { create: true });
@@ -383,7 +403,11 @@ export async function scanProject(root, folderName) {
     editPlan: (await fileNames(editPlan)).some((h) => h.name === 'edit-plan.md'),
     raw: { count: rawFiles.length, bytes: rawBytes },
     final: await anyFile(final),
-    cover: await anyFile(cover),
+    // An actual cover, not the brief this app wrote about one. cover-brief.md
+    // is generated into the same folder, and a tick that went green the moment
+    // the ideas were written would say the cover is done when nothing has been
+    // made yet.
+    cover: (await fileNames(cover)).some((h) => !isGeneratedName('06-cover', h.name)),
   };
 }
 

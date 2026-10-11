@@ -33,6 +33,9 @@ export const BROWSER_DIR = join(ROOT, 'public', 'shared');
 //   tokens    an import token is made and hashed in the browser, so the token
 //             itself never travels anywhere it does not have to
 //   edit-plan the shooting plan a script can carry, read out of raw
+//   thumbnail the three cover concepts a script can carry, also out of raw —
+//             and the brand kit, so the Settings screen and the prompt agree
+//             on what "no brand kit set" means
 //   projects  the two storage limits, the path layout and the device naming —
 //             the browser enforces the same numbers the database does
 //   sha256    a digest computed a chunk at a time, so a 2 GB video can be
@@ -48,7 +51,7 @@ export const BROWSER_DIR = join(ROOT, 'public', 'shared');
 //                and the "keep my words exactly" check, shared with vr-generate
 //                so the browser and the enforcement agree on what counts
 export const BROWSER_SHARED = [
-  'stats.mjs', 'defaults.mjs', 'time.mjs', 'tokens.mjs', 'edit-plan.mjs', 'demo.mjs',
+  'stats.mjs', 'defaults.mjs', 'time.mjs', 'tokens.mjs', 'edit-plan.mjs', 'thumbnail.mjs', 'demo.mjs',
   'projects.mjs', 'sha256.mjs', 'transfer.mjs', 'learning.mjs', 'research.mjs',
   'localfolder.mjs', 'own-idea.mjs',
 ];

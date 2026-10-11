@@ -11,6 +11,7 @@ import {
   LENGTHS, DEFAULT_AI_ORDER, SCRIPT_LANGUAGES, RADAR_LANGUAGE_OPTIONS, DEFAULT_RADAR_LANGUAGES,
 } from './shared/defaults.mjs';
 import { readEditPlan, editPlanText } from './shared/edit-plan.mjs';
+import { MAX_BRAND_COLORS, FACE_POSITIONS, canvaStepsText, readBrandKit, readThumbnail } from './shared/thumbnail.mjs';
 import { readDemo } from './shared/demo.mjs';
 import { lessonLabel } from './shared/learning.mjs';
 import { packLabel, packSummary, packDemoSource } from './shared/research.mjs';
@@ -1157,6 +1158,8 @@ async function renderScriptDetail(id) {
 
     ${renderPendingGeneration(`edit_plan:${s.id}`, { onMessage: (m) => `Could not plan the edit: ${m}` }) || renderEditPlan(s)}
 
+    ${renderPendingGeneration(`thumbnail:${s.id}`, { onMessage: (m) => `Could not make cover ideas: ${m}` }) || renderThumbnail(s)}
+
     <h2 style="margin:22px 0 10px">Ready to post</h2>
     <div class="outputs grid">
       ${outputs.map(([label, value]) => `<div class="card out">
@@ -1169,10 +1172,12 @@ async function renderScriptDetail(id) {
     <div class="sticky-actions" aria-label="Script actions">
       <button type="button" class="sm" data-action="prompterFull">⛶ Teleprompter</button>
       <button type="button" class="sm" data-action="scrollToEditPlan">📝 Edit plan</button>
+      <button type="button" class="sm" data-action="scrollToCover">🖼 Cover</button>
       ${fullScript ? copyBtn(fullScript, '📋 Copy script', 'sm primary') : ''}
     </div>`;
 }
 actions.scrollToEditPlan = () => { $('#editPlan')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+actions.scrollToCover = () => { $('#cover')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
 // ---- the demo walkthrough ----
 //
 // Exactly what to click and exactly what to type, on camera. Same story as
@@ -1312,6 +1317,80 @@ function renderEditPlan(script) {
         ${block('Before you post', plan.checklist.length
           ? `<ul class="checklist">${plan.checklist.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>` : '')}
       </div>
+    </section>`;
+}
+
+// ---- cover ----
+//
+// Three ways to build the thumbnail, below the edit plan because the edit plan
+// is what decides which frame the cover can even come from. Same story as the
+// edit plan otherwise: no column, read out of `raw`, so a `thumbnail` field
+// Shorts Studio starts exporting later shows here with no change at all.
+//
+// Everything a concept puts on screen is model-written, so every value goes
+// through esc() — see "every value the cover section puts on screen is
+// escaped" in test/frontend.test.js, which is what keeps renderThumbnail on
+// the safe list in the escaping test above it.
+const COVER_NOTE = 'Use your real photo and a real screenshot of the tool.';
+
+function renderThumbnail(script) {
+  const thumb = readThumbnail(script);
+  const makeButton = (label) =>
+    `<button type="button" class="sm" data-action="makeCoverIdeas" data-id="${esc(script.id)}">${esc(label)}</button>`;
+
+  // No cover ideas yet: offer to write some, the same way the edit plan does,
+  // rather than showing nothing and leaving people to wonder.
+  if (!thumb) {
+    return `
+      <section class="cover" id="cover">
+        <div class="page-head" style="margin-top:22px">
+          <h2 style="margin:0">Cover</h2>
+          ${makeButton('✨ Make cover ideas')}
+        </div>
+        <p class="muted small">Three ways to build the thumbnail: the text, the layout, which photo and which
+          screenshot, plus steps for Canva. ${esc(COVER_NOTE)}</p>
+      </section>`;
+  }
+
+  const coverRow = (label, value) => (value ? `<div class="cover-row"><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>` : '');
+  // No empty <dl>: a model that answered thinly leaves all three of these
+  // blank, and an empty definition list is a gap in the card for a screen
+  // reader as much as for the eye.
+  const coverRows = (rows) => {
+    const body = rows.map(([label, value]) => coverRow(label, value)).join('');
+    return body ? `<dl class="cover-rows">${body}</dl>` : '';
+  };
+  const coverPrompt = (label, body, copyLabel) => (body ? `<div class="card out">
+      <div class="out-head"><h4 style="margin:0;font-size:.82rem">${esc(label)}</h4>${copyBtn(body, copyLabel)}</div>
+      <pre>${esc(body)}</pre>
+    </div>` : '');
+
+  const card = (c, i) => `
+    <section class="card stack cover-concept">
+      <div class="page-head" style="margin:0">
+        <h3 style="margin:0">${esc(c.name || `Concept ${i + 1}`)}</h3>
+        ${c.colors.length ? `<div class="chips">${c.colors.map((col) => `<span class="chip">${esc(col)}</span>`).join('')}</div>` : ''}
+      </div>
+      ${c.cover_text ? `<p class="cover-text">${esc(c.cover_text)}</p>` : ''}
+      ${coverRows([['Layout', c.layout], ['Your photo', c.my_photo], ['Screenshot', c.screenshot]])}
+      ${coverPrompt('Background image prompt', c.image_prompt, 'Copy image prompt')}
+      ${c.canva_steps.length ? `<div>
+        <div class="out-head"><h4 style="margin:0;font-size:.82rem">In Canva</h4>${copyBtn(canvaStepsText(c), 'Copy Canva steps')}</div>
+        <ol class="pack-steps">${c.canva_steps.map((step) => `<li>${esc(step)}</li>`).join('')}</ol>
+      </div>` : ''}
+      ${coverPrompt('Stitch prompt · 1080x1920', c.stitch_prompt, 'Copy Stitch prompt')}
+    </section>`;
+
+  return `
+    <section class="cover" id="cover">
+      <div class="page-head" style="margin-top:22px">
+        <h2 style="margin:0">Cover <span class="muted small">${thumb.concepts.length} ideas</span></h2>
+        ${makeButton('↻ Redo')}
+      </div>
+      <p class="muted small">${esc(COVER_NOTE)} The image prompt is for the background only — never your face,
+        never the tool's screen.</p>
+      ${thumb.safe_area_note ? `<div class="notice">${esc(thumb.safe_area_note)}</div>` : ''}
+      <div class="grid cover-concepts">${thumb.concepts.map(card).join('')}</div>
     </section>`;
 }
 
@@ -2545,14 +2624,15 @@ const GENERATING = {
   research: 'Reading the live pages… up to 60 sec',
   script: 'Writing script… up to 40 sec',
   edit_plan: 'Planning the edit… up to 40 sec',
+  thumbnail: 'Designing cover ideas… up to 40 sec',
 };
 
 // ---------- the language + length sheet ----------
 //
-// Shown before writing ideas, angles or a script — never before an edit plan,
-// which always uses the script's own language (vr-generate enforces that
-// server-side; see supabase/functions/vr-generate/index.ts), and never before
-// research, which has no language of its own at all.
+// Shown before writing ideas, angles or a script — never before an edit plan
+// or cover ideas, which always use the script's own language (vr-generate
+// enforces that server-side; see supabase/functions/vr-generate/index.ts), and
+// never before research, which has no language of its own at all.
 //
 // One native <dialog>, reused by every entry point rather than one sheet per
 // screen: showModal()/close() give focus trapping and an Esc-to-cancel for
@@ -3005,6 +3085,10 @@ actions.writeScriptFromBox = (btn) => {
 
 /** Always on the script's own screen already, so this needs no navigation — just a loading/Retry state in place. */
 actions.makeEditPlan = (btn) => runPendingGeneration(`edit_plan:${btn.dataset.id}`, { kind: 'edit_plan', script_id: btn.dataset.id });
+// No language sheet: the cover's four words are in the script's own language,
+// which vr-generate reads off the script itself. The brand kit is read there
+// too, so there is nothing for the browser to send but the id.
+actions.makeCoverIdeas = (btn) => runPendingGeneration(`thumbnail:${btn.dataset.id}`, { kind: 'thumbnail', script_id: btn.dataset.id });
 
 /** Research whatever is in the free-text box, with its URL if one was given. */
 actions.researchFromBox = (btn) => {
@@ -3132,6 +3216,9 @@ async function renderSettings() {
   state.settings = s;
   const yt = usage.youtube || { units: 0, requests: 0 };
   const order = (s.ai_order && s.ai_order.length ? s.ai_order : DEFAULT_AI_ORDER);
+  // Through the same reader the prompt uses, so the form shows exactly what a
+  // cover generation would be given — never a fourth colour the server drops.
+  const brand = readBrandKit(s);
   const email = state.session?.user?.email || '';
 
   return `
@@ -3190,6 +3277,26 @@ async function renderSettings() {
           <button type="button" data-action="testAi">Test AI</button>
         </div>
         <div id="aiResult"></div>
+      </section>
+
+      <section class="card stack">
+        <h2>Brand kit</h2>
+        <p class="muted small">All optional. Whatever is filled in here is used in every cover idea; with nothing
+          filled in, cover ideas are designed without a palette rather than with a guessed one.</p>
+        <label class="field" for="brandColors">Brand colours</label>
+        <input type="text" id="brandColors" value="${esc(brand.colors.join(', '))}" spellcheck="false"
+          placeholder="#ff4d00, #111111">
+        <p class="muted small">Up to ${MAX_BRAND_COLORS}, comma separated. A hex code or a plain name both work.</p>
+        <label class="field" for="brandFont">Font preference</label>
+        <input type="text" id="brandFont" value="${esc(brand.font)}" placeholder="bold sans">
+        <label class="field" for="brandHandle">Your handle</label>
+        <input type="text" id="brandHandle" value="${esc(brand.handle)}" spellcheck="false" placeholder="@yourname">
+        <label class="field" for="brandFace">Where your face usually sits</label>
+        <select id="brandFace">
+          <option value="" ${brand.face ? '' : 'selected'}>No preference</option>
+          ${FACE_POSITIONS.map((f) => `<option value="${esc(f)}" ${f === brand.face ? 'selected' : ''}>${esc(f === 'left' ? 'Left of the frame' : 'Right of the frame')}</option>`).join('')}
+        </select>
+        <div><button type="button" class="primary" data-action="saveBrandKit">Save brand kit</button></div>
       </section>
 
       <section class="card stack">
@@ -3301,6 +3408,20 @@ actions.saveWriting = () => {
     gemini_model: $('#geminiModel').value.trim(),
     openrouter_model: $('#openrouterModel').value.trim(),
   }, 'Saved');
+};
+
+actions.saveBrandKit = () => {
+  const colors = [...new Set($('#brandColors').value.split(/[\n,]/).map((c) => c.trim()).filter(Boolean))].slice(0, MAX_BRAND_COLORS);
+  const face = $('#brandFace').value;
+  // The database has the same check, so a hand-written value cannot slip past
+  // the form into a prompt — this one is only here to fail politely first.
+  if (face && !FACE_POSITIONS.includes(face)) { toast('Pick left, right, or no preference.', true); return; }
+  return saveSettings({
+    brand_colors: colors,
+    brand_font: $('#brandFont').value.trim(),
+    brand_handle: $('#brandHandle').value.trim(),
+    brand_face: face,
+  }, 'Brand kit saved');
 };
 
 actions.testAi = async (btn) => {

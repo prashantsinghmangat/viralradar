@@ -472,6 +472,30 @@ body.signed-out .topbar .brand { pointer-events: none; }
 .edit-plan .checklist li { margin: 4px 0; }
 .edit-plan dl { margin: 0; }
 
+/* ---------- cover ---------- */
+/* Three concept cards under the edit plan. One column on a phone; the .grid
+   it sits in already widens on desktop, so nothing here sets a column count. */
+.cover { margin-top: 4px; }
+.cover .notice { margin: 8px 0 0; }
+.cover-concepts { margin-top: 10px; }
+.cover-concept .chips { flex-shrink: 0; }
+/* The four words themselves, shown the way they will read on the cover:
+   big, heavy and upper case, so "too long" is obvious before Canva is open. */
+.cover-text {
+  margin: 0; font-family: var(--font-label, inherit); font-weight: 800;
+  font-size: clamp(1.1rem, 4.5vw, 1.5rem); line-height: 1.15;
+  text-transform: uppercase; letter-spacing: -.01em; overflow-wrap: anywhere;
+}
+.cover-rows { margin: 0; display: grid; gap: 6px; }
+.cover-row { display: grid; grid-template-columns: 7.5em 1fr; gap: 10px; font-size: .9rem; }
+.cover-row dt { color: var(--text-2, inherit); font-size: .8rem; }
+.cover-row dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 420px) {
+  /* The label above the value rather than beside it: 7.5em of label leaves
+     too little for a layout note on a small phone. */
+  .cover-row { grid-template-columns: 1fr; gap: 2px; }
+}
+
 /* Pre-flight checklist — tickable, saved per script in localStorage. */
 .checklist-ticks { display: grid; gap: 8px; }
 .check-item { display: flex; align-items: flex-start; gap: 10px; font-size: .9rem; cursor: pointer; }

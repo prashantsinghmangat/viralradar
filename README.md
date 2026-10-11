@@ -33,8 +33,10 @@ installable on your phone's home screen like an app.
   on the laptop, tap the arrow on the phone. Open one for the big-text
   **teleprompter**, **Hook options**, one-tap copy for every caption and
   hashtag, a tickable **pre-flight checklist** on the demo section (saved per
-  script, on this device), and the **edit plan**: a shot-by-shot timeline with
-  captions, music and a checklist.
+  script, on this device), the **edit plan**: a shot-by-shot timeline with
+  captions, music and a checklist — and below it the **cover**: three thumbnail
+  concepts, each with the four words to set, where everything goes, which photo
+  and which screenshot to use, and steps for Canva.
 - **Projects** — a folder per video, and the quickest way to get something from
   your phone to your laptop or back. **+ New project** starts one straight from
   your own idea — AI writes everything, formats a script you already wrote
@@ -177,18 +179,20 @@ gets a subfolder of its own:
   03-raw/        drop your footage in here — nothing in it is ever touched
   04-edit/       edit-plan.md
   05-final/      your finished cut
-  06-cover/      your thumbnail
+  06-cover/      cover-brief.md, and your thumbnail next to it
 ```
 
-The research pack, the script and the captions are written and kept up to
-date automatically. **Everything else in the folder is yours** — raw footage,
-a half-finished edit, a screenshot dragged in by hand — ViralRadar only ever
-writes or deletes the five files named above, never anything it did not make
-itself.
+The research pack, the script, the captions, the edit plan and the cover brief
+are written and kept up to date automatically. **Everything else in the folder
+is yours** — raw footage, a half-finished edit, a screenshot dragged in by
+hand — ViralRadar only ever writes or deletes the files named above, never
+anything it did not make itself. The cover image you make from the brief sits
+in the same folder and is never touched.
 
 Open a project and it shows a checklist — research, script, edit plan, how
 much raw footage and how big, final video, cover — read straight off the
-folder, with a **Rescan** button. Once a final video appears in `05-final`,
+folder, with a **Rescan** button. **Cover** ticks only when there is a real
+image in `06-cover`; the brief written next to it does not count. Once a final video appears in `05-final`,
 it offers to move the script to **Edited**. And if a video arrives from your
 other device while this one's folder is connected, it saves straight into
 `03-raw` with no dialog at all.
@@ -204,16 +208,17 @@ means everywhere except Chrome and Edge on a computer.
 
 ## Writing with AI
 
-**Ideas**, **angles**, **Scripts** and the **edit plan** can each be written for
-you, using your niche keywords, language and target length from Settings.
+**Ideas**, **angles**, **Scripts**, the **edit plan** and the **cover** can each
+be written for you, using your niche keywords, language and target length from
+Settings.
 
 ### Before anything is written
 
 Writing ideas, angles or a script first asks **Language** (Hinglish, Hindi or
 English) and **Length** — prefilled from Settings, or from whatever you last
 chose for this same project, so it does not have to be set over and over for
-one video. The edit plan never asks again: it always matches the script it is
-for, whichever language that was written in.
+one video. The edit plan and the cover never ask again: both always match the
+script they are for, whichever language that was written in.
 
 Tapping **Write script** (or *Write this angle*, or *Research Pack*, or *Make
 edit plan*) goes straight to the screen the result will land on, with a
@@ -269,6 +274,35 @@ When a Research Pack is open for the same subject, the demo is built straight
 from **its** verified steps and prompts rather than left to the model to
 remember — the one line most worth getting exactly right is the one you are
 about to read off screen on camera.
+
+### The cover, briefed rather than generated
+
+Below the edit plan there is **Cover**, and **✨ Make cover ideas** gives you
+three: a *Before / After*, a *Shocked reaction + result*, a *Big question* —
+whatever actually suits the video. Each one tells you the **four words** to set
+(in the script's own language), where the face, the screenshot, the text and
+any arrow go, which two or three colours to use, which expression or video
+frame to use, and which real screen of the tool to capture. Then three separate
+Copy buttons: one **image prompt** for a free AI image tool, the **Canva steps**
+in order, and a **Stitch prompt** for the layout at 1080x1920.
+
+The split matters more than the ideas do. **Your face is always your real
+photo** and the tool's screen is always a real screenshot — the image prompt
+only ever describes the background, never a face, never an interface, never a
+logo and never any text. The cover can only show something the video really
+shows, and all the words stay inside the middle 1080x1440 so Instagram's grid
+crop never cuts one off.
+
+With a folder connected, all three concepts are also written to
+`06-cover/cover-brief.md`, so you can build the cover at your desk with the app
+shut.
+
+### Your brand kit
+
+Optional, in Settings: up to **three colours**, a **font preference** in plain
+words ("bold sans"), your **handle**, and which side your **face usually sits**
+on. Whatever you fill in is used in every cover idea. Fill in nothing and cover
+ideas are designed without a palette rather than with a guessed one.
 
 ### It learns from your own results
 
