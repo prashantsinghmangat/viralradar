@@ -299,9 +299,10 @@ const afterRender = {};
 window.addEventListener('hashchange', () => { copyStore = []; render().then(() => window.scrollTo(0, 0)); });
 
 // One delegated click handler for the whole app — and, via the same
-// function, for the hook sheet, which lives outside #view (so it can be
-// anchored to the right edge on desktop) and so would never reach this
-// listener on its own.
+// function, for two things that live OUTSIDE #view and so would never reach a
+// listener bound to it: the hook sheet (anchored to the right edge on desktop,
+// see where it calls this directly) and the top bar, whose "+ New script"
+// button is a sibling of #view rather than a child of it.
 async function handleActionClick(e) {
   const btn = e.target.closest('[data-copy],[data-action]');
   if (!btn) return;
@@ -320,6 +321,11 @@ async function handleActionClick(e) {
   if (fn) { e.preventDefault(); e.stopPropagation(); fn(btn, e); }
 }
 view.addEventListener('click', handleActionClick);
+// The top bar is a sibling of #view (the header carries a backdrop-filter, so
+// nothing fixed may live inside it — see the comment in index.html). Its
+// "+ New script" button therefore needs the handler bound here too; without
+// this line it is inert, which is exactly what it was.
+$('.topbar')?.addEventListener('click', handleActionClick);
 
 // ================= SIGN IN =================
 //

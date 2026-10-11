@@ -131,6 +131,52 @@ test('user text is escaped wherever it is put into HTML', () => {
   assert.deepEqual(bad, [], `these go into HTML unescaped:\n  ${bad.join('\n  ')}`);
 });
 
+test('every data-action button in the shell is actually reachable by the click handler', () => {
+  // The delegated handler is bound to #view, which is EMPTY in index.html —
+  // the screens are rendered into it at runtime. So anything carrying
+  // data-action in the shell markup is outside it, and is inert unless app.js
+  // binds the handler to one of its ancestors too. That is exactly how
+  // "+ New script" in the top bar sat dead from the day the restyle added it:
+  // visible, styled, wired to nothing, and silent about it.
+  assert.match(html, /<main id="view" class="view" tabindex="-1"><\/main>/, '#view is empty in the shell; the screens render into it');
+
+  // Which selectors app.js actually binds the handler to.
+  const bound = new Set([...appjs.matchAll(/\$\('([#.][\w-]+)'\)\??\.?addEventListener\('click', handleActionClick\)/g)].map((m) => m[1]));
+  bound.add('#view'); // bound directly, as `view`, not through $()
+  assert.match(appjs, /view\.addEventListener\('click', handleActionClick\)/);
+
+  for (const m of html.matchAll(/data-action="([^"]+)"/g)) {
+    const name = m[1];
+    assert.match(appjs, new RegExp(`actions\\.${name}\\s*=`), `index.html uses data-action="${name}", which app.js never defines`);
+
+    // Walk the open tags before this button, keeping a real stack, so an
+    // ancestor is an ancestor rather than merely an earlier tag.
+    const stack = [];
+    const VOID = /^(area|base|br|col|embed|hr|img|input|link|meta|source|track|wbr)$/i;
+    for (const t of html.slice(0, m.index).matchAll(/<\/?([a-zA-Z][\w-]*)\b([^>]*)>/g)) {
+      const [tag, , name_, attrs] = [t[0], 0, t[1], t[2] || ''];
+      if (tag.startsWith('</')) { stack.pop(); continue; }
+      if (VOID.test(name_) || attrs.trimEnd().endsWith('/')) continue;
+      const id = (attrs.match(/\bid="([^"]*)"/) || [])[1] || '';
+      const cls = ((attrs.match(/\bclass="([^"]*)"/) || [])[1] || '').split(/\s+/).filter(Boolean);
+      stack.push({ id, cls });
+    }
+
+    const reachable = stack.some(({ id, cls }) => bound.has('#' + id) || cls.some((c) => bound.has('.' + c)));
+    assert.ok(reachable,
+      `data-action="${name}" sits outside every container app.js binds handleActionClick to `
+      + `(bound: ${[...bound].join(', ')}), so clicking it would do nothing at all`);
+  }
+});
+
+test('the top bar gets the click handler, since it is a sibling of #view', () => {
+  // Named on its own because it is one line that is very easy to lose, and
+  // losing it costs a button that fails silently rather than loudly.
+  assert.match(appjs, /\$\('\.topbar'\)\?\.addEventListener\('click', handleActionClick\)/);
+  assert.match(html, /<header class="topbar">/, 'the handler is bound by class; the header has to keep it');
+  assert.match(appjs, /actions\.newScript = \(\) => startNewProject\(\)/);
+});
+
 test('the sign-in screen explains itself without jargon', () => {
   const screen = appjs.slice(appjs.indexOf('function renderLogin'), appjs.indexOf('actions.signInPassword'));
   assert.match(screen, /stays signed in/i, 'people should know it is once per device, not every visit');
